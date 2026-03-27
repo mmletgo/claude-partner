@@ -302,10 +302,14 @@ def main() -> None:
     """
     # 配置日志
     logging.basicConfig(
-        level=logging.INFO,
+        level=logging.DEBUG,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+    # 抑制第三方库的 DEBUG 噪音
+    logging.getLogger("zeroconf").setLevel(logging.WARNING)
+    logging.getLogger("aiohttp").setLevel(logging.WARNING)
+    logging.getLogger("asyncio").setLevel(logging.WARNING)
 
     # 创建 Qt 应用
     qt_app = QApplication(sys.argv)

@@ -147,40 +147,101 @@ class DeviceDiscovery(QObject):
     def _get_local_ip() -> str:
         """
         Business Logic（为什么需要这个函数）:
-            mDNS 注册需要本机的局域网 IP，但 Linux 上 gethostbyname 经常返回
-            127.0.1.1 等非局域网地址，需要更可靠的方式获取实际 IP。
+            mDNS 注册需要本机的实际局域网 IP，但系统可能有多个网络接口
+            （WiFi、VPN、Docker 等），需要优先选择真实局域网接口的 IP。
 
         Code Logic（这个函数做什么）:
-            通过创建 UDP socket 连接一个外部地址（不实际发包）来获取系统选择的
-            出口 IP，这是跨平台获取局域网 IP 最可靠的方式。
+            1. 通过 ip/ifconfig 获取所有网络接口 IP
+            2. 过滤掉 loopback、docker、veth、utun 等虚拟接口
+            3. 优先选择私有局域网段（192.168.x, 10.x, 172.16-31.x）
+            4. 如果找不到，回退到 UDP socket 探测
         """
+        import re
+        import subprocess
+
+        try:
+            # Linux/Mac: 获取所有接口 IP
+            result = subprocess.run(
+                ["ip", "-4", "addr", "show"],
+                capture_output=True, text=True, timeout=3,
+            )
+            if result.returncode != 0:
+                # macOS 没有 ip 命令，用 ifconfig
+                result = subprocess.run(
+                    ["ifconfig"],
+                    capture_output=True, text=True, timeout=3,
+                )
+
+            # 解析出 (接口名, IP) 对
+            candidates: list[tuple[str, str]] = []
+            current_iface: str = ""
+            for line in result.stdout.split("\n"):
+                # ip addr 格式: "2: wlp4s0: <...>"
+                iface_match = re.match(r"^\d+:\s+(\S+?):", line)
+                if iface_match:
+                    current_iface = iface_match.group(1)
+                # ip addr 格式: "    inet 192.168.6.17/24 ..."
+                inet_match = re.search(r"inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+                if inet_match:
+                    ip: str = inet_match.group(1)
+                    candidates.append((current_iface, ip))
+
+            # 过滤虚拟接口
+            skip_prefixes: tuple[str, ...] = (
+                "lo", "docker", "br-", "veth", "utun",
+                "tun", "tailscale", "zt",
+            )
+            lan_ips: list[str] = []
+            for iface, ip in candidates:
+                if any(iface.startswith(p) for p in skip_prefixes):
+                    continue
+                if ip.startswith("127."):
+                    continue
+                # 私有局域网段优先
+                if (ip.startswith("192.168.")
+                        or ip.startswith("10.")
+                        or re.match(r"^172\.(1[6-9]|2\d|3[01])\.", ip)):
+                    lan_ips.append(ip)
+
+            if lan_ips:
+                logger.debug("局域网 IP 候选: %s", lan_ips)
+                return lan_ips[0]
+
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+        # 回退方案
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             s.connect(("8.8.8.8", 80))
-            ip: str = s.getsockname()[0]
+            ip = s.getsockname()[0]
             s.close()
             return ip
         except OSError:
             return socket.gethostbyname(socket.gethostname())
 
-    def _on_service_state_change(
-        self,
-        zeroconf: Zeroconf,
-        service_type: str,
-        name: str,
-        state_change: ServiceStateChange,
-    ) -> None:
+    def _on_service_state_change(self, **kwargs: object) -> None:
         """
         Business Logic（为什么需要这个函数）:
             当局域网中有设备上线或下线时，需要更新本地设备列表并通知 UI。
 
         Code Logic（这个函数做什么）:
-            zeroconf ServiceBrowser 的回调，在后台线程中执行：
+            zeroconf ServiceBrowser 的回调，在后台线程中执行。
+            注意：新版 zeroconf (>=0.131) 使用关键字参数调用回调，
+            因此使用 **kwargs 接收以保证兼容性。
             - Added: 解析 ServiceInfo，创建 Device 对象，存入 _devices，emit device_found
             - Removed: 从 _devices 移除对应设备，emit device_lost
             过滤掉自己的设备 ID，避免发现自己。
             Qt 信号机制自动处理跨线程分发。
         """
+        zeroconf: Zeroconf = kwargs["zeroconf"]  # type: ignore[assignment]
+        service_type: str = kwargs["service_type"]  # type: ignore[assignment]
+        name: str = kwargs["name"]  # type: ignore[assignment]
+        state_change: ServiceStateChange = kwargs["state_change"]  # type: ignore[assignment]
+        logger.debug(
+            "mDNS 服务状态变化: name=%s, state=%s", name, state_change
+        )
+
         if state_change == ServiceStateChange.Added:
             info: ServiceInfo | None = zeroconf.get_service_info(
                 service_type, name
@@ -188,6 +249,14 @@ class DeviceDiscovery(QObject):
             if info is None:
                 logger.warning("无法获取服务信息: %s", name)
                 return
+
+            logger.debug(
+                "服务详情: name=%s, addresses=%s, port=%s, properties=%s",
+                name,
+                [socket.inet_ntoa(a) for a in info.addresses] if info.addresses else [],
+                info.port,
+                info.properties,
+            )
 
             # 解析 TXT 记录
             properties: dict[str, str] = {}
