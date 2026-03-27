@@ -1,0 +1,324 @@
+# -*- coding: utf-8 -*-
+"""应用入口：负责初始化所有子系统并管理应用生命周期。"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sys
+from typing import NoReturn
+
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtCore import Qt
+import qasync
+
+from claude_partner.config import AppConfig
+from claude_partner.storage.database import Database
+from claude_partner.storage.prompt_repo import PromptRepository
+from claude_partner.network.discovery import DeviceDiscovery
+from claude_partner.network.server import HTTPServer
+from claude_partner.network.protocol import APIProtocol
+from claude_partner.network.client import PeerClient
+from claude_partner.sync.engine import SyncEngine
+from claude_partner.transfer.sender import FileSender
+from claude_partner.transfer.receiver import FileReceiver
+from claude_partner.screenshot.capture import ScreenshotManager
+from claude_partner.ui.main_window import MainWindow
+from claude_partner.ui.prompt_panel import PromptPanel
+from claude_partner.ui.transfer_panel import TransferPanel
+from claude_partner.ui.device_panel import DevicePanel
+from claude_partner.ui.tray import SystemTray
+
+logger: logging.Logger = logging.getLogger(__name__)
+
+
+class Application:
+    """
+    应用核心类，负责初始化和管理所有子系统的生命周期。
+
+    Business Logic（为什么需要这个类）:
+        Claude Partner 包含多个子系统（数据库、网络、同步、UI 等），
+        需要一个统一的入口来按正确顺序初始化它们，并在退出时反向清理资源。
+
+    Code Logic（这个类做什么）:
+        启动顺序：配置加载 → 数据库初始化 → 网络客户端/接收器 → HTTP 服务端 →
+        mDNS 注册 → 同步引擎 → UI 组件 → 系统托盘。
+        关闭时反向停止：同步引擎 → mDNS → HTTP 服务 → 数据库。
+        使用 qasync 将 asyncio 事件循环集成到 Qt 事件循环中。
+    """
+
+    def __init__(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            初始化应用对象，占位所有子系统引用。
+
+        Code Logic（这个函数做什么）:
+            声明所有子系统的类型占位符为 None，实际初始化在 start() 中执行。
+        """
+        self._config: AppConfig | None = None
+        self._database: Database | None = None
+        self._prompt_repo: PromptRepository | None = None
+        self._peer_client: PeerClient | None = None
+        self._file_sender: FileSender | None = None
+        self._file_receiver: FileReceiver | None = None
+        self._protocol: APIProtocol | None = None
+        self._http_server: HTTPServer | None = None
+        self._discovery: DeviceDiscovery | None = None
+        self._sync_engine: SyncEngine | None = None
+        self._screenshot_mgr: ScreenshotManager | None = None
+        self._main_window: MainWindow | None = None
+        self._system_tray: SystemTray | None = None
+
+    async def start(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            应用启动时需要按依赖顺序初始化所有子系统，
+            确保数据库在存储层之前就绪，网络在同步之前就绪。
+
+        Code Logic（这个函数做什么）:
+            按顺序初始化：config → database → repos → network →
+            transfer → protocol → http server → discovery → sync →
+            screenshot → UI → tray，并连接各组件间的信号。
+        """
+        # 1. 配置
+        self._config = AppConfig.load()
+        logger.info(
+            "配置加载完成: device_id=%s, device_name=%s",
+            self._config.device_id,
+            self._config.device_name,
+        )
+
+        # 2. 数据库
+        self._database = Database(self._config.db_path)
+        await self._database.initialize()
+        logger.info("数据库初始化完成")
+
+        # 3. 存储层
+        self._prompt_repo = PromptRepository(self._database)
+
+        # 4. 网络客户端
+        self._peer_client = PeerClient()
+
+        # 5. 文件传输
+        self._file_sender = FileSender(self._peer_client)
+        self._file_receiver = FileReceiver(self._config)
+
+        # 6. API 协议（注册传输回调）
+        self._protocol = APIProtocol(
+            config=self._config,
+            prompt_repo=self._prompt_repo,
+            on_transfer_init=self._file_receiver.init_transfer,
+            on_transfer_chunk=self._file_receiver.receive_chunk,
+            get_transfer_status=self._file_receiver.get_transfer_status,
+        )
+
+        # 7. HTTP 服务端
+        self._http_server = HTTPServer(self._protocol)
+        actual_port: int = await self._http_server.start(self._config.http_port)
+        logger.info("HTTP 服务端启动在端口 %d", actual_port)
+
+        # 8. mDNS 设备发现
+        self._discovery = DeviceDiscovery(self._config)
+        self._discovery.start(actual_port)
+
+        # 9. 同步引擎
+        self._sync_engine = SyncEngine(
+            self._config, self._prompt_repo, self._peer_client
+        )
+        await self._sync_engine.start_periodic_sync(self._discovery.get_devices)
+
+        # 10. 截图管理器
+        self._screenshot_mgr = ScreenshotManager()
+
+        # 11. UI 组件
+        prompt_panel = PromptPanel(self._prompt_repo, self._config)
+        transfer_panel = TransferPanel(self._file_sender, self._file_receiver)
+        device_panel = DevicePanel()
+
+        self._main_window = MainWindow(
+            prompt_panel=prompt_panel,
+            transfer_panel=transfer_panel,
+            device_panel=device_panel,
+        )
+
+        # 12. 系统托盘
+        self._system_tray = SystemTray()
+        self._system_tray.show()
+
+        # 连接信号
+        self._connect_signals(prompt_panel, transfer_panel, device_panel)
+
+        # 显示主窗口并加载数据
+        self._main_window.show()
+        asyncio.ensure_future(prompt_panel.refresh())
+
+        logger.info("应用启动完成")
+
+    def _connect_signals(
+        self,
+        prompt_panel: PromptPanel,
+        transfer_panel: TransferPanel,
+        device_panel: DevicePanel,
+    ) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            各子系统间需要通过信号连接协作，如设备发现通知 UI 更新，
+            Prompt 变更触发同步等。
+
+        Code Logic（这个函数做什么）:
+            连接 DeviceDiscovery → DevicePanel/TransferPanel/SyncEngine，
+            PromptPanel → SyncEngine，SystemTray → MainWindow/ScreenshotManager 等信号。
+        """
+        assert self._discovery is not None
+        assert self._sync_engine is not None
+        assert self._screenshot_mgr is not None
+        assert self._system_tray is not None
+        assert self._main_window is not None
+
+        # 设备发现 → UI + 同步
+        self._discovery.device_found.connect(device_panel.add_device)
+        self._discovery.device_found.connect(
+            lambda dev: transfer_panel.update_devices(self._discovery.get_devices())
+        )
+        self._discovery.device_found.connect(
+            lambda dev: self._system_tray.update_device_count(
+                len(self._discovery.get_devices())
+            )
+        )
+        self._discovery.device_found.connect(
+            lambda dev: asyncio.ensure_future(
+                self._sync_engine.sync_with_peer(dev)
+            )
+        )
+        self._discovery.device_lost.connect(device_panel.remove_device)
+        self._discovery.device_lost.connect(
+            lambda _: transfer_panel.update_devices(self._discovery.get_devices())
+        )
+        self._discovery.device_lost.connect(
+            lambda _: self._system_tray.update_device_count(
+                len(self._discovery.get_devices())
+            )
+        )
+
+        # Prompt 变更 → 同步
+        prompt_panel.prompt_changed.connect(
+            lambda prompt: asyncio.ensure_future(
+                self._sync_engine.on_local_change(
+                    prompt, self._discovery.get_devices()
+                )
+            )
+        )
+
+        # 同步完成 → 刷新 UI
+        self._sync_engine.sync_completed.connect(
+            lambda: asyncio.ensure_future(prompt_panel.refresh())
+        )
+
+        # 系统托盘
+        self._system_tray.show_window_requested.connect(self._show_main_window)
+        self._system_tray.screenshot_requested.connect(
+            self._screenshot_mgr.take_screenshot
+        )
+        self._system_tray.quit_requested.connect(self._quit)
+
+    def _show_main_window(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户通过托盘菜单或双击托盘图标时需要显示主窗口。
+
+        Code Logic（这个函数做什么）:
+            如果窗口已最小化则恢复，然后激活到前台。
+        """
+        if self._main_window is not None:
+            self._main_window.showNormal()
+            self._main_window.activateWindow()
+
+    def _quit(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户通过托盘菜单选择退出时，需要触发应用关闭流程。
+
+        Code Logic（这个函数做什么）:
+            调用 QApplication.quit() 触发应用退出，
+            实际清理在 shutdown() 中执行。
+        """
+        QApplication.quit()
+
+    async def shutdown(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            应用退出时需要按反向顺序释放所有资源，
+            避免数据丢失、端口占用和 mDNS 服务残留。
+
+        Code Logic（这个函数做什么）:
+            反向停止：同步引擎 → mDNS → HTTP 服务 → 网络客户端 → 数据库。
+        """
+        logger.info("应用关闭中...")
+
+        if self._sync_engine is not None:
+            await self._sync_engine.stop()
+
+        if self._discovery is not None:
+            self._discovery.stop()
+
+        if self._http_server is not None:
+            await self._http_server.stop()
+
+        if self._peer_client is not None:
+            await self._peer_client.close()
+
+        if self._database is not None:
+            await self._database.close()
+
+        logger.info("应用已关闭")
+
+
+def main() -> None:
+    """
+    Business Logic（为什么需要这个函数）:
+        作为 pyproject.toml 中定义的入口点，启动整个应用。
+
+    Code Logic（这个函数做什么）:
+        1. 配置日志系统
+        2. 创建 QApplication
+        3. 使用 qasync 将 asyncio 事件循环集成到 Qt
+        4. 启动 Application，运行事件循环
+        5. 退出时执行 shutdown 清理
+    """
+    # 配置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    # 创建 Qt 应用
+    qt_app = QApplication(sys.argv)
+    qt_app.setQuitOnLastWindowClosed(False)  # 关闭窗口不退出，由托盘管理
+
+    # 使用 qasync 事件循环
+    loop = qasync.QEventLoop(qt_app)
+    asyncio.set_event_loop(loop)
+
+    app = Application()
+
+    async def _run() -> None:
+        """启动应用并等待退出。"""
+        await app.start()
+
+    async def _cleanup() -> None:
+        """退出时清理资源。"""
+        await app.shutdown()
+
+    try:
+        loop.run_until_complete(_run())
+        loop.run_forever()
+    except KeyboardInterrupt:
+        logger.info("收到 Ctrl+C，退出...")
+    finally:
+        loop.run_until_complete(_cleanup())
+        loop.close()
+
+
+if __name__ == "__main__":
+    main()
