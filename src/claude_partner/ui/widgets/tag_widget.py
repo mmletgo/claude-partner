@@ -326,8 +326,13 @@ class TagWidget(QWidget):
             外部需要获取当前的标签列表，例如保存 Prompt 时。
 
         Code Logic（这个函数做什么）:
-            返回当前标签列表的副本。
+            先将输入框中未提交的文本自动加入标签列表（用户可能输入了标签
+            但没按 Enter 就点了确定），然后返回当前标签列表的副本。
         """
+        pending: str = self._input.text().strip()
+        if pending:
+            self._add_tag(pending)
+            self._input.clear()
         return list(self._tags)
 
     def _add_tag(self, tag: str) -> None:
