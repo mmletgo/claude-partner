@@ -61,8 +61,8 @@ class DeviceDiscovery(QObject):
         """
         self._zeroconf = Zeroconf()
 
-        # 获取本机 IP
-        local_ip: str = socket.gethostbyname(socket.gethostname())
+        # 获取本机局域网 IP（避免 Linux 上返回 127.0.1.1 的问题）
+        local_ip: str = self._get_local_ip()
         logger.info("本机 IP: %s, 端口: %d", local_ip, port)
 
         # 构造 TXT 记录
@@ -125,6 +125,26 @@ class DeviceDiscovery(QObject):
             返回当前发现的在线设备字典的副本 {device_id: Device}。
         """
         return dict(self._devices)
+
+    @staticmethod
+    def _get_local_ip() -> str:
+        """
+        Business Logic（为什么需要这个函数）:
+            mDNS 注册需要本机的局域网 IP，但 Linux 上 gethostbyname 经常返回
+            127.0.1.1 等非局域网地址，需要更可靠的方式获取实际 IP。
+
+        Code Logic（这个函数做什么）:
+            通过创建 UDP socket 连接一个外部地址（不实际发包）来获取系统选择的
+            出口 IP，这是跨平台获取局域网 IP 最可靠的方式。
+        """
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip: str = s.getsockname()[0]
+            s.close()
+            return ip
+        except OSError:
+            return socket.gethostbyname(socket.gethostname())
 
     def _on_service_state_change(
         self,
