@@ -1,0 +1,660 @@
+# -*- coding: utf-8 -*-
+"""文件传输面板：展示传输任务列表，支持发送文件和拖拽发送。"""
+
+from __future__ import annotations
+
+import asyncio
+from typing import TYPE_CHECKING
+
+from PyQt6.QtWidgets import (
+    QWidget,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QComboBox,
+    QLabel,
+    QProgressBar,
+    QScrollArea,
+    QFrame,
+    QFileDialog,
+)
+from PyQt6.QtCore import pyqtSignal, Qt
+from PyQt6.QtGui import QCursor, QDragEnterEvent, QDropEvent
+
+from claude_partner.models.device import Device
+from claude_partner.models.transfer import TransferStatus, TransferDirection, TransferTask
+
+if TYPE_CHECKING:
+    from claude_partner.transfer.sender import FileSender
+    from claude_partner.transfer.receiver import FileReceiver
+
+
+def _format_size(size_bytes: int) -> str:
+    """
+    Business Logic（为什么需要这个函数）:
+        UI 展示文件大小时需要自动选择合适的单位（B/KB/MB/GB），
+        让用户直观理解文件大小。
+
+    Code Logic（这个函数做什么）:
+        根据字节数逐级除以 1024，选择最合适的单位并格式化为
+        最多两位小数的字符串。
+    """
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+# 传输状态到中文标签和颜色的映射
+_STATUS_DISPLAY: dict[TransferStatus, tuple[str, str]] = {
+    TransferStatus.PENDING: ("等待中", "#757575"),
+    TransferStatus.TRANSFERRING: ("传输中", "#0078D4"),
+    TransferStatus.COMPLETED: ("已完成", "#4CAF50"),
+    TransferStatus.FAILED: ("失败", "#D32F2F"),
+    TransferStatus.CANCELLED: ("已取消", "#FF9800"),
+}
+
+# 传输状态到卡片背景色的映射
+_STATUS_BG: dict[TransferStatus, str] = {
+    TransferStatus.PENDING: "white",
+    TransferStatus.TRANSFERRING: "#E3F2FD",
+    TransferStatus.COMPLETED: "#E8F5E9",
+    TransferStatus.FAILED: "#FFEBEE",
+    TransferStatus.CANCELLED: "#FFF3E0",
+}
+
+
+class TransferItemWidget(QFrame):
+    """
+    单个传输任务项，在传输列表中展示文件名、方向、进度条、大小和状态。
+
+    Business Logic（为什么需要这个类）:
+        传输列表中的每个任务需要独立展示其传输进度、状态和操作按钮，
+        让用户可以监控每个任务的进展并在需要时取消传输。
+
+    Code Logic（这个类做什么）:
+        使用 QFrame 容器，水平布局排列：方向图标、文件名/大小标签、
+        进度条、状态标签和取消按钮。提供 update_progress 和
+        update_status 方法供外部更新显示。
+    """
+
+    cancel_clicked: pyqtSignal = pyqtSignal(str)  # transfer_id
+
+    def __init__(self, task: TransferTask, parent: QWidget | None = None) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            根据传入的 TransferTask 数据构建任务项的完整 UI。
+
+        Code Logic（这个函数做什么）:
+            保存 transfer_id 和 task 引用，创建方向图标、文件名标签、
+            进度条、大小/状态标签和取消按钮，设置圆角边框样式。
+        """
+        super().__init__(parent)
+        self._transfer_id: str = task.id
+        self._task: TransferTask = task
+
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self._apply_status_style(task.status)
+
+        main_layout: QVBoxLayout = QVBoxLayout(self)
+        main_layout.setContentsMargins(10, 8, 10, 8)
+        main_layout.setSpacing(4)
+
+        # 第一行：方向图标 + 文件名 + 取消按钮
+        top_layout: QHBoxLayout = QHBoxLayout()
+        top_layout.setSpacing(8)
+
+        direction_text: str = "\u2191 发送" if task.direction == TransferDirection.SEND else "\u2193 接收"
+        direction_color: str = "#0078D4" if task.direction == TransferDirection.SEND else "#4CAF50"
+        self._direction_label: QLabel = QLabel(direction_text)
+        self._direction_label.setStyleSheet(
+            f"font-size: 12px; font-weight: bold; color: {direction_color}; "
+            f"background: transparent; border: none;"
+        )
+        self._direction_label.setFixedWidth(60)
+        top_layout.addWidget(self._direction_label)
+
+        self._filename_label: QLabel = QLabel(task.filename)
+        self._filename_label.setStyleSheet(
+            "font-size: 13px; font-weight: bold; color: #212121; "
+            "background: transparent; border: none;"
+        )
+        self._filename_label.setWordWrap(True)
+        top_layout.addWidget(self._filename_label, stretch=1)
+
+        self._cancel_btn: QPushButton = QPushButton("取消")
+        self._cancel_btn.setFixedSize(50, 24)
+        self._cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._cancel_btn.setStyleSheet(
+            """
+            QPushButton {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                font-size: 11px;
+                background: white;
+                color: #D32F2F;
+            }
+            QPushButton:hover {
+                background: #FFEBEE;
+                border-color: #D32F2F;
+            }
+            """
+        )
+        self._cancel_btn.clicked.connect(
+            lambda: self.cancel_clicked.emit(self._transfer_id)
+        )
+        # 完成/失败/取消状态下隐藏取消按钮
+        if task.status in (
+            TransferStatus.COMPLETED,
+            TransferStatus.FAILED,
+            TransferStatus.CANCELLED,
+        ):
+            self._cancel_btn.hide()
+        top_layout.addWidget(self._cancel_btn)
+
+        main_layout.addLayout(top_layout)
+
+        # 第二行：进度条
+        self._progress_bar: QProgressBar = QProgressBar()
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(int(task.progress() * 100))
+        self._progress_bar.setFixedHeight(14)
+        self._progress_bar.setStyleSheet(
+            """
+            QProgressBar {
+                border: 1px solid #ddd;
+                border-radius: 6px;
+                background: #f0f0f0;
+                text-align: center;
+                font-size: 10px;
+                color: #555;
+            }
+            QProgressBar::chunk {
+                border-radius: 5px;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #0078D4, stop:1 #00B4D8
+                );
+            }
+            """
+        )
+        main_layout.addWidget(self._progress_bar)
+
+        # 第三行：大小 + 状态
+        bottom_layout: QHBoxLayout = QHBoxLayout()
+        bottom_layout.setSpacing(8)
+
+        self._size_label: QLabel = QLabel(
+            f"{_format_size(task.transferred_bytes)} / {_format_size(task.size)}"
+        )
+        self._size_label.setStyleSheet(
+            "font-size: 11px; color: #757575; background: transparent; border: none;"
+        )
+        bottom_layout.addWidget(self._size_label)
+
+        bottom_layout.addStretch()
+
+        status_text, status_color = _STATUS_DISPLAY.get(
+            task.status, ("未知", "#757575")
+        )
+        self._status_label: QLabel = QLabel(status_text)
+        self._status_label.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {status_color}; "
+            f"background: transparent; border: none;"
+        )
+        bottom_layout.addWidget(self._status_label)
+
+        main_layout.addLayout(bottom_layout)
+
+    def _apply_status_style(self, status: TransferStatus) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            不同传输状态需要用不同的背景色直观区分，让用户快速识别任务状态。
+
+        Code Logic（这个函数做什么）:
+            根据传输状态设置卡片的 QSS 样式（背景色、边框、圆角）。
+        """
+        bg_color: str = _STATUS_BG.get(status, "white")
+        self.setStyleSheet(
+            f"""
+            TransferItemWidget {{
+                border: 1px solid #ddd;
+                border-radius: 8px;
+                padding: 4px;
+                background: {bg_color};
+            }}
+            """
+        )
+
+    def update_progress(self, progress: float) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            传输过程中需要实时更新进度条和大小显示，让用户了解传输进展。
+
+        Code Logic（这个函数做什么）:
+            接收 0.0~1.0 的进度值，更新进度条百分比和已传输/总大小标签。
+        """
+        percent: int = int(progress * 100)
+        self._progress_bar.setValue(percent)
+        transferred: int = int(progress * self._task.size)
+        self._size_label.setText(
+            f"{_format_size(transferred)} / {_format_size(self._task.size)}"
+        )
+
+    def update_status(self, status: TransferStatus) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            传输完成、失败或取消时需要更新状态标签和卡片背景色，
+            并隐藏不再需要的取消按钮。
+
+        Code Logic（这个函数做什么）:
+            更新状态标签文字和颜色，更新卡片背景色样式，
+            终态（完成/失败/取消）时隐藏取消按钮。
+        """
+        status_text, status_color = _STATUS_DISPLAY.get(status, ("未知", "#757575"))
+        self._status_label.setText(status_text)
+        self._status_label.setStyleSheet(
+            f"font-size: 11px; font-weight: bold; color: {status_color}; "
+            f"background: transparent; border: none;"
+        )
+        self._apply_status_style(status)
+
+        if status in (
+            TransferStatus.COMPLETED,
+            TransferStatus.FAILED,
+            TransferStatus.CANCELLED,
+        ):
+            self._cancel_btn.hide()
+
+    @property
+    def transfer_id(self) -> str:
+        """
+        Business Logic（为什么需要这个函数）:
+            外部需要获取此任务项对应的传输 ID。
+
+        Code Logic（这个函数做什么）:
+            返回 transfer_id 字符串。
+        """
+        return self._transfer_id
+
+
+class TransferPanel(QWidget):
+    """
+    文件传输管理面板，包含目标设备选择、发送文件按钮和传输任务列表。
+
+    Business Logic（为什么需要这个类）:
+        用户需要一个统一的界面来选择目标设备、发送文件、查看所有传输任务
+        （发送和接收）的进度和状态，并支持拖拽文件快速发送。
+
+    Code Logic（这个类做什么）:
+        顶部是目标设备下拉框和发送文件按钮，中间是可滚动的传输任务列表。
+        连接 FileSender 和 FileReceiver 的信号来更新任务进度和状态。
+        支持拖拽文件到面板以快速发送。
+    """
+
+    def __init__(
+        self,
+        file_sender: FileSender,
+        file_receiver: FileReceiver,
+        parent: QWidget | None = None,
+    ) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            构建传输面板 UI，绑定发送器和接收器的信号。
+
+        Code Logic（这个函数做什么）:
+            创建目标设备下拉框、发送按钮、滚动区域和任务列表布局，
+            连接 FileSender/FileReceiver 的进度、完成、失败信号，
+            启用拖拽功能。
+        """
+        super().__init__(parent)
+        self._file_sender: FileSender = file_sender
+        self._file_receiver: FileReceiver = file_receiver
+        self._task_widgets: dict[str, TransferItemWidget] = {}
+
+        self._setup_ui()
+        self._connect_signals()
+        self.setAcceptDrops(True)
+
+    def _setup_ui(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            将面板的 UI 构建逻辑独立出来，保持 __init__ 清晰。
+
+        Code Logic（这个函数做什么）:
+            创建顶部操作栏（设备选择+发送按钮）和可滚动的传输列表区域。
+        """
+        main_layout: QVBoxLayout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(8)
+
+        # 顶部操作栏
+        top_bar: QHBoxLayout = QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        device_label: QLabel = QLabel("目标设备:")
+        device_label.setStyleSheet(
+            "font-size: 13px; color: #333; font-weight: bold;"
+        )
+        top_bar.addWidget(device_label)
+
+        self._device_combo: QComboBox = QComboBox()
+        self._device_combo.setMinimumWidth(180)
+        self._device_combo.setPlaceholderText("请选择设备...")
+        self._device_combo.setStyleSheet(
+            """
+            QComboBox {
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                padding: 4px 8px;
+                font-size: 13px;
+                background: white;
+            }
+            QComboBox:hover {
+                border-color: #0078D4;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            """
+        )
+        top_bar.addWidget(self._device_combo, stretch=1)
+
+        self._send_btn: QPushButton = QPushButton("发送文件")
+        self._send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+        self._send_btn.setStyleSheet(
+            """
+            QPushButton {
+                border: none;
+                border-radius: 4px;
+                padding: 6px 16px;
+                font-size: 13px;
+                font-weight: bold;
+                background: #0078D4;
+                color: white;
+            }
+            QPushButton:hover {
+                background: #005a9e;
+            }
+            QPushButton:disabled {
+                background: #ccc;
+                color: #888;
+            }
+            """
+        )
+        self._send_btn.clicked.connect(self._on_send_file)
+        top_bar.addWidget(self._send_btn)
+
+        main_layout.addLayout(top_bar)
+
+        # 传输列表（可滚动区域）
+        self._scroll_area: QScrollArea = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._scroll_area.setStyleSheet(
+            """
+            QScrollArea {
+                border: none;
+                background: transparent;
+            }
+            """
+        )
+
+        self._list_container: QWidget = QWidget()
+        self._list_layout: QVBoxLayout = QVBoxLayout(self._list_container)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(6)
+
+        # 空提示标签
+        self._empty_label: QLabel = QLabel("暂无传输任务\n拖拽文件到此处或点击「发送文件」开始传输")
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet(
+            "font-size: 13px; color: #999; padding: 40px;"
+        )
+        self._list_layout.addWidget(self._empty_label)
+        self._list_layout.addStretch()
+
+        self._scroll_area.setWidget(self._list_container)
+        main_layout.addWidget(self._scroll_area)
+
+    def _connect_signals(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            需要监听发送器和接收器的信号以实时更新 UI 中任务的进度和状态。
+
+        Code Logic（这个函数做什么）:
+            连接 FileSender 和 FileReceiver 的 progress_updated、
+            transfer_completed、transfer_failed 信号到对应的槽函数。
+        """
+        self._file_sender.progress_updated.connect(self._on_progress)
+        self._file_sender.transfer_completed.connect(self._on_completed)
+        self._file_sender.transfer_failed.connect(self._on_failed)
+
+        self._file_receiver.progress_updated.connect(self._on_progress)
+        self._file_receiver.transfer_completed.connect(self._on_receive_completed)
+        self._file_receiver.transfer_failed.connect(self._on_failed)
+
+    def update_devices(self, devices: dict[str, Device]) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            当设备发现模块检测到设备上线/下线时，需要同步更新目标设备下拉框
+            的可选项，确保用户只能选择在线设备。
+
+        Code Logic（这个函数做什么）:
+            清空并重新填充 QComboBox，每个 item 的 displayText 为设备名称(IP:端口)，
+            userData 存储 (device_id, base_url) 元组。
+        """
+        current_data: tuple[str, str] | None = self._device_combo.currentData()
+        self._device_combo.clear()
+
+        for device_id, device in devices.items():
+            display_text: str = f"{device.name} ({device.host}:{device.port})"
+            self._device_combo.addItem(display_text, (device_id, device.base_url()))
+
+        # 尝试恢复之前选中的设备
+        if current_data is not None:
+            for i in range(self._device_combo.count()):
+                if self._device_combo.itemData(i) == current_data:
+                    self._device_combo.setCurrentIndex(i)
+                    break
+
+    def _on_send_file(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户点击「发送文件」按钮时，需要选择文件并发起异步传输。
+
+        Code Logic（这个函数做什么）:
+            检查是否选择了目标设备，弹出文件选择对话框获取文件路径，
+            调用 asyncio.ensure_future 启动异步发送任务。
+        """
+        device_data: tuple[str, str] | None = self._device_combo.currentData()
+        if device_data is None:
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "选择要发送的文件", "", "所有文件 (*)"
+        )
+        if not file_path:
+            return
+
+        peer_device_id: str = device_data[0]
+        peer_base_url: str = device_data[1]
+        self._start_send(file_path, peer_base_url, peer_device_id)
+
+    def _start_send(
+        self, file_path: str, peer_base_url: str, peer_device_id: str
+    ) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            将文件发送的异步调用封装为独立方法，供按钮点击和拖拽共用。
+
+        Code Logic（这个函数做什么）:
+            调用 FileSender.send_file 发起异步传输，在 Future 的回调中
+            将返回的 TransferTask 添加到列表。
+        """
+
+        async def _do_send() -> None:
+            """
+            Business Logic（为什么需要这个函数）:
+                异步执行文件发送并将返回的任务添加到 UI 列表。
+
+            Code Logic（这个函数做什么）:
+                await send_file 获取 TransferTask，然后调用 _add_task_widget。
+            """
+            task: TransferTask = await self._file_sender.send_file(
+                file_path, peer_base_url, peer_device_id
+            )
+            # send_file 返回时 task 可能已经是完成/失败状态
+            # 但 _add_task_widget 会在调用前检查，所以这里直接添加
+            if task.id not in self._task_widgets:
+                self._add_task_widget(task)
+
+        asyncio.ensure_future(_do_send())
+
+    def _add_task_widget(self, task: TransferTask) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            新的传输任务需要在列表中创建对应的 UI 组件。
+
+        Code Logic（这个函数做什么）:
+            创建 TransferItemWidget 并插入到列表布局的顶部（最新的在最上面），
+            连接取消按钮信号，隐藏空提示标签。
+        """
+        if task.id in self._task_widgets:
+            return
+
+        self._empty_label.hide()
+
+        item_widget: TransferItemWidget = TransferItemWidget(task)
+        item_widget.cancel_clicked.connect(self._on_cancel)
+        self._task_widgets[task.id] = item_widget
+
+        # 插入到 stretch 之前（即列表顶部位置）
+        # 列表布局: [item1, item2, ..., stretch]
+        insert_index: int = self._list_layout.count() - 1  # stretch 之前
+        if insert_index < 0:
+            insert_index = 0
+        self._list_layout.insertWidget(insert_index, item_widget)
+
+    def _on_progress(self, transfer_id: str, progress: float) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            传输进度更新时需要实时刷新对应任务项的进度条和大小显示。
+
+        Code Logic（这个函数做什么）:
+            根据 transfer_id 查找对应的 TransferItemWidget，调用其 update_progress。
+        """
+        widget: TransferItemWidget | None = self._task_widgets.get(transfer_id)
+        if widget is not None:
+            widget.update_progress(progress)
+
+    def _on_completed(self, transfer_id: str) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            发送完成时需要更新任务项状态为已完成。
+
+        Code Logic（这个函数做什么）:
+            查找对应的 widget 并更新状态和进度到 100%。
+        """
+        widget: TransferItemWidget | None = self._task_widgets.get(transfer_id)
+        if widget is not None:
+            widget.update_progress(1.0)
+            widget.update_status(TransferStatus.COMPLETED)
+
+    def _on_receive_completed(self, transfer_id: str, _saved_path: str) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            接收完成的信号携带保存路径参数，需要适配到通用的完成处理逻辑。
+
+        Code Logic（这个函数做什么）:
+            忽略 saved_path 参数，调用与发送完成相同的 UI 更新逻辑。
+        """
+        self._on_completed(transfer_id)
+
+    def _on_failed(self, transfer_id: str, error: str) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            传输失败时需要更新任务项状态为失败并展示错误信息。
+
+        Code Logic（这个函数做什么）:
+            查找对应的 widget，更新状态为 FAILED。
+            错误详情可通过 tooltip 展示。
+        """
+        widget: TransferItemWidget | None = self._task_widgets.get(transfer_id)
+        if widget is not None:
+            widget.update_status(TransferStatus.FAILED)
+            widget.setToolTip(f"错误: {error}")
+
+    def _on_cancel(self, transfer_id: str) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户点击取消按钮时需要通知发送器或接收器停止传输。
+
+        Code Logic（这个函数做什么）:
+            同时调用 FileSender 和 FileReceiver 的 cancel 方法
+            （两者中只有持有该任务的一方会实际生效），并更新 UI 状态。
+        """
+        self._file_sender.cancel(transfer_id)
+        self._file_receiver.cancel(transfer_id)
+
+        widget: TransferItemWidget | None = self._task_widgets.get(transfer_id)
+        if widget is not None:
+            widget.update_status(TransferStatus.CANCELLED)
+
+    def add_receive_task(self, task: TransferTask) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            当接收器初始化一个新的接收任务时，需要在传输列表中显示该任务。
+
+        Code Logic（这个函数做什么）:
+            调用 _add_task_widget 将接收任务添加到列表。
+        """
+        self._add_task_widget(task)
+
+    # -- 拖拽支持 --
+
+    def dragEnterEvent(self, event: QDragEnterEvent | None) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户拖拽文件进入面板时需要判断是否接受该拖拽操作。
+
+        Code Logic（这个函数做什么）:
+            检查拖拽数据是否包含文件 URL，如果是则接受拖拽操作。
+        """
+        if event is not None and event.mimeData() is not None and event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dropEvent(self, event: QDropEvent | None) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            用户拖拽文件到面板并释放时，自动发送文件到选中的目标设备。
+
+        Code Logic（这个函数做什么）:
+            从 mimeData 提取文件路径列表，检查是否已选择目标设备，
+            逐个发起文件发送任务。
+        """
+        if event is None or event.mimeData() is None:
+            super().dropEvent(event)
+            return
+
+        device_data: tuple[str, str] | None = self._device_combo.currentData()
+        if device_data is None:
+            return
+
+        peer_device_id: str = device_data[0]
+        peer_base_url: str = device_data[1]
+
+        for url in event.mimeData().urls():
+            file_path: str = url.toLocalFile()
+            if file_path:
+                self._start_send(file_path, peer_base_url, peer_device_id)
+
+        event.acceptProposedAction()
