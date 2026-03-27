@@ -7,6 +7,8 @@ from PyQt6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont, QAction
 from PyQt6.QtCore import pyqtSignal, Qt
 
+from claude_partner.ui import theme
+
 
 class SystemTray(QSystemTrayIcon):
     """
@@ -61,7 +63,7 @@ class SystemTray(QSystemTrayIcon):
 
         # 绘制蓝色圆形背景
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor("#0078D4"))
+        painter.setBrush(QColor(theme.ACCENT))
         painter.drawEllipse(2, 2, size - 4, size - 4)
 
         # 绘制白色 "CP" 文字
