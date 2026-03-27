@@ -36,9 +36,10 @@ class FileReceiver(QObject):
         通过 Qt 信号通知 UI 层进度和状态变更。
     """
 
-    progress_updated = pyqtSignal(str, float)        # (transfer_id, progress 0.0~1.0)
-    transfer_completed = pyqtSignal(str, str)         # (transfer_id, saved_path)
-    transfer_failed = pyqtSignal(str, str)            # (transfer_id, error_message)
+    transfer_initiated = pyqtSignal(object)             # TransferTask（新传输请求到达）
+    progress_updated = pyqtSignal(str, float)          # (transfer_id, progress 0.0~1.0)
+    transfer_completed = pyqtSignal(str, str)          # (transfer_id, saved_path)
+    transfer_failed = pyqtSignal(str, str)             # (transfer_id, error_message)
 
     def __init__(self, config: AppConfig) -> None:
         """
@@ -103,6 +104,9 @@ class FileReceiver(QObject):
         logger.info(
             "接受传输请求: %s, 文件=%s, 大小=%d", transfer_id, filename, file_size
         )
+
+        # 通知 UI 创建接收任务卡片
+        self.transfer_initiated.emit(task)
 
         return {
             "transfer_id": transfer_id,

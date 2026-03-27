@@ -463,6 +463,7 @@ class TransferPanel(QWidget):
         self._file_sender.transfer_completed.connect(self._on_completed)
         self._file_sender.transfer_failed.connect(self._on_failed)
 
+        self._file_receiver.transfer_initiated.connect(self._on_receive_initiated)
         self._file_receiver.progress_updated.connect(self._on_progress)
         self._file_receiver.transfer_completed.connect(self._on_receive_completed)
         self._file_receiver.transfer_failed.connect(self._on_failed)
@@ -633,6 +634,19 @@ class TransferPanel(QWidget):
         widget: TransferItemWidget | None = self._task_widgets.get(transfer_id)
         if widget is not None:
             widget.update_status(TransferStatus.CANCELLED)
+
+    def _on_receive_initiated(self, task: object) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            对端发起文件传输时，接收端需要在 UI 上显示新的接收任务。
+
+        Code Logic（这个函数做什么）:
+            接收 FileReceiver.transfer_initiated 信号传来的 TransferTask，
+            调用 _add_task_widget 创建 UI 卡片。
+        """
+        from claude_partner.models.transfer import TransferTask as TT
+        if isinstance(task, TT):
+            self._add_task_widget(task)
 
     def add_receive_task(self, task: TransferTask) -> None:
         """
