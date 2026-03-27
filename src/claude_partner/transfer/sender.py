@@ -141,9 +141,12 @@ class FileSender(QObject):
                     read_size: int = min(CHUNK_SIZE, file_size - offset)
                     chunk_data: bytes = f.read(read_size)
 
-                    await self._peer_client.transfer_chunk(
+                    chunk_resp: dict = await self._peer_client.transfer_chunk(
                         peer_base_url, transfer_id, offset, chunk_data
                     )
+                    if not chunk_resp.get("success", False):
+                        error: str = chunk_resp.get("error", "对端写入数据块失败")
+                        raise RuntimeError(error)
 
                     offset += len(chunk_data)
                     task.transferred_bytes = offset

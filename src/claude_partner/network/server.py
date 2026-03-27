@@ -49,7 +49,8 @@ class HTTPServer:
             4. port=0 时由操作系统自动分配端口
             5. 从 socket 获取实际监听端口并返回
         """
-        self._app = web.Application()
+        # client_max_size 设为 2MB，文件传输 chunk 大小为 1MB + HTTP 开销
+        self._app = web.Application(client_max_size=2 * 1024 * 1024)
         self._protocol.setup_routes(self._app)
 
         self._runner = web.AppRunner(self._app)
