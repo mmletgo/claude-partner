@@ -112,7 +112,7 @@ class ScreenshotOverlay(QWidget):
                     # 在选区内重新绘制原图（去除遮罩效果）
                     painter.drawPixmap(selection, self._screenshot, selection)
                     # 选区边框
-                    pen = QPen(QColor(0, 120, 212), 2)  # #0078D4
+                    pen = QPen(QColor(0, 122, 255), 2)  # #007AFF Apple Blue
                     pen.setStyle(Qt.PenStyle.DashLine)
                     painter.setPen(pen)
                     painter.drawRect(selection)

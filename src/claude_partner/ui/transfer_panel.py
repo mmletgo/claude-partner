@@ -26,6 +26,7 @@ from PyQt6.QtGui import QCursor, QDragEnterEvent, QDropEvent, QMouseEvent
 
 from claude_partner.models.device import Device
 from claude_partner.models.transfer import TransferStatus, TransferDirection, TransferTask
+from claude_partner.ui import theme
 
 if TYPE_CHECKING:
     from claude_partner.transfer.sender import FileSender
@@ -52,22 +53,22 @@ def _format_size(size_bytes: int) -> str:
         return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
 
-# 传输状态到中文标签和颜色的映射
+# 传输状态到中文标签和颜色的映射（Apple 色系）
 _STATUS_DISPLAY: dict[TransferStatus, tuple[str, str]] = {
-    TransferStatus.PENDING: ("等待中", "#757575"),
-    TransferStatus.TRANSFERRING: ("传输中", "#0078D4"),
-    TransferStatus.COMPLETED: ("已完成", "#4CAF50"),
-    TransferStatus.FAILED: ("失败", "#D32F2F"),
-    TransferStatus.CANCELLED: ("已取消", "#FF9800"),
+    TransferStatus.PENDING: ("等待中", theme.TEXT_SECONDARY),
+    TransferStatus.TRANSFERRING: ("传输中", theme.ACCENT),
+    TransferStatus.COMPLETED: ("已完成", theme.GREEN),
+    TransferStatus.FAILED: ("失败", theme.RED),
+    TransferStatus.CANCELLED: ("已取消", theme.ORANGE),
 }
 
-# 传输状态到卡片背景色的映射
+# 传输状态到卡片背景色的映射（Apple 柔和色系）
 _STATUS_BG: dict[TransferStatus, str] = {
-    TransferStatus.PENDING: "white",
-    TransferStatus.TRANSFERRING: "#E3F2FD",
-    TransferStatus.COMPLETED: "#E8F5E9",
-    TransferStatus.FAILED: "#FFEBEE",
-    TransferStatus.CANCELLED: "#FFF3E0",
+    TransferStatus.PENDING: theme.BG_PRIMARY,
+    TransferStatus.TRANSFERRING: "#E8F0FE",
+    TransferStatus.COMPLETED: "#E6F4EA",
+    TransferStatus.FAILED: "#FDE7E7",
+    TransferStatus.CANCELLED: "#FEF7E0",
 }
 
 
@@ -103,20 +104,21 @@ class TransferItemWidget(QFrame):
 
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self._apply_status_style(task.status)
+        theme.apply_shadow(self)
 
         main_layout: QVBoxLayout = QVBoxLayout(self)
-        main_layout.setContentsMargins(10, 8, 10, 8)
-        main_layout.setSpacing(4)
+        main_layout.setContentsMargins(14, 12, 14, 12)
+        main_layout.setSpacing(8)
 
         # 第一行：方向图标 + 文件名 + 取消按钮
         top_layout: QHBoxLayout = QHBoxLayout()
-        top_layout.setSpacing(8)
+        top_layout.setSpacing(10)
 
         direction_text: str = "\u2191 发送" if task.direction == TransferDirection.SEND else "\u2193 接收"
-        direction_color: str = "#0078D4" if task.direction == TransferDirection.SEND else "#4CAF50"
+        direction_color: str = theme.ACCENT if task.direction == TransferDirection.SEND else theme.GREEN
         self._direction_label: QLabel = QLabel(direction_text)
         self._direction_label.setStyleSheet(
-            f"font-size: 12px; font-weight: bold; color: {direction_color}; "
+            f"font-size: {theme.FONT_SIZE_CAPTION}; font-weight: 600; color: {direction_color}; "
             f"background: transparent; border: none;"
         )
         self._direction_label.setFixedWidth(60)
@@ -124,30 +126,16 @@ class TransferItemWidget(QFrame):
 
         self._filename_label: QLabel = QLabel(task.filename)
         self._filename_label.setStyleSheet(
-            "font-size: 13px; font-weight: bold; color: #212121; "
-            "background: transparent; border: none;"
+            f"font-size: {theme.FONT_SIZE_BODY}; font-weight: 600; color: {theme.TEXT_PRIMARY}; "
+            f"background: transparent; border: none;"
         )
         self._filename_label.setWordWrap(True)
         top_layout.addWidget(self._filename_label, stretch=1)
 
         self._cancel_btn: QPushButton = QPushButton("取消")
-        self._cancel_btn.setFixedSize(50, 24)
+        self._cancel_btn.setFixedSize(50, 26)
         self._cancel_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._cancel_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: 1px solid #ddd;
-                border-radius: 4px;
-                font-size: 11px;
-                background: white;
-                color: #D32F2F;
-            }
-            QPushButton:hover {
-                background: #FFEBEE;
-                border-color: #D32F2F;
-            }
-            """
-        )
+        self._cancel_btn.setStyleSheet(theme.button_danger_compact_style())
         self._cancel_btn.clicked.connect(
             lambda: self.cancel_clicked.emit(self._transfer_id)
         )
@@ -166,37 +154,20 @@ class TransferItemWidget(QFrame):
         self._progress_bar: QProgressBar = QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(int(task.progress() * 100))
-        self._progress_bar.setFixedHeight(14)
-        self._progress_bar.setStyleSheet(
-            """
-            QProgressBar {
-                border: 1px solid #ddd;
-                border-radius: 6px;
-                background: #f0f0f0;
-                text-align: center;
-                font-size: 10px;
-                color: #555;
-            }
-            QProgressBar::chunk {
-                border-radius: 5px;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #0078D4, stop:1 #00B4D8
-                );
-            }
-            """
-        )
+        self._progress_bar.setFixedHeight(8)
+        self._progress_bar.setStyleSheet(theme.progress_bar_style())
         main_layout.addWidget(self._progress_bar)
 
         # 第三行：大小 + 状态
         bottom_layout: QHBoxLayout = QHBoxLayout()
-        bottom_layout.setSpacing(8)
+        bottom_layout.setSpacing(10)
 
         self._size_label: QLabel = QLabel(
             f"{_format_size(task.transferred_bytes)} / {_format_size(task.size)}"
         )
         self._size_label.setStyleSheet(
-            "font-size: 11px; color: #757575; background: transparent; border: none;"
+            f"font-size: {theme.FONT_SIZE_SMALL}; color: {theme.TEXT_SECONDARY}; "
+            f"background: transparent; border: none;"
         )
         bottom_layout.addWidget(self._size_label)
 
@@ -207,7 +178,7 @@ class TransferItemWidget(QFrame):
         )
         self._status_label: QLabel = QLabel(status_text)
         self._status_label.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {status_color}; "
+            f"font-size: {theme.FONT_SIZE_SMALL}; font-weight: 600; color: {status_color}; "
             f"background: transparent; border: none;"
         )
         bottom_layout.addWidget(self._status_label)
@@ -222,12 +193,12 @@ class TransferItemWidget(QFrame):
         Code Logic（这个函数做什么）:
             根据传输状态设置卡片的 QSS 样式（背景色、边框、圆角）。
         """
-        bg_color: str = _STATUS_BG.get(status, "white")
+        bg_color: str = _STATUS_BG.get(status, theme.BG_PRIMARY)
         self.setStyleSheet(
             f"""
             TransferItemWidget {{
-                border: 1px solid #ddd;
-                border-radius: 8px;
+                border: 1px solid {theme.BORDER};
+                border-radius: {theme.RADIUS_LARGE};
                 padding: 4px;
                 background: {bg_color};
             }}
@@ -259,10 +230,10 @@ class TransferItemWidget(QFrame):
             更新状态标签文字和颜色，更新卡片背景色样式，
             终态（完成/失败/取消）时隐藏取消按钮。
         """
-        status_text, status_color = _STATUS_DISPLAY.get(status, ("未知", "#757575"))
+        status_text, status_color = _STATUS_DISPLAY.get(status, ("未知", theme.TEXT_SECONDARY))
         self._status_label.setText(status_text)
         self._status_label.setStyleSheet(
-            f"font-size: 11px; font-weight: bold; color: {status_color}; "
+            f"font-size: {theme.FONT_SIZE_SMALL}; font-weight: 600; color: {status_color}; "
             f"background: transparent; border: none;"
         )
         self._apply_status_style(status)
@@ -383,89 +354,27 @@ class TransferPanel(QWidget):
         """
         main_layout: QVBoxLayout = QVBoxLayout(self)
         main_layout.setContentsMargins(0, 0, 0, 0)
-        main_layout.setSpacing(8)
+        main_layout.setSpacing(12)
 
         # 顶部操作栏
         top_bar: QHBoxLayout = QHBoxLayout()
-        top_bar.setSpacing(8)
+        top_bar.setSpacing(12)
 
         device_label: QLabel = QLabel("目标设备:")
         device_label.setStyleSheet(
-            "font-size: 13px; color: #333; font-weight: bold;"
+            f"font-size: {theme.FONT_SIZE_BODY}; color: {theme.TEXT_PRIMARY}; font-weight: 600;"
         )
         top_bar.addWidget(device_label)
 
         self._device_combo: QComboBox = QComboBox()
         self._device_combo.setMinimumWidth(200)
         self._device_combo.setPlaceholderText("请选择设备...")
-        self._device_combo.setStyleSheet(
-            """
-            QComboBox {
-                border: 1px solid #ccc;
-                border-radius: 4px;
-                padding: 6px 10px;
-                font-size: 13px;
-                background: white;
-                min-height: 20px;
-            }
-            QComboBox:hover {
-                border-color: #0078D4;
-            }
-            QComboBox::drop-down {
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border-left: 1px solid #ccc;
-                border-top-right-radius: 4px;
-                border-bottom-right-radius: 4px;
-                background: #f5f5f5;
-            }
-            QComboBox::down-arrow {
-                width: 10px;
-                height: 10px;
-                image: none;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid #666;
-            }
-            QComboBox QAbstractItemView {
-                border: 1px solid #ccc;
-                background: white;
-                selection-background-color: #E3F2FD;
-                selection-color: #333;
-                padding: 4px;
-                font-size: 13px;
-            }
-            QComboBox QAbstractItemView::item {
-                min-height: 28px;
-                padding: 4px 8px;
-            }
-            """
-        )
+        self._device_combo.setStyleSheet(theme.combo_style())
         top_bar.addWidget(self._device_combo, stretch=1)
 
         self._send_btn: QPushButton = QPushButton("发送文件")
         self._send_btn.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-        self._send_btn.setStyleSheet(
-            """
-            QPushButton {
-                border: none;
-                border-radius: 4px;
-                padding: 6px 16px;
-                font-size: 13px;
-                font-weight: bold;
-                background: #0078D4;
-                color: white;
-            }
-            QPushButton:hover {
-                background: #005a9e;
-            }
-            QPushButton:disabled {
-                background: #ccc;
-                color: #888;
-            }
-            """
-        )
+        self._send_btn.setStyleSheet(theme.button_primary_style())
         self._send_btn.clicked.connect(self._on_send_file)
         top_bar.addWidget(self._send_btn)
 
@@ -477,25 +386,18 @@ class TransferPanel(QWidget):
         self._scroll_area.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         )
-        self._scroll_area.setStyleSheet(
-            """
-            QScrollArea {
-                border: none;
-                background: transparent;
-            }
-            """
-        )
+        self._scroll_area.setStyleSheet(theme.scroll_area_style())
 
         self._list_container: QWidget = QWidget()
         self._list_layout: QVBoxLayout = QVBoxLayout(self._list_container)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
-        self._list_layout.setSpacing(6)
+        self._list_layout.setSpacing(10)
 
         # 空提示标签
         self._empty_label: QLabel = QLabel("暂无传输任务\n拖拽文件到此处或点击「发送文件」开始传输")
         self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_label.setStyleSheet(
-            "font-size: 13px; color: #999; padding: 40px;"
+            f"font-size: {theme.FONT_SIZE_BODY}; color: {theme.TEXT_TERTIARY}; padding: 40px;"
         )
         self._list_layout.addWidget(self._empty_label)
         self._list_layout.addStretch()
