@@ -9,7 +9,7 @@ import threading
 import time
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QObject, pyqtSignal, QTimer
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer, QMetaObject, Qt, Q_ARG
 
 # Linux X11 方案
 if sys.platform.startswith("linux"):
@@ -231,6 +231,20 @@ class GlobalHotkeyManager(QObject):
         else:
             self._stop_pynput()
 
+    from PyQt6.QtCore import pyqtSlot
+
+    @pyqtSlot(str)
+    def _emit_hotkey(self, action: str) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            后台线程检测到快捷键后需要安全地在 Qt 主线程发射信号。
+
+        Code Logic（这个函数做什么）:
+            QMetaObject.invokeMethod 从后台线程调用此槽（QueuedConnection），
+            确保 hotkey_triggered 信号在 Qt 主线程中发射。
+        """
+        self.hotkey_triggered.emit(action)
+
     def update_hotkey(self, action: str, new_combo: str) -> None:
         """
         Business Logic（为什么需要这个函数）:
@@ -281,6 +295,8 @@ class GlobalHotkeyManager(QObject):
                     logger.info("X11 GrabKey 注册成功: %s -> %s", combo, action)
                 except Exception as e:
                     logger.error("X11 GrabKey 注册失败 (%s): %s", combo, e)
+
+            self._display.flush()
 
             if not self._grabs:
                 logger.error("没有任何快捷键注册成功，放弃启动 X11 监听")
@@ -335,10 +351,12 @@ class GlobalHotkeyManager(QObject):
                         action: str | None = self._grabs.get(key_tuple)
                         if action is not None:
                             logger.info("快捷键触发: %s", action)
-                            # 闭包捕获 action 值
-                            act: str = action
-                            QTimer.singleShot(
-                                0, lambda a=act: self.hotkey_triggered.emit(a)
+                            # 从后台线程安全调用 Qt 主线程的槽
+                            QMetaObject.invokeMethod(
+                                self,
+                                "_emit_hotkey",
+                                Qt.ConnectionType.QueuedConnection,
+                                Q_ARG(str, action),
                             )
                 else:
                     time.sleep(0.05)
