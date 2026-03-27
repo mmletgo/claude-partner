@@ -343,22 +343,49 @@ class TransferPanel(QWidget):
         top_bar.addWidget(device_label)
 
         self._device_combo: QComboBox = QComboBox()
-        self._device_combo.setMinimumWidth(180)
+        self._device_combo.setMinimumWidth(200)
         self._device_combo.setPlaceholderText("请选择设备...")
         self._device_combo.setStyleSheet(
             """
             QComboBox {
-                border: 1px solid #ddd;
+                border: 1px solid #ccc;
                 border-radius: 4px;
-                padding: 4px 8px;
+                padding: 6px 10px;
                 font-size: 13px;
                 background: white;
+                min-height: 20px;
             }
             QComboBox:hover {
                 border-color: #0078D4;
             }
             QComboBox::drop-down {
-                border: none;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border-left: 1px solid #ccc;
+                border-top-right-radius: 4px;
+                border-bottom-right-radius: 4px;
+                background: #f5f5f5;
+            }
+            QComboBox::down-arrow {
+                width: 10px;
+                height: 10px;
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #666;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid #ccc;
+                background: white;
+                selection-background-color: #E3F2FD;
+                selection-color: #333;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 28px;
+                padding: 4px 8px;
             }
             """
         )
