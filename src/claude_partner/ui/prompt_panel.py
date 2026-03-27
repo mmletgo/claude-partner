@@ -222,6 +222,8 @@ class PromptPanel(QWidget):
         self._prompts: list[Prompt] = []
         self._current_keyword: str = ""
         self._current_tag_filter: str = ""
+        self._refreshing: bool = False
+        self._needs_refresh: bool = False
 
         main_layout: QVBoxLayout = QVBoxLayout(self)
         main_layout.setContentsMargins(16, 12, 16, 12)
@@ -263,9 +265,43 @@ class PromptPanel(QWidget):
             """
             QComboBox {
                 border: 1px solid #ccc;
-                border-radius: 6px;
+                border-radius: 4px;
                 padding: 6px 10px;
                 font-size: 13px;
+                background: white;
+                min-height: 20px;
+            }
+            QComboBox:hover {
+                border-color: #0078D4;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 24px;
+                border-left: 1px solid #ccc;
+                border-top-right-radius: 4px;
+                border-bottom-right-radius: 4px;
+                background: #f5f5f5;
+            }
+            QComboBox::down-arrow {
+                width: 10px;
+                height: 10px;
+                image: none;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #666;
+            }
+            QComboBox QAbstractItemView {
+                border: 1px solid #ccc;
+                background: white;
+                selection-background-color: #E3F2FD;
+                selection-color: #333;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 28px;
+                padding: 4px 8px;
             }
             """
         )
@@ -342,6 +378,28 @@ class PromptPanel(QWidget):
         Code Logic（这个函数做什么）:
             根据当前搜索关键词和标签筛选条件从 repo 获取数据，
             刷新标签下拉框选项，重建卡片列表。
+            使用并发守卫防止多次 refresh 同时执行导致状态混乱。
+        """
+        # 并发守卫
+        if self._refreshing:
+            self._needs_refresh = True
+            return
+        self._refreshing = True
+        try:
+            await self._do_refresh()
+        finally:
+            self._refreshing = False
+            if self._needs_refresh:
+                self._needs_refresh = False
+                await self.refresh()
+
+    async def _do_refresh(self) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            refresh() 的实际执行逻辑，由 refresh() 在并发守卫内调用。
+
+        Code Logic（这个函数做什么）:
+            获取筛选后的 Prompt 列表，刷新标签下拉框选项，重建卡片列表。
         """
         # 获取筛选后的 Prompt 列表
         if self._current_keyword and self._current_tag_filter:
@@ -377,6 +435,10 @@ class PromptPanel(QWidget):
         idx: int = self._tag_combo.findText(current_tag)
         if idx >= 0:
             self._tag_combo.setCurrentIndex(idx)
+        else:
+            # 标签已不存在，重置筛选状态
+            self._current_tag_filter = ""
+            self._tag_combo.setCurrentIndex(0)
         self._tag_combo.blockSignals(False)
 
         # 重建卡片列表
