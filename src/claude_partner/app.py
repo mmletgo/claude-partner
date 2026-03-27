@@ -119,7 +119,7 @@ class Application:
 
         # 8. mDNS 设备发现
         self._discovery = DeviceDiscovery(self._config)
-        self._discovery.start(actual_port)
+        await self._discovery.start(actual_port)
 
         # 9. 同步引擎
         self._sync_engine = SyncEngine(
@@ -129,21 +129,36 @@ class Application:
 
         # 10. 截图管理器
         self._screenshot_mgr = ScreenshotManager()
+        logger.info("截图管理器创建完成")
 
         # 11. UI 组件
-        prompt_panel = PromptPanel(self._prompt_repo, self._config)
-        transfer_panel = TransferPanel(self._file_sender, self._file_receiver)
-        device_panel = DevicePanel()
+        try:
+            prompt_panel = PromptPanel(self._prompt_repo, self._config)
+            logger.info("PromptPanel 创建完成")
+            transfer_panel = TransferPanel(self._file_sender, self._file_receiver)
+            logger.info("TransferPanel 创建完成")
+            device_panel = DevicePanel()
+            logger.info("DevicePanel 创建完成")
 
-        self._main_window = MainWindow(
-            prompt_panel=prompt_panel,
-            transfer_panel=transfer_panel,
-            device_panel=device_panel,
-        )
+            self._main_window = MainWindow(
+                prompt_panel=prompt_panel,
+                transfer_panel=transfer_panel,
+                device_panel=device_panel,
+            )
+            logger.info("MainWindow 创建完成")
+        except Exception as e:
+            logger.error("UI 创建失败: %s", e, exc_info=True)
+            raise
 
         # 12. 系统托盘
-        self._system_tray = SystemTray()
-        self._system_tray.show()
+        try:
+            self._system_tray = SystemTray()
+            self._system_tray.show()
+            logger.info("系统托盘创建完成")
+        except Exception as e:
+            logger.error("系统托盘创建失败: %s", e, exc_info=True)
+            # 托盘失败不阻止应用启动
+            self._system_tray = None
 
         # 连接信号
         self._connect_signals(prompt_panel, transfer_panel, device_panel)

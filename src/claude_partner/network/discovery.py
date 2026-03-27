@@ -5,6 +5,7 @@ from zeroconf import Zeroconf, ServiceBrowser, ServiceInfo, ServiceStateChange
 from PyQt6.QtCore import QObject, pyqtSignal
 from claude_partner.models.device import Device
 from claude_partner.config import AppConfig
+import asyncio
 import socket
 import logging
 from datetime import datetime
@@ -47,7 +48,7 @@ class DeviceDiscovery(QObject):
         self._browser: ServiceBrowser | None = None
         self._service_info: ServiceInfo | None = None
 
-    def start(self, port: int) -> None:
+    async def start(self, port: int) -> None:
         """
         Business Logic（为什么需要这个函数）:
             应用启动后需要在局域网中注册自己的存在，并开始监听其他设备。
@@ -56,7 +57,7 @@ class DeviceDiscovery(QObject):
             1. 创建 Zeroconf 实例
             2. 获取本机 IP 地址
             3. 构造 ServiceInfo（包含 device_id 和 device_name 的 TXT 记录）
-            4. 注册服务到 mDNS
+            4. 通过 asyncio.to_thread 在后台注册服务（避免阻塞 UI）
             5. 创建 ServiceBrowser 开始浏览同类型服务
         """
         self._zeroconf = Zeroconf()
@@ -71,7 +72,6 @@ class DeviceDiscovery(QObject):
             b"device_name": self._config.device_name.encode("utf-8"),
         }
 
-        # 注册 mDNS 服务
         self._service_info = ServiceInfo(
             type_=SERVICE_TYPE,
             name=f"{self._config.device_id}.{SERVICE_TYPE}",
@@ -79,12 +79,29 @@ class DeviceDiscovery(QObject):
             port=port,
             properties=properties,
         )
-        self._zeroconf.register_service(self._service_info)
-        logger.info(
-            "mDNS 服务已注册: %s (端口 %d)", self._config.device_name, port
-        )
 
-        # 开始浏览服务
+        # 在线程池中注册 mDNS 服务（register_service 在某些网络环境下会阻塞数秒）
+        # 使用 asyncio.to_thread 保持在主事件循环上下文中，不阻塞 UI
+        async def _register_async() -> None:
+            """异步注册 mDNS 服务。"""
+            try:
+                assert self._zeroconf is not None
+                assert self._service_info is not None
+                await asyncio.to_thread(
+                    self._zeroconf.register_service, self._service_info
+                )
+                logger.info(
+                    "mDNS 服务已注册: %s (端口 %d)",
+                    self._config.device_name,
+                    port,
+                )
+            except Exception as e:
+                logger.error("mDNS 服务注册失败: %s", e)
+
+        # 启动注册任务（不 await，让它在后台完成）
+        asyncio.ensure_future(_register_async())
+
+        # 开始浏览服务（ServiceBrowser 自身在后台线程中运行，不会阻塞）
         self._browser = ServiceBrowser(
             self._zeroconf,
             SERVICE_TYPE,
