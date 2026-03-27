@@ -67,12 +67,16 @@ class DeviceDiscovery(QObject):
             b"device_name": self._config.device_name.encode("utf-8"),
         }
 
+        # server 显式设置为 device_id 的专用主机名，避免 mDNS 用系统 hostname
+        # 解析到多个 IP（含 VPN/Docker 等虚拟接口地址）
+        server_name: str = f"cp-{self._config.device_id}.local."
         self._service_info = ServiceInfo(
             type_=SERVICE_TYPE,
             name=f"{self._config.device_id}.{SERVICE_TYPE}",
             addresses=[socket.inet_aton(local_ip)],
             port=port,
             properties=properties,
+            server=server_name,
         )
 
         self._thread = threading.Thread(
