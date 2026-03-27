@@ -86,6 +86,27 @@ class FlowLayout(QLayout):
             return self._items.pop(index)
         return None
 
+    def hasHeightForWidth(self) -> bool:
+        """
+        Business Logic（为什么需要这个函数）:
+            告知 Qt 布局系统此布局的高度取决于宽度（流式布局的特性）。
+
+        Code Logic（这个函数做什么）:
+            返回 True 表示布局高度依赖于可用宽度。
+            这是 QScrollArea 正确计算滚动区域高度所必需的。
+        """
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        """
+        Business Logic（为什么需要这个函数）:
+            QScrollArea 需要根据可用宽度计算布局总高度来设置滚动区域大小。
+
+        Code Logic（这个函数做什么）:
+            模拟 _do_layout 的排列逻辑，计算给定宽度下的总高度。
+        """
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
     def setGeometry(self, rect: QRect) -> None:
         """
         Business Logic（为什么需要这个函数）:
@@ -93,9 +114,13 @@ class FlowLayout(QLayout):
 
         Code Logic（这个函数做什么）:
             调用 _do_layout 按照流式规则排列子组件。
+            同时更新父容器 widget 的最小高度，使 QScrollArea 能正确滚动。
         """
         super().setGeometry(rect)
-        self._do_layout(rect)
+        height: int = self._do_layout(rect)
+        parent_widget: QWidget | None = self.parentWidget()
+        if parent_widget is not None:
+            parent_widget.setMinimumHeight(height)
 
     def sizeHint(self) -> QSize:
         """
@@ -120,13 +145,14 @@ class FlowLayout(QLayout):
             size = size.expandedTo(item.minimumSize())
         return size
 
-    def _do_layout(self, rect: QRect) -> int:
+    def _do_layout(self, rect: QRect, test_only: bool = False) -> int:
         """
         Business Logic（为什么需要这个函数）:
             实际执行流式布局排列计算。
 
         Code Logic（这个函数做什么）:
             从左到右放置子组件，当 x + 子组件宽度超出右边界时换行。
+            test_only=True 时仅计算高度不实际移动组件（供 heightForWidth 使用）。
             返回布局总高度。
         """
         x: int = rect.x()
@@ -146,7 +172,8 @@ class FlowLayout(QLayout):
                 next_x = x + item_size.width() + self._spacing
                 line_height = 0
 
-            item.setGeometry(QRect(QPoint(x, y), item_size))
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), item_size))
             x = next_x
             line_height = max(line_height, item_size.height())
 

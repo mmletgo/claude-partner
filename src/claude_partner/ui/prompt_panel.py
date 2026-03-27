@@ -30,7 +30,7 @@ from PyQt6.QtGui import QGuiApplication
 from claude_partner.models.prompt import Prompt
 from claude_partner.storage.prompt_repo import PromptRepository
 from claude_partner.config import AppConfig
-from claude_partner.ui.widgets.tag_widget import TagWidget
+from claude_partner.ui.widgets.tag_widget import TagWidget, FlowLayout
 from claude_partner.ui import theme
 
 
@@ -256,10 +256,8 @@ class PromptPanel(QWidget):
 
         self._card_container: QWidget = QWidget()
         self._card_container.setStyleSheet("background: transparent;")
-        self._card_layout: QVBoxLayout = QVBoxLayout(self._card_container)
+        self._card_layout: FlowLayout = FlowLayout(self._card_container, spacing=12)
         self._card_layout.setContentsMargins(0, 0, 0, 0)
-        self._card_layout.setSpacing(8)
-        self._card_layout.addStretch()
 
         self._scroll_area.setWidget(self._card_container)
         main_layout.addWidget(self._scroll_area, stretch=1)
@@ -353,7 +351,8 @@ class PromptPanel(QWidget):
             数据变更后需要重新构建卡片 UI 展示最新的 Prompt 列表。
 
         Code Logic（这个函数做什么）:
-            清空现有卡片，根据 self._prompts 列表重新创建 PromptCard 并添加到布局中。
+            清空现有卡片，根据 self._prompts 列表重新创建 PromptCard 并添加到
+            FlowLayout 网格布局中（每行 2-3 张卡片，根据窗口宽度自适应）。
             无数据时显示空状态提示。
         """
         # 延迟导入避免循环引用
@@ -386,8 +385,6 @@ class PromptPanel(QWidget):
                 lambda pid: asyncio.ensure_future(self._on_delete(pid))
             )
             self._card_layout.addWidget(card)
-
-        self._card_layout.addStretch()
 
     def _on_search_trigger(self) -> None:
         """
