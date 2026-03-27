@@ -1,0 +1,93 @@
+# -*- coding: utf-8 -*-
+"""主窗口：Tab 布局的应用主界面，集成 Prompt 管理、文件传输和设备列表面板。"""
+
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QWidget
+from PyQt6.QtCore import QSize
+
+from claude_partner.ui.prompt_panel import PromptPanel
+
+
+class MainWindow(QMainWindow):
+    """
+    应用主窗口：使用 Tab 布局组织多个功能面板。
+
+    Business Logic（为什么需要这个类）:
+        应用有多个核心功能模块（Prompt 管理、文件传输、设备列表），
+        需要一个主窗口以 Tab 切换的方式统一管理和展示。
+
+    Code Logic（这个类做什么）:
+        QMainWindow 内以 QTabWidget 为中心组件，包含三个 Tab 页：
+        Tab 1 - Prompt 管理面板，Tab 2 - 文件传输面板，Tab 3 - 设备列表面板。
+        后两个面板可传入占位 QWidget，待后续开发完成后替换。
+    """
+
+    def __init__(
+        self,
+        prompt_panel: PromptPanel,
+        transfer_panel: QWidget | None = None,
+        device_panel: QWidget | None = None,
+    ) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            初始化主窗口，将各功能面板注册为 Tab 页。
+
+        Code Logic（这个函数做什么）:
+            创建 QTabWidget，添加三个 Tab 页（Prompt / 文件传输 / 设备列表），
+            设置窗口标题、默认大小和最小尺寸。
+        """
+        super().__init__()
+
+        self.setWindowTitle("Claude Partner")
+        self.resize(900, 600)
+        self.setMinimumSize(QSize(600, 400))
+
+        # Tab 布局
+        self._tab_widget: QTabWidget = QTabWidget()
+        self._tab_widget.setStyleSheet(
+            """
+            QTabWidget::pane {
+                border: none;
+            }
+            QTabBar::tab {
+                padding: 8px 20px;
+                font-size: 13px;
+                min-width: 100px;
+            }
+            QTabBar::tab:selected {
+                color: #0078D4;
+                border-bottom: 2px solid #0078D4;
+                font-weight: bold;
+            }
+            QTabBar::tab:!selected {
+                color: #666;
+            }
+            QTabBar::tab:hover {
+                color: #0078D4;
+                background: #f0f0f0;
+            }
+            """
+        )
+        self.setCentralWidget(self._tab_widget)
+
+        # Tab 1: Prompt 管理面板
+        self._prompt_panel: PromptPanel = prompt_panel
+        self._tab_widget.addTab(self._prompt_panel, "Prompt 管理")
+
+        # Tab 2: 文件传输面板（占位）
+        self._transfer_panel: QWidget = transfer_panel or QWidget()
+        self._tab_widget.addTab(self._transfer_panel, "文件传输")
+
+        # Tab 3: 设备列表面板（占位）
+        self._device_panel: QWidget = device_panel or QWidget()
+        self._tab_widget.addTab(self._device_panel, "设备列表")
+
+    @property
+    def prompt_panel(self) -> PromptPanel:
+        """
+        Business Logic（为什么需要这个函数）:
+            外部（如 app.py）需要访问 Prompt 面板以触发刷新或连接信号。
+
+        Code Logic（这个函数做什么）:
+            返回 Prompt 管理面板实例。
+        """
+        return self._prompt_panel
