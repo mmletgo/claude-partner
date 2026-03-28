@@ -25,13 +25,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# pynput 格式 <-> 人类可读格式 转换预设
-HOTKEY_PRESETS: list[tuple[str, str]] = [
-    ("<ctrl>+<shift>+s", "Ctrl+Shift+S"),
-    ("<ctrl>+<alt>+s", "Ctrl+Alt+S"),
-    ("<ctrl>+<shift>+a", "Ctrl+Shift+A"),
-    ("<ctrl>+<shift>+x", "Ctrl+Shift+X"),
-]
+# pynput 格式 <-> 人类可读格式 转换预设（macOS 使用 Cmd 键，其他平台使用 Ctrl 键）
+if sys.platform == "darwin":
+    HOTKEY_PRESETS: list[tuple[str, str]] = [
+        ("<cmd>+<shift>+s", "Cmd+Shift+S"),
+        ("<cmd>+<alt>+s", "Cmd+Alt+S"),
+        ("<cmd>+<shift>+a", "Cmd+Shift+A"),
+        ("<cmd>+<shift>+x", "Cmd+Shift+X"),
+    ]
+    _DEFAULT_SCREENSHOT_HOTKEY: str = "<cmd>+<shift>+s"
+else:
+    HOTKEY_PRESETS: list[tuple[str, str]] = [
+        ("<ctrl>+<shift>+s", "Ctrl+Shift+S"),
+        ("<ctrl>+<alt>+s", "Ctrl+Alt+S"),
+        ("<ctrl>+<shift>+a", "Ctrl+Shift+A"),
+        ("<ctrl>+<shift>+x", "Ctrl+Shift+X"),
+    ]
+    _DEFAULT_SCREENSHOT_HOTKEY: str = "<ctrl>+<shift>+s"
 
 # 修饰键映射：pynput 格式 -> 人类可读格式
 _MODIFIER_TO_DISPLAY: dict[str, str] = {
