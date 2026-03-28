@@ -3,6 +3,7 @@
 
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QWidget
 from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QCloseEvent
 
 from claude_partner.ui.prompt_panel import PromptPanel
 from claude_partner.ui import theme
@@ -65,6 +66,19 @@ class MainWindow(QMainWindow):
         # Tab 4: 设置面板
         self._settings_panel: QWidget = settings_panel or QWidget()
         self._tab_widget.addTab(self._settings_panel, "设置")
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            macOS 上用户点击红色关闭按钮时，应将窗口隐藏到托盘而不是退出应用，
+            这样后台同步和快捷键等功能可以继续工作。直接关闭窗口会让用户误以为
+            应用卡死（进程仍在运行但无可见界面）。
+
+        Code Logic（这个函数做什么）:
+            拦截关闭事件，改为隐藏窗口。用户可通过托盘菜单重新打开或退出。
+        """
+        event.ignore()
+        self.hide()
 
     @property
     def prompt_panel(self) -> PromptPanel:
