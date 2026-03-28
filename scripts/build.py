@@ -53,6 +53,50 @@ def get_arch() -> str:
     return machine
 
 
+def create_dmg(app_path: Path, dmg_path: Path) -> None:
+    """
+    Business Logic（为什么需要这个函数）:
+        macOS 用户习惯通过 DMG 安装应用，将 .app 拖入 Applications 文件夹。
+
+    Code Logic（这个函数做什么）:
+        使用 hdiutil 创建 DMG 安装镜像，内含 .app 和 Applications 符号链接。
+        1. 创建临时目录，放入 .app 和 Applications 快捷方式
+        2. 用 hdiutil 打包为 DMG
+    """
+    staging_dir: Path = app_path.parent / "_dmg_staging"
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir()
+
+    # 复制 .app 到临时目录
+    staged_app: Path = staging_dir / app_path.name
+    shutil.copytree(app_path, staged_app)
+
+    # 创建 Applications 符号链接
+    os.symlink("/Applications", staging_dir / "Applications")
+
+    # 删除已有 DMG
+    if dmg_path.exists():
+        dmg_path.unlink()
+
+    # 创建 DMG
+    subprocess.run(
+        [
+            "hdiutil", "create",
+            "-volname", "Claude Partner",
+            "-srcfolder", str(staging_dir),
+            "-ov",
+            "-format", "UDZO",  # 压缩格式
+            str(dmg_path),
+        ],
+        check=True,
+    )
+
+    # 清理临时目录
+    shutil.rmtree(staging_dir)
+    print(f"DMG: {dmg_path}")
+
+
 def main() -> None:
     """
     Business Logic（为什么需要这个函数）:
@@ -62,6 +106,7 @@ def main() -> None:
         1. 生成图标（如果不存在）
         2. 调用 PyInstaller 执行 spec 文件
         3. 将产物移动到 release/ 并按平台+架构重命名
+        4. macOS 额外生成 DMG 安装镜像
     """
     project_dir: Path = Path(__file__).parent.parent
     spec_file: Path = project_dir / "claude_partner.spec"
@@ -104,26 +149,25 @@ def main() -> None:
     system: str = platform.system().lower()
 
     if system == "darwin":
-        # macOS: onefile 模式，单个可执行文件
-        exe_src: Path = dist_dir / "ClaudePartner"
-        if exe_src.exists() and exe_src.is_file():
-            exe_dst: Path = release_dir / f"ClaudePartner-{platform_name}-{arch}"
-            shutil.copy2(exe_src, exe_dst)
-            os.chmod(exe_dst, 0o755)
-            print(f"产物: {exe_dst}")
+        # macOS: .app bundle + DMG 安装镜像
+        app_src: Path = dist_dir / "ClaudePartner.app"
+        if app_src.exists():
+            dmg_name: str = f"ClaudePartner-{platform_name}-{arch}.dmg"
+            dmg_path: Path = release_dir / dmg_name
+            create_dmg(app_src, dmg_path)
 
     elif system == "windows":
-        exe_src = dist_dir / "ClaudePartner.exe"
+        exe_src: Path = dist_dir / "ClaudePartner.exe"
         if exe_src.exists():
-            exe_dst = release_dir / f"ClaudePartner-{platform_name}-{arch}.exe"
+            exe_dst: Path = release_dir / f"ClaudePartner-{platform_name}-{arch}.exe"
             shutil.copy2(exe_src, exe_dst)
             print(f"产物: {exe_dst}")
 
     else:
         # Linux
-        exe_src = dist_dir / "ClaudePartner"
+        exe_src: Path = dist_dir / "ClaudePartner"
         if exe_src.exists():
-            exe_dst = release_dir / f"ClaudePartner-{platform_name}-{arch}"
+            exe_dst: Path = release_dir / f"ClaudePartner-{platform_name}-{arch}"
             shutil.copy2(exe_src, exe_dst)
             os.chmod(exe_dst, 0o755)
             print(f"产物: {exe_dst}")
