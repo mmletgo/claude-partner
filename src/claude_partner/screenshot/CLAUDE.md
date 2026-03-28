@@ -16,7 +16,9 @@
 ### ScreenshotOverlay (`overlay.py`)
 - **功能**: 全屏覆盖层，截取桌面后让用户拖动选择区域
 - **信号**: `screenshot_taken(QPixmap)`, `screenshot_cancelled()`
-- **多显示器**: 使用 `virtualGeometry()` 获取所有屏幕组合区域
+- **两种模式**:
+  - 自动截取模式（默认）: 自行通过 `virtualGeometry()` 截取虚拟桌面并 `showFullScreen()`
+  - 预截取模式（macOS 多屏）: 由 ScreenshotManager 传入 `screenshot` 和 `target_geometry`，直接 `show()` + `raise_()` 显示
 - **绘制逻辑**: 全屏截图背景 -> 半透明遮罩(alpha=100) -> 选区内绘制原图(去遮罩) -> Apple 蓝色虚线边框(#007AFF, 2px)
 - **选区要求**: 最小 10x10 像素，小于此大小视为取消
 - **快捷键**: ESC 取消截图
@@ -24,4 +26,6 @@
 ### ScreenshotManager (`capture.py`)
 - **功能**: 管理截图流程，连接覆盖层信号，处理剪贴板操作
 - **信号**: `screenshot_ready(QPixmap)`
-- **流程**: 创建 Overlay -> 用户选区 -> 复制到剪贴板 -> 发射 ready 信号 -> 清理 Overlay
+- **macOS 多屏**: 为每个屏幕独立创建 ScreenshotOverlay（macOS 不允许单窗口跨屏），通过 `QScreen.grabWindow(0)` 各自截取屏幕内容，使用 `NSApp.activateIgnoringOtherApps_` 确保从后台触发时覆盖层能显示到前台
+- **其他平台**: 单一覆盖层覆盖虚拟桌面全部区域
+- **流程**: 创建 Overlay(s) -> 用户选区 -> 复制到剪贴板 -> 发射 ready 信号 -> 清理所有 Overlay
