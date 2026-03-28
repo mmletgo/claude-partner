@@ -295,6 +295,7 @@ class Application:
             pass
 
         # 检测输入监控权限（通过 CGEventTap 检测，无专用请求 API）
+        need_input_monitoring: bool = False
         try:
             import Quartz  # type: ignore[import-untyped]
 
@@ -310,14 +311,9 @@ class Application:
                 None,
             )
             if tap is None:
-                # 输入监控无请求 API，直接打开系统设置对应页面
-                subprocess.Popen([
-                    "open",
-                    "x-apple.systempreferences:"
-                    "com.apple.preference.security?Privacy_ListenEvent",
-                ])
-                requested.append("输入监控")
-                logger.info("已打开 macOS 输入监控设置页面")
+                need_input_monitoring = True
+                requested.append("输入监控（全局快捷键）")
+                logger.info("macOS 输入监控权限缺失")
             else:
                 Quartz.CFMachPortInvalidate(tap)
         except ImportError:
@@ -326,13 +322,23 @@ class Application:
         if requested:
             from PyQt6.QtWidgets import QMessageBox
 
+            items = "\n".join(f"  • {p}" for p in requested)
             QMessageBox.information(
                 self._main_window,
                 "请授予权限",
-                "已打开系统设置对应页面，请在列表中找到\n"
-                "Claude Partner 并启用权限开关。\n\n"
-                "授权完成后请重启应用。",
+                f"Claude Partner 需要以下权限才能正常工作：\n\n"
+                f"{items}\n\n"
+                f"点击「确定」后将打开系统设置对应页面，\n"
+                f"请找到 Claude Partner 并启用权限开关。\n"
+                f"授权完成后请重启应用。",
             )
+            # 用户确认后再打开设置页面，避免设置页抢焦点遮挡弹窗
+            if need_input_monitoring:
+                subprocess.Popen([
+                    "open",
+                    "x-apple.systempreferences:"
+                    "com.apple.preference.security?Privacy_ListenEvent",
+                ])
 
     def _on_hotkey(self, action: str) -> None:
         """
