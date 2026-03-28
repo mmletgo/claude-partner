@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 import sys
 from typing import NoReturn
 
@@ -456,6 +457,13 @@ def main() -> None:
     async def _cleanup() -> None:
         """退出时清理资源。"""
         await app.shutdown()
+
+    # macOS Dock 退出和 kill 命令发送 SIGTERM，需要转为 QApplication.quit()
+    def _handle_sigterm(*_: object) -> None:
+        logger.info("收到 SIGTERM，退出...")
+        QApplication.quit()
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     try:
         loop.run_until_complete(_run())
