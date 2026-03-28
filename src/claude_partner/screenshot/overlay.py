@@ -136,7 +136,15 @@ class ScreenshotOverlay(QWidget):
                 selection: QRect = QRect(self._origin, self._current).normalized()
                 if selection.width() > 2 and selection.height() > 2:
                     # 在选区内重新绘制原图（去除遮罩效果）
-                    painter.drawPixmap(selection, self._screenshot, selection)
+                    # source rect 需要转换为设备像素坐标（Retina DPR=2）
+                    dpr = self._screenshot.devicePixelRatio()
+                    source_rect = QRect(
+                        int(selection.x() * dpr),
+                        int(selection.y() * dpr),
+                        int(selection.width() * dpr),
+                        int(selection.height() * dpr),
+                    )
+                    painter.drawPixmap(selection, self._screenshot, source_rect)
                     # 选区边框
                     pen = QPen(QColor(0, 122, 255), 2)  # #007AFF Apple Blue
                     pen.setStyle(Qt.PenStyle.DashLine)
@@ -190,7 +198,15 @@ class ScreenshotOverlay(QWidget):
                 and selection.height() >= 10
                 and self._screenshot
             ):
-                cropped: QPixmap = self._screenshot.copy(selection)
+                # copy rect 需要转换为设备像素坐标（Retina DPR=2）
+                dpr = self._screenshot.devicePixelRatio()
+                device_rect = QRect(
+                    int(selection.x() * dpr),
+                    int(selection.y() * dpr),
+                    int(selection.width() * dpr),
+                    int(selection.height() * dpr),
+                )
+                cropped: QPixmap = self._screenshot.copy(device_rect)
                 self.screenshot_taken.emit(cropped)
             else:
                 self.screenshot_cancelled.emit()
