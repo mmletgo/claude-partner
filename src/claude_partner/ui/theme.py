@@ -353,8 +353,9 @@ def tab_bar_style() -> str:
         QTabBar::tab {{
             background: transparent;
             border-radius: 6px;
-            padding: 6px 20px;
+            padding: 6px 24px;
             margin: 2px;
+            min-width: 80px;
             color: {TEXT_SECONDARY};
             font-size: 13px;
             font-family: {FONT_FAMILY};
