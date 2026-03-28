@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass, field
 import json
+import sys
 import uuid
 import socket
 from pathlib import Path
@@ -34,7 +35,9 @@ class AppConfig:
     http_port: int  # 0 = 系统自动分配
     receive_dir: str
     db_path: str
-    screenshot_hotkey: str = "<ctrl>+<shift>+s"
+    screenshot_hotkey: str = field(
+        default_factory=lambda: "<cmd>+<shift>+s" if sys.platform == "darwin" else "<ctrl>+<shift>+s"
+    )
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -55,8 +58,15 @@ class AppConfig:
                 http_port=data["http_port"],
                 receive_dir=data["receive_dir"],
                 db_path=data["db_path"],
-                screenshot_hotkey=data.get("screenshot_hotkey", "<ctrl>+<shift>+s"),
+                screenshot_hotkey=data.get(
+                    "screenshot_hotkey",
+                    "<cmd>+<shift>+s" if sys.platform == "darwin" else "<ctrl>+<shift>+s",
+                ),
             )
+            # macOS 迁移：旧配置中 <ctrl> 快捷键自动替换为 <cmd>
+            if sys.platform == "darwin" and "<ctrl>" in config.screenshot_hotkey:
+                config.screenshot_hotkey = config.screenshot_hotkey.replace("<ctrl>", "<cmd>")
+                config.save()
             return config
 
         # 首次运行，生成默认配置
