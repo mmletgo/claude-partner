@@ -2,7 +2,7 @@
 """主窗口：Tab 布局的应用主界面，集成 Prompt 管理、文件传输和设备列表面板。"""
 
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QWidget
-from PyQt6.QtCore import QSize
+from PyQt6.QtCore import QSize, Qt
 
 from claude_partner.ui.prompt_panel import PromptPanel
 from claude_partner.ui import theme
@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
         # Tab 布局
         self._tab_widget: QTabWidget = QTabWidget()
         self._tab_widget.setStyleSheet(theme.tab_bar_style())
+        self._tab_widget.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
         self.setCentralWidget(self._tab_widget)
 
         # Tab 1: Prompt 管理面板
