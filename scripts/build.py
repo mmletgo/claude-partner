@@ -15,6 +15,7 @@ import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 
@@ -164,13 +165,36 @@ def main() -> None:
             print(f"产物: {exe_dst}")
 
     else:
-        # Linux
+        # Linux: 打包为 tar.gz（含可执行文件、图标、.desktop 文件、安装脚本）
         exe_src: Path = dist_dir / "ClaudePartner"
         if exe_src.exists():
-            exe_dst: Path = release_dir / f"ClaudePartner-{platform_name}-{arch}"
-            shutil.copy2(exe_src, exe_dst)
-            os.chmod(exe_dst, 0o755)
-            print(f"产物: {exe_dst}")
+            pkg_name: str = f"ClaudePartner-{platform_name}-{arch}"
+            staging: Path = dist_dir / pkg_name
+            staging.mkdir(exist_ok=True)
+
+            # 复制可执行文件
+            shutil.copy2(exe_src, staging / "ClaudePartner")
+            os.chmod(staging / "ClaudePartner", 0o755)
+
+            # 复制图标
+            shutil.copy2(scripts_dir / "icon.png", staging / "icon.png")
+
+            # 复制 .desktop 文件
+            shutil.copy2(
+                scripts_dir / "claude-partner.desktop",
+                staging / "claude-partner.desktop",
+            )
+
+            # 复制安装脚本
+            install_script: Path = scripts_dir / "install.sh"
+            shutil.copy2(install_script, staging / "install.sh")
+            os.chmod(staging / "install.sh", 0o755)
+
+            # 打包为 tar.gz
+            tarball: Path = release_dir / f"{pkg_name}.tar.gz"
+            with tarfile.open(tarball, "w:gz") as tar:
+                tar.add(str(staging), arcname=pkg_name)
+            print(f"产物: {tarball}")
 
     # 4. 清理临时目录
     if build_dir.exists():
