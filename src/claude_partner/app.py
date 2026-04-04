@@ -623,25 +623,141 @@ def _fix_linux_input_method() -> None:
     )
 
 
+def _fix_macos_qt_issues() -> None:
+    """
+    Business Logic（为什么需要这个函数）:
+        macOS 上存在多个与输入法切换相关的崩溃问题：
+        1. pynput 的 CGEventTap 回调在后台线程处理 Caps Lock 事件时，
+           调用 NSEvent.eventWithCGEvent: 触发 macOS 输入法切换
+           (TSMCreateInputSourceForRomanSwitchAction)，该 API 要求主线程，
+           导致 dispatch_assert_queue_fail 崩溃
+        2. conda/pip 混合环境下 cocoa 平台插件可能无法被发现
+
+    Code Logic（这个函数做什么）:
+        1. Monkey-patch pynput 的 _handle_message，在 NSEvent 创建前
+           过滤掉 Caps Lock（keycode 57）事件
+        2. 如果 cocoa 插件路径未配置，自动设置 QT_QPA_PLATFORM_PLUGIN_PATH
+        必须在 QApplication 创建前、pynput Listener 启动前调用。
+    """
+    if sys.platform != "darwin":
+        return
+
+    # 核心修复：monkey-patch pynput，防止 Caps Lock 在后台线程触发输入法崩溃
+    _patch_pynput_caps_lock_filter()
+
+    # 修复 conda 环境下 cocoa 插件无法发现的问题
+    if not os.environ.get("QT_QPA_PLATFORM_PLUGIN_PATH"):
+        try:
+            import PyQt6
+            plugins_dir: str = os.path.join(
+                os.path.dirname(PyQt6.__file__),
+                "Qt6", "plugins", "platforms",
+            )
+            if os.path.isdir(plugins_dir):
+                os.environ["QT_QPA_PLATFORM_PLUGIN_PATH"] = plugins_dir
+        except Exception:
+            pass
+
+
+def _patch_pynput_caps_lock_filter() -> None:
+    """
+    Business Logic（为什么需要这个函数）:
+        macOS 上按 Caps Lock 切换「中/英」输入法时，pynput 的 CGEventTap
+        回调会在后台线程调用 NSEvent.eventWithCGEvent:，触发
+        TSMCreateInputSourceForRomanSwitchAction → dispatch_assert_queue_fail 崩溃。
+        这是 pynput 的 bug，无法通过 on_press 回调过滤（崩溃在回调之前）。
+
+    Code Logic（这个函数做什么）:
+        monkey-patch pynput.keyboard._darwin.Listener._handle_message，
+        在事件处理的最早期检查 keycode 是否为 57（Caps Lock），
+        是则直接返回，不调用原始 _handle_message，从而避免
+        NSEvent.eventWithCGEvent: 在非主线程执行。
+    """
+    try:
+        from pynput.keyboard import _darwin
+        from Quartz import (
+            CGEventGetIntegerValueField,
+            kCGKeyboardEventKeycode,
+            kCGEventFlagsChanged,
+            NSSystemDefined,
+        )
+
+        _original = _darwin.Listener._handle_message
+        _CAPS_LOCK_KEYCODE: int = 0x39  # macOS Caps Lock virtual keycode
+
+        def _safe_handle_message(
+            self: object,
+            _proxy: object,
+            event_type: int,
+            event: object,
+            _refcon: object,
+            injected: bool,
+        ) -> None:
+            """
+            Business Logic:
+                macOS 按 Caps Lock 切换「中/英」时，会同时产生两种 CGEvent：
+                1. kCGEventFlagsChanged (keycode=57) — 已被 Caps Lock 分支处理
+                2. kCGEventSystemDefined — 进入 NSSystemDefined 分支，
+                   调用 NSEvent.eventWithCGEvent: 触发输入法切换，
+                   在 CGEventTap 后台线程上导致 dispatch_assert_queue_fail。
+                两种都必须在 _handle_message 之前过滤。
+
+            Code Logic:
+                - kCGEventFlagsChanged 且 keycode=57 → 跳过
+                - kCGEventSystemDefined → 跳过（我们不使用媒体键热键）
+                - 其他事件正常传递
+            """
+            try:
+                if event_type == kCGEventFlagsChanged:
+                    vk: int = CGEventGetIntegerValueField(
+                        event, kCGKeyboardEventKeycode
+                    )
+                    if vk == _CAPS_LOCK_KEYCODE:
+                        return
+                elif event_type == NSSystemDefined:
+                    return
+            except Exception:
+                pass
+            _original(
+                self, _proxy, event_type, event, _refcon, injected
+            )
+
+        _darwin.Listener._handle_message = _safe_handle_message
+        logger.info("已 patch pynput Caps Lock 过滤器，防止输入法切换崩溃")
+
+    except ImportError:
+        logger.debug("pynput keyboard darwin 模块不可用，跳过 Caps Lock patch")
+    except Exception as e:
+        logger.warning("pynput Caps Lock patch 失败: %s", e)
+
+
 def main() -> None:
     """
     Business Logic（为什么需要这个函数）:
         作为 pyproject.toml 中定义的入口点，启动整个应用。
 
     Code Logic（这个函数做什么）:
-        1. 配置日志系统
-        2. 修复 Linux 输入法兼容性
-        3. 创建 QApplication
-        4. 使用 qasync 将 asyncio 事件循环集成到 Qt
-        5. 启动 Application，运行事件循环
-        6. 退出时执行 shutdown 清理
+        1. 配置日志系统和崩溃诊断
+        2. 修复 macOS Qt 6.10 输入法崩溃问题
+        3. 修复 Linux 输入法兼容性
+        4. 创建 QApplication
+        5. 使用 qasync 将 asyncio 事件循环集成到 Qt
+        6. 启动 Application，运行事件循环
+        7. 退出时执行 shutdown 清理
     """
+    # 崩溃诊断：segfault 时输出 C 调用栈
+    import faulthandler
+    faulthandler.enable()
+
     # 配置日志
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # macOS Qt 6.10 输入法崩溃修复（必须在 QApplication 创建前执行）
+    _fix_macos_qt_issues()
 
     # Linux 输入法兼容性修复（必须在 QApplication 创建前执行）
     _fix_linux_input_method()
