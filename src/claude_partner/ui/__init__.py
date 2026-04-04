@@ -7,6 +7,7 @@ from claude_partner.ui.transfer_panel import TransferPanel
 from claude_partner.ui.device_panel import DevicePanel
 from claude_partner.ui.scratchpad_panel import ScratchpadPanel
 from claude_partner.ui.tray import SystemTray
+from claude_partner.ui.welcome_window import WelcomeWindow
 
 __all__: list[str] = [
     "MainWindow",
@@ -15,4 +16,5 @@ __all__: list[str] = [
     "DevicePanel",
     "ScratchpadPanel",
     "SystemTray",
+    "WelcomeWindow",
 ]
