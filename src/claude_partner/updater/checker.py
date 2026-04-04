@@ -11,9 +11,18 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-# GitHub Releases API 地址
+# GitHub 仓库信息
+REPO_OWNER: str = "mmletgo"
+REPO_NAME: str = "claude-partner"
+
+# GitHub Releases 页面（非 API，无限流）
+RELEASES_LATEST_URL: str = (
+    f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+)
+
+# GitHub Releases API（仅在检测到新版本后使用，用于获取下载链接）
 RELEASE_API_URL: str = (
-    "https://api.github.com/repos/mmletgo/claude-partner/releases/latest"
+    f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
 )
 
 # 默认请求超时（秒）
@@ -21,6 +30,13 @@ DEFAULT_TIMEOUT: int = 15
 
 # 自动更新检查间隔（秒）：4 小时
 UPDATE_CHECK_INTERVAL: int = 4 * 3600
+
+# GitHub API 请求头（避免匿名限流）
+_GITHUB_HEADERS: dict[str, str] = {
+    "Accept": "application/vnd.github+json",
+    "User-Agent": "Claude-Partner-Updater",
+    "X-GitHub-Api-Version": "2022-11-28",
+}
 
 
 @dataclass
@@ -175,25 +191,34 @@ class UpdateChecker(QObject):
             以便提示用户升级。
 
         Code Logic（这个函数做什么）:
-            1. GET GitHub Releases API 获取最新 release
-            2. 解析 tag_name 为 SemanticVersion，与 current_version 比较
-            3. 如果有新版本，从 assets 中匹配当前平台的下载文件
-            4. emit update_available(update_info) 或 update_not_available()
-            5. 失败时 emit check_failed(error_msg)
+            1. GET GitHub releases/latest 页面（非 API，无限流），
+               通过 302 重定向获取最新 tag
+            2. 比较版本号，如果无新版本则直接返回
+            3. 有新版本时再调用 GitHub API 获取 release 详情（下载链接等）
+            4. emit update_available / update_not_available / check_failed
         """
         try:
             session: aiohttp.ClientSession = await self._get_session()
-            async with session.get(RELEASE_API_URL) as resp:
-                if resp.status != 200:
-                    error_msg: str = f"GitHub API 返回 HTTP {resp.status}"
-                    logger.warning("版本检查失败: %s", error_msg)
-                    self.check_failed.emit(error_msg)
-                    return
 
-                data: dict = await resp.json()
+            # 第一步：通过重定向获取最新版本 tag（非 API，不受限流）
+            tag_name: str = ""
+            async with session.get(
+                RELEASES_LATEST_URL, allow_redirects=False
+            ) as resp:
+                if resp.status == 302:
+                    location: str = resp.headers.get("Location", "")
+                    tag_name = location.rstrip("/").split("/")[-1]
+                elif resp.status == 200:
+                    # 某些情况下不会重定向，从最终 URL 提取 tag
+                    tag_name = str(resp.url).rstrip("/").split("/")[-1]
 
-            # 解析版本号
-            tag_name: str = data.get("tag_name", "")
+            if not tag_name:
+                error_msg: str = "无法获取最新版本号"
+                logger.warning("版本检查失败: %s", error_msg)
+                self.check_failed.emit(error_msg)
+                return
+
+            # 解析并比较版本号
             remote_version: SemanticVersion = SemanticVersion.parse(tag_name)
             local_version: SemanticVersion = SemanticVersion.parse(
                 current_version
@@ -206,6 +231,26 @@ class UpdateChecker(QObject):
             if not (remote_version > local_version):
                 self.update_not_available.emit()
                 return
+
+            # 第二步：有新版本，调用 API 获取详细信息和下载链接
+            async with session.get(
+                RELEASE_API_URL, headers=_GITHUB_HEADERS
+            ) as resp:
+                if resp.status != 200:
+                    # API 失败但已知有新版本，使用基本信息
+                    update_info: UpdateInfo = UpdateInfo(
+                        version=tag_name.lstrip("v"),
+                        html_url=f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/tag/{tag_name}",
+                        body="",
+                        download_url="",
+                        download_filename="",
+                        download_size=0,
+                    )
+                    logger.info("发现新版本: %s (API 不可用，仅通知)", tag_name)
+                    self.update_available.emit(update_info)
+                    return
+
+                data: dict = await resp.json()
 
             # 匹配当前平台的下载资源
             platform_suffix: str = self._get_platform_suffix()
@@ -224,14 +269,22 @@ class UpdateChecker(QObject):
                     break
 
             if not download_url:
-                error_msg: str = (
-                    f"在 release 资产中未找到匹配平台 '{platform_suffix}' 的文件"
+                # 没有匹配的平台资源，仍然通知用户有新版本（可手动下载）
+                update_info = UpdateInfo(
+                    version=tag_name.lstrip("v"),
+                    html_url=data.get("html_url", ""),
+                    body=data.get("body", ""),
+                    download_url="",
+                    download_filename="",
+                    download_size=0,
                 )
-                logger.warning(error_msg)
-                self.check_failed.emit(error_msg)
+                logger.info(
+                    "发现新版本: %s (无匹配平台资源)", tag_name
+                )
+                self.update_available.emit(update_info)
                 return
 
-            update_info: UpdateInfo = UpdateInfo(
+            update_info = UpdateInfo(
                 version=tag_name.lstrip("v"),
                 html_url=data.get("html_url", ""),
                 body=data.get("body", ""),
