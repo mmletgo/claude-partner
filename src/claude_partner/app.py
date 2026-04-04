@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import signal
 import sys
 from typing import NoReturn
@@ -424,6 +425,85 @@ class Application:
         logger.info("应用已关闭")
 
 
+def _fix_linux_input_method() -> None:
+    """
+    Business Logic（为什么需要这个函数）:
+        Linux 上用户使用 fcitx 等输入法框架时，PyQt6 自带的 Qt6 可能不包含
+        对应的输入法插件（如 fcitx），导致无法输入中文。
+        需要在 QApplication 创建前自动检测并切换到可用的输入法方案。
+
+    Code Logic（这个函数做什么）:
+        检查当前 QT_IM_MODULE 指定的输入法插件是否存在于 PyQt6 的 Qt6
+        plugins 目录中。如果不存在，尝试启动 ibus-daemon 并切换到 ibus 输入法，
+        因为 PyQt6 自带 ibus 插件且多数发行版预装 ibus。
+        必须在 QApplication 创建前调用。
+    """
+    if sys.platform != "linux":
+        return
+
+    im_module: str = os.environ.get("QT_IM_MODULE", "")
+    if not im_module or im_module in ("ibus", "xim", "compose"):
+        return
+
+    # 检查 PyQt6 的 Qt6 插件目录中是否有匹配的输入法插件
+    pyqt6_plugins_dir: str = os.path.join(
+        os.path.dirname(
+            __import__("PyQt6").__file__
+        ),
+        "Qt6", "plugins", "platforminputcontexts",
+    )
+    if not os.path.isdir(pyqt6_plugins_dir):
+        return
+
+    # 查找与 QT_IM_MODULE 匹配的 .so 插件（文件名含对应关键字）
+    import glob
+    pattern: str = os.path.join(pyqt6_plugins_dir, f"*{im_module}*.so")
+    if glob.glob(pattern):
+        return  # 插件存在，无需处理
+
+    # 尝试 ibus 回退：PyQt6 自带 ibus 插件，多数发行版预装 ibus
+    ibus_plugin: list[str] = glob.glob(
+        os.path.join(pyqt6_plugins_dir, "*ibus*.so")
+    )
+    if not ibus_plugin:
+        logger.warning(
+            "PyQt6 的 Qt6 缺少 %s 和 ibus 输入法插件，无法修复中文输入",
+            im_module,
+        )
+        return
+
+    # 确保 ibus-daemon 正在运行
+    import subprocess
+    try:
+        result: subprocess.CompletedProcess[bytes] = subprocess.run(
+            ["ibus", "list-engine"],
+            capture_output=True,
+            timeout=3,
+        )
+        if result.returncode != 0:
+            # ibus-daemon 未运行，尝试启动
+            subprocess.Popen(
+                ["ibus-daemon", "--daemonize"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            import time
+            time.sleep(0.5)
+            logger.info("已启动 ibus-daemon")
+    except FileNotFoundError:
+        logger.warning("ibus 未安装，无法修复中文输入")
+        return
+    except Exception as e:
+        logger.warning("启动 ibus-daemon 失败: %s", e)
+        return
+
+    os.environ["QT_IM_MODULE"] = "ibus"
+    logger.info(
+        "PyQt6 的 Qt6 缺少 %s 插件，已切换到 ibus 输入法 (QT_IM_MODULE=ibus)",
+        im_module,
+    )
+
+
 def main() -> None:
     """
     Business Logic（为什么需要这个函数）:
@@ -431,10 +511,11 @@ def main() -> None:
 
     Code Logic（这个函数做什么）:
         1. 配置日志系统
-        2. 创建 QApplication
-        3. 使用 qasync 将 asyncio 事件循环集成到 Qt
-        4. 启动 Application，运行事件循环
-        5. 退出时执行 shutdown 清理
+        2. 修复 Linux 输入法兼容性
+        3. 创建 QApplication
+        4. 使用 qasync 将 asyncio 事件循环集成到 Qt
+        5. 启动 Application，运行事件循环
+        6. 退出时执行 shutdown 清理
     """
     # 配置日志
     logging.basicConfig(
@@ -442,6 +523,9 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+    # Linux 输入法兼容性修复（必须在 QApplication 创建前执行）
+    _fix_linux_input_method()
 
     # 创建 Qt 应用
     qt_app = QApplication(sys.argv)
