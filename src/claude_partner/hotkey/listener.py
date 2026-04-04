@@ -465,7 +465,14 @@ class GlobalHotkeyManager(QObject):
             Code Logic（这个函数做什么）:
                 用 listener 的 canonical() 将按键事件规范化（如 cmd_l → cmd），
                 然后调用每个 HotKey.press() 进行匹配。
+                在 macOS 上过滤 Caps Lock 事件，因为 pynput 的 CGEventTap 回调
+                在后台线程运行，处理 Caps Lock 会触发 macOS 输入法切换
+                (TSMCreateInputSourceForRomanSwitchAction)，而该 API 要求在
+                主线程调用，否则触发 dispatch_assert_queue_fail 导致崩溃。
             """
+            # macOS 上跳过 Caps Lock，防止在后台线程触发输入法切换崩溃
+            if sys.platform == "darwin" and isinstance(key, keyboard.Key) and key == keyboard.Key.caps_lock:
+                return
             canonical = self._listener.canonical(key)  # type: ignore[union-attr]
             for _, hk in hotkey_objs:
                 hk.press(canonical)
@@ -477,7 +484,10 @@ class GlobalHotkeyManager(QObject):
 
             Code Logic（这个函数做什么）:
                 用 canonical() 规范化后传给每个 HotKey.release()。
+                同样过滤 macOS 上的 Caps Lock 释放事件。
             """
+            if sys.platform == "darwin" and isinstance(key, keyboard.Key) and key == keyboard.Key.caps_lock:
+                return
             canonical = self._listener.canonical(key)  # type: ignore[union-attr]
             for _, hk in hotkey_objs:
                 hk.release(canonical)

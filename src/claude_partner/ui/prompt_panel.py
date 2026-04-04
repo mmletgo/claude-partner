@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QFrame,
 )
-from PyQt6.QtCore import pyqtSignal, Qt, QTimer
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QEvent, QObject
 from PyQt6.QtGui import QGuiApplication
 
 from claude_partner.models.prompt import Prompt
@@ -32,6 +32,10 @@ from claude_partner.storage.prompt_repo import PromptRepository
 from claude_partner.config import AppConfig
 from claude_partner.ui.widgets.tag_widget import TagWidget, FlowLayout
 from claude_partner.ui import theme
+
+import logging
+
+_prompt_edit_logger = logging.getLogger(__name__)
 
 
 class PromptEditDialog(QDialog):
