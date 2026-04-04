@@ -191,9 +191,8 @@ class Application:
         # 连接信号
         self._connect_signals(prompt_panel, transfer_panel, device_panel)
 
-        # 显示主窗口并加载数据
-        self._main_window.show()
-        asyncio.ensure_future(prompt_panel.refresh())
+        # 显示主窗口或欢迎页并加载数据
+        self._show_main_or_welcome(prompt_panel)
 
         # 13. 自动更新检查
         self._update_checker = UpdateChecker()
@@ -323,85 +322,69 @@ class Application:
                 self._on_settings_check_update
             )
 
-    def _check_macos_permissions(self) -> None:
+    def _show_main_or_welcome(self, prompt_panel: PromptPanel) -> None:
         """
         Business Logic（为什么需要这个函数）:
-            macOS 要求应用分别获得「屏幕录制」和「输入监控」权限，
-            打包后的 .app 与 Terminal 是不同的应用身份，需要单独授权。
-            缺失权限时截图只能捕获桌面壁纸、全局快捷键完全无效。
+            macOS 打包应用首次启动或权限缺失时，需要先展示权限引导页
+            而非直接进入主界面。权限齐全则直接进入主窗口。
 
         Code Logic（这个函数做什么）:
-            仅在 PyInstaller 打包的 frozen app 中执行（从 Terminal
-            运行时权限检测 API 会误报）。
-            1. 屏幕录制: CGRequestScreenCaptureAccess 直接打开系统设置页面
-            2. 输入监控: 无请求 API，通过 URL scheme 直接打开系统设置的
-               输入监控页面，让用户手动启用开关
-            3. 任一权限缺失时提示用户授权后重启
+            在 macOS frozen 环境下检查权限，缺失则创建 WelcomeWindow，
+            否则直接显示 MainWindow 并加载数据。
         """
-        # Terminal 运行时权限检测 API 会误报，只在打包后的 .app 中检查
-        if not getattr(sys, "frozen", False):
-            return
-
-        import subprocess
-
-        requested: list[str] = []
-
-        # 检测屏幕录制权限
-        try:
-            import Quartz  # type: ignore[import-untyped]
-            if hasattr(Quartz, "CGPreflightScreenCaptureAccess"):
-                if not Quartz.CGPreflightScreenCaptureAccess():
-                    Quartz.CGRequestScreenCaptureAccess()
-                    requested.append("屏幕录制")
-                    logger.info("已请求 macOS 屏幕录制权限")
-        except ImportError:
-            pass
-
-        # 检测输入监控权限（通过 CGEventTap 检测，无专用请求 API）
-        need_input_monitoring: bool = False
-        try:
-            import Quartz  # type: ignore[import-untyped]
-
-            def _dummy(proxy: object, etype: int, event: object, ref: object) -> object:
-                return event
-
-            tap = Quartz.CGEventTapCreate(
-                Quartz.kCGHIDEventTap,
-                Quartz.kCGHeadInsertEventTap,
-                Quartz.kCGEventTapOptionListenOnly,
-                Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown),
-                _dummy,
-                None,
+        if sys.platform == "darwin" and getattr(sys, "frozen", False):
+            from claude_partner.ui.welcome_window import (
+                WelcomeWindow,
+                needs_welcome,
+                check_screen_capture_access,
+                check_input_monitoring_access,
+                request_screen_capture,
+                request_input_monitoring,
             )
-            if tap is None:
-                need_input_monitoring = True
-                requested.append("输入监控（全局快捷键）")
-                logger.info("macOS 输入监控权限缺失")
+
+            if needs_welcome():
+                self._welcome_window: WelcomeWindow | None = WelcomeWindow(
+                    check_screen_capture=check_screen_capture_access,
+                    check_input_monitoring=check_input_monitoring_access,
+                    request_screen_capture=request_screen_capture,
+                    request_input_monitoring=request_input_monitoring,
+                )
+                self._welcome_window.all_permissions_granted.connect(
+                    self._on_permissions_ready
+                )
+                self._welcome_window.skip_requested.connect(
+                    self._on_permissions_ready
+                )
+                self._welcome_window.show()
+                logger.info("权限缺失，显示欢迎引导页")
+                return
             else:
-                Quartz.CFMachPortInvalidate(tap)
-        except ImportError:
-            pass
+                logger.info("macOS 权限齐全，直接进入主窗口")
 
-        if requested:
-            from PyQt6.QtWidgets import QMessageBox
+        # 非 macOS 或权限齐全，直接显示主窗口
+        self._show_main_window_and_load(prompt_panel)
 
-            items = "\n".join(f"  • {p}" for p in requested)
-            QMessageBox.information(
-                self._main_window,
-                "请授予权限",
-                f"Claude Partner 需要以下权限才能正常工作：\n\n"
-                f"{items}\n\n"
-                f"点击「确定」后将打开系统设置对应页面，\n"
-                f"请找到 Claude Partner 并启用权限开关。\n"
-                f"授权完成后请重启应用。",
-            )
-            # 用户确认后再打开设置页面，避免设置页抢焦点遮挡弹窗
-            if need_input_monitoring:
-                subprocess.Popen([
-                    "open",
-                    "x-apple.systempreferences:"
-                    "com.apple.preference.security?Privacy_ListenEvent",
-                ])
+    def _on_permissions_ready(self) -> None:
+        """
+        Business Logic:
+            用户完成权限授权或跳过欢迎页后，需要关闭欢迎页并显示主窗口。
+
+        Code Logic:
+            关闭 WelcomeWindow，显示 MainWindow 并加载 Prompt 数据。
+        """
+        if hasattr(self, "_welcome_window") and self._welcome_window is not None:
+            self._welcome_window.close()
+            self._welcome_window = None
+
+        assert self._main_window is not None
+        prompt_panel: PromptPanel = self._main_window.prompt_panel
+        self._show_main_window_and_load(prompt_panel)
+
+    def _show_main_window_and_load(self, prompt_panel: PromptPanel) -> None:
+        """显示主窗口并加载 Prompt 数据。"""
+        assert self._main_window is not None
+        self._main_window.show()
+        asyncio.ensure_future(prompt_panel.refresh())
 
     def _on_hotkey(self, action: str) -> None:
         """
@@ -843,12 +826,6 @@ def main() -> None:
         loop.stop()
 
     _sig_notifier.activated.connect(_on_exit_signal)
-
-    # macOS 权限检查：必须在 run_forever 中执行，不能在 run_until_complete 中，
-    # 因为 QMessageBox 模态对话框会触发嵌套事件循环导致 qasync 状态损坏
-    if sys.platform == "darwin":
-        from PyQt6.QtCore import QTimer
-        QTimer.singleShot(500, app._check_macos_permissions)
 
     try:
         loop.run_until_complete(_run())
