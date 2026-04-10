@@ -744,6 +744,31 @@ def label_caption_style() -> str:
 # ── 辅助函数 ──────────────────────────────────────────────────────────────
 
 
+def create_window_gradient(width: float, height: float) -> "QLinearGradient":
+    """
+    Business Logic:
+        macOS Cocoa 原生渲染器会覆盖 QSS 的 qlineargradient 背景，
+        需要用 QPainter + QLinearGradient 直接绘制才能可靠地呈现渐变底色。
+
+    Code Logic:
+        根据当前主题创建从左上到右下的对角线性渐变对象，
+        三段色停靠点与 WINDOW_BG_LIGHT / WINDOW_BG_DARK 一致。
+        返回 QLinearGradient 供 paintEvent 中 fillRect 使用。
+    """
+    from PyQt6.QtGui import QLinearGradient
+
+    gradient: QLinearGradient = QLinearGradient(QPointF(0, 0), QPointF(width, height))
+    if _is_dark:
+        gradient.setColorAt(0.0, QColor("#1A1A2E"))
+        gradient.setColorAt(0.5, QColor("#1C1C30"))
+        gradient.setColorAt(1.0, QColor("#16213E"))
+    else:
+        gradient.setColorAt(0.0, QColor("#E8ECF4"))
+        gradient.setColorAt(0.5, QColor("#F0F0F6"))
+        gradient.setColorAt(1.0, QColor("#E4E8F0"))
+    return gradient
+
+
 def create_app_icon(size: int = 64) -> QIcon:
     """
     Business Logic:

@@ -1,12 +1,43 @@
 # -*- coding: utf-8 -*-
 """主窗口：Tab 布局的应用主界面，集成 Prompt 管理、文件传输和设备列表面板。"""
 
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QWidget
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QCloseEvent
+from PyQt6.QtGui import QCloseEvent, QPainter, QPaintEvent
 
 from claude_partner.ui.prompt_panel import PromptPanel
 from claude_partner.ui import theme
+
+
+class _GradientBackground(QWidget):
+    """
+    渐变背景容器：在 paintEvent 中用 QPainter 绘制对角渐变。
+
+    Business Logic（为什么需要这个类）:
+        macOS Cocoa 原生渲染器会覆盖 QSS 的 qlineargradient 背景，
+        导致玻璃效果的渐变底色无法显示。需要用 QPainter 直接绘制
+        才能可靠地在所有平台上呈现渐变底色。
+
+    Code Logic（这个类做什么）:
+        重写 paintEvent，调用 theme.create_window_gradient() 获取当前
+        主题的渐变对象，用 fillRect 铺满整个控件区域。
+        作为 QMainWindow 的 centralWidget 容器，内嵌 QTabWidget。
+    """
+
+    def paintEvent(self, event: QPaintEvent | None) -> None:
+        """
+        Business Logic（为什么需要这个函数）:
+            每次控件需要重绘时绘制渐变背景。
+
+        Code Logic（这个函数做什么）:
+            创建 QPainter，用 theme 的渐变填充整个控件区域。
+        """
+        painter: QPainter = QPainter(self)
+        gradient = theme.create_window_gradient(
+            float(self.width()), float(self.height())
+        )
+        painter.fillRect(self.rect(), gradient)
+        painter.end()
 
 
 class MainWindow(QMainWindow):
@@ -18,9 +49,8 @@ class MainWindow(QMainWindow):
         需要一个主窗口以 Tab 切换的方式统一管理和展示。
 
     Code Logic（这个类做什么）:
-        QMainWindow 内以 QTabWidget 为中心组件，包含三个 Tab 页：
-        Tab 1 - Prompt 管理面板，Tab 2 - 文件传输面板，Tab 3 - 设备列表面板。
-        后两个面板可传入占位 QWidget，待后续开发完成后替换。
+        QMainWindow 内以 _GradientBackground 为渐变底色容器，
+        QTabWidget 放置其中，各面板作为 Tab 页透明浮于渐变之上。
     """
 
     def __init__(
@@ -36,7 +66,7 @@ class MainWindow(QMainWindow):
             初始化主窗口，将各功能面板注册为 Tab 页。
 
         Code Logic（这个函数做什么）:
-            创建 QTabWidget，添加三个 Tab 页（Prompt / 文件传输 / 设备列表），
+            创建渐变背景容器和 QTabWidget，添加五个 Tab 页，
             设置窗口标题、默认大小和最小尺寸。
         """
         super().__init__()
@@ -46,11 +76,19 @@ class MainWindow(QMainWindow):
         self.resize(900, 700)
         self.setMinimumSize(QSize(600, 500))
 
+        # 渐变背景容器（玻璃效果的底层）
+        self._bg_widget: _GradientBackground = _GradientBackground()
+        bg_layout: QVBoxLayout = QVBoxLayout(self._bg_widget)
+        bg_layout.setContentsMargins(0, 0, 0, 0)
+        bg_layout.setSpacing(0)
+
         # Tab 布局
         self._tab_widget: QTabWidget = QTabWidget()
         self._tab_widget.setStyleSheet(theme.tab_bar_style())
         self._tab_widget.tabBar().setElideMode(Qt.TextElideMode.ElideNone)
-        self.setCentralWidget(self._tab_widget)
+        bg_layout.addWidget(self._tab_widget)
+
+        self.setCentralWidget(self._bg_widget)
 
         # Tab 1: Prompt 管理面板
         self._prompt_panel: PromptPanel = prompt_panel
@@ -79,9 +117,12 @@ class MainWindow(QMainWindow):
             使文字、背景、边框等颜色与新主题一致。
 
         Code Logic（这个函数做什么）:
-            重新应用 Tab 栏样式，级联调用各面板的 _reapply_styles() 方法。
-            对于 settings_panel，通过 hasattr 检查是否支持刷新。
+            触发渐变背景重绘，重新应用 Tab 栏样式，
+            级联调用各面板的 _reapply_styles() 方法。
         """
+        # 触发渐变背景重绘（主题切换后颜色不同）
+        self._bg_widget.update()
+
         self._tab_widget.setStyleSheet(theme.tab_bar_style())
 
         # 刷新各面板样式
