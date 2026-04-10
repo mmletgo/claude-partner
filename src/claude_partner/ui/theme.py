@@ -23,26 +23,26 @@ _LIGHT_PALETTE: dict[str, str] = {
     "ACCENT": "#007AFF",
     "ACCENT_HOVER": "#0062CC",
     "ACCENT_PRESSED": "#004999",
-    "BG_PRIMARY": "rgba(255, 255, 255, 0.72)",
-    "BG_SECONDARY": "rgba(245, 245, 247, 0.65)",
-    "BG_TERTIARY": "rgba(232, 232, 237, 0.60)",
-    "BORDER": "rgba(255, 255, 255, 0.45)",
-    "BORDER_SUBTLE": "rgba(0, 0, 0, 0.06)",
+    "BG_PRIMARY": "rgba(255, 255, 255, 184)",        # alpha 72%
+    "BG_SECONDARY": "rgba(245, 245, 247, 166)",      # alpha 65%
+    "BG_TERTIARY": "rgba(232, 232, 237, 153)",        # alpha 60%
+    "BORDER": "rgba(255, 255, 255, 115)",              # alpha 45%
+    "BORDER_SUBTLE": "rgba(0, 0, 0, 15)",              # alpha 6%
     "TEXT_PRIMARY": "#1D1D1F",
     "TEXT_SECONDARY": "#86868B",
     "TEXT_TERTIARY": "#AEAEB2",
     "GREEN": "#34C759",
     "RED": "#FF3B30",
     "ORANGE": "#FF9500",
-    "SHADOW_LIGHT": "rgba(0, 0, 0, 0.06)",
-    "SHADOW_MEDIUM": "rgba(0, 0, 0, 0.12)",
-    "DANGER_HOVER_BG": "rgba(255, 59, 48, 0.10)",
-    "SCROLLBAR_HANDLE": "rgba(0, 0, 0, 0.12)",
-    "SCROLLBAR_HANDLE_HOVER": "rgba(0, 0, 0, 0.25)",
-    "STATUS_BG_TRANSFERRING": "rgba(0, 122, 255, 0.10)",
-    "STATUS_BG_COMPLETED": "rgba(52, 199, 89, 0.10)",
-    "STATUS_BG_FAILED": "rgba(255, 59, 48, 0.10)",
-    "STATUS_BG_CANCELLED": "rgba(255, 149, 0, 0.10)",
+    "SHADOW_LIGHT": "rgba(0, 0, 0, 15)",               # alpha 6%
+    "SHADOW_MEDIUM": "rgba(0, 0, 0, 31)",              # alpha 12%
+    "DANGER_HOVER_BG": "rgba(255, 59, 48, 26)",        # alpha 10%
+    "SCROLLBAR_HANDLE": "rgba(0, 0, 0, 31)",            # alpha 12%
+    "SCROLLBAR_HANDLE_HOVER": "rgba(0, 0, 0, 64)",     # alpha 25%
+    "STATUS_BG_TRANSFERRING": "rgba(0, 122, 255, 26)",  # alpha 10%
+    "STATUS_BG_COMPLETED": "rgba(52, 199, 89, 26)",     # alpha 10%
+    "STATUS_BG_FAILED": "rgba(255, 59, 48, 26)",        # alpha 10%
+    "STATUS_BG_CANCELLED": "rgba(255, 149, 0, 26)",     # alpha 10%
 }
 
 # ── 深色调色板 ─────────────────────────────────────────────────────────────
@@ -51,26 +51,26 @@ _DARK_PALETTE: dict[str, str] = {
     "ACCENT": "#0A84FF",
     "ACCENT_HOVER": "#409CFF",
     "ACCENT_PRESSED": "#0066CC",
-    "BG_PRIMARY": "rgba(44, 44, 46, 0.72)",
-    "BG_SECONDARY": "rgba(58, 58, 60, 0.65)",
-    "BG_TERTIARY": "rgba(72, 72, 74, 0.55)",
-    "BORDER": "rgba(255, 255, 255, 0.12)",
-    "BORDER_SUBTLE": "rgba(255, 255, 255, 0.05)",
+    "BG_PRIMARY": "rgba(44, 44, 46, 184)",            # alpha 72%
+    "BG_SECONDARY": "rgba(58, 58, 60, 166)",          # alpha 65%
+    "BG_TERTIARY": "rgba(72, 72, 74, 140)",            # alpha 55%
+    "BORDER": "rgba(255, 255, 255, 31)",               # alpha 12%
+    "BORDER_SUBTLE": "rgba(255, 255, 255, 13)",        # alpha 5%
     "TEXT_PRIMARY": "#F5F5F7",
     "TEXT_SECONDARY": "#98989D",
     "TEXT_TERTIARY": "#636366",
     "GREEN": "#30D158",
     "RED": "#FF453A",
     "ORANGE": "#FF9F0A",
-    "SHADOW_LIGHT": "rgba(0, 0, 0, 0.20)",
-    "SHADOW_MEDIUM": "rgba(0, 0, 0, 0.35)",
-    "DANGER_HOVER_BG": "rgba(255, 69, 58, 0.15)",
-    "SCROLLBAR_HANDLE": "rgba(255, 255, 255, 0.15)",
-    "SCROLLBAR_HANDLE_HOVER": "rgba(255, 255, 255, 0.30)",
-    "STATUS_BG_TRANSFERRING": "rgba(10, 132, 255, 0.15)",
-    "STATUS_BG_COMPLETED": "rgba(48, 209, 88, 0.15)",
-    "STATUS_BG_FAILED": "rgba(255, 69, 58, 0.15)",
-    "STATUS_BG_CANCELLED": "rgba(255, 159, 10, 0.15)",
+    "SHADOW_LIGHT": "rgba(0, 0, 0, 51)",               # alpha 20%
+    "SHADOW_MEDIUM": "rgba(0, 0, 0, 89)",              # alpha 35%
+    "DANGER_HOVER_BG": "rgba(255, 69, 58, 38)",        # alpha 15%
+    "SCROLLBAR_HANDLE": "rgba(255, 255, 255, 38)",     # alpha 15%
+    "SCROLLBAR_HANDLE_HOVER": "rgba(255, 255, 255, 77)", # alpha 30%
+    "STATUS_BG_TRANSFERRING": "rgba(10, 132, 255, 38)", # alpha 15%
+    "STATUS_BG_COMPLETED": "rgba(48, 209, 88, 38)",     # alpha 15%
+    "STATUS_BG_FAILED": "rgba(255, 69, 58, 38)",        # alpha 15%
+    "STATUS_BG_CANCELLED": "rgba(255, 159, 10, 38)",    # alpha 15%
 }
 
 # ── 当前模式状态 ────────────────────────────────────────────────────────────
@@ -154,25 +154,25 @@ ACCENT_GRADIENT: str = _ACCENT_GRADIENT_LIGHT
 # ── 标签色板（玻璃风格半透明配色：背景色, 文字色）──────────────────────
 
 TAG_COLORS: list[tuple[str, str]] = [
-    ("rgba(0, 122, 255, 0.12)", "#0A84FF"),    # 蓝
-    ("rgba(52, 199, 89, 0.12)", "#34C759"),     # 绿
-    ("rgba(255, 149, 0, 0.12)", "#FF9500"),     # 橙
-    ("rgba(175, 82, 222, 0.12)", "#AF52DE"),    # 紫
-    ("rgba(90, 200, 250, 0.12)", "#5AC8FA"),    # 青
-    ("rgba(255, 59, 48, 0.12)", "#FF3B30"),     # 红
-    ("rgba(88, 86, 214, 0.12)", "#5856D6"),     # 靛
-    ("rgba(0, 199, 190, 0.12)", "#00C7BE"),     # 薄荷
+    ("rgba(0, 122, 255, 31)", "#0A84FF"),      # 蓝  alpha 12%
+    ("rgba(52, 199, 89, 31)", "#34C759"),       # 绿
+    ("rgba(255, 149, 0, 31)", "#FF9500"),       # 橙
+    ("rgba(175, 82, 222, 31)", "#AF52DE"),      # 紫
+    ("rgba(90, 200, 250, 31)", "#5AC8FA"),      # 青
+    ("rgba(255, 59, 48, 31)", "#FF3B30"),       # 红
+    ("rgba(88, 86, 214, 31)", "#5856D6"),       # 靛
+    ("rgba(0, 199, 190, 31)", "#00C7BE"),       # 薄荷
 ]
 
 TAG_COLORS_DARK: list[tuple[str, str]] = [
-    ("rgba(10, 132, 255, 0.20)", "#5AC8FA"),    # 蓝
-    ("rgba(48, 209, 88, 0.20)", "#4ADE80"),     # 绿
-    ("rgba(255, 159, 10, 0.20)", "#FFB74D"),    # 橙
-    ("rgba(191, 90, 242, 0.20)", "#D8B4FE"),    # 紫
-    ("rgba(100, 210, 255, 0.20)", "#93E3FD"),   # 青
-    ("rgba(255, 69, 58, 0.20)", "#FF8A80"),     # 红
-    ("rgba(94, 92, 230, 0.20)", "#A5A3F5"),     # 靛
-    ("rgba(102, 212, 207, 0.20)", "#99E5E1"),   # 薄荷
+    ("rgba(10, 132, 255, 51)", "#5AC8FA"),     # 蓝  alpha 20%
+    ("rgba(48, 209, 88, 51)", "#4ADE80"),       # 绿
+    ("rgba(255, 159, 10, 51)", "#FFB74D"),      # 橙
+    ("rgba(191, 90, 242, 51)", "#D8B4FE"),      # 紫
+    ("rgba(100, 210, 255, 51)", "#93E3FD"),     # 青
+    ("rgba(255, 69, 58, 51)", "#FF8A80"),       # 红
+    ("rgba(94, 92, 230, 51)", "#A5A3F5"),       # 靛
+    ("rgba(102, 212, 207, 51)", "#99E5E1"),     # 薄荷
 ]
 
 
@@ -238,17 +238,49 @@ def get_global_stylesheet() -> str:
     Business Logic:
         应用启动时需要一次性设置全局 QSS，统一基础字体、滚动条和提示框风格。
         玻璃设计中 QWidget 基础背景设为 transparent，让父容器的渐变底色透出。
+        QMainWindow 使用渐变底色，QDialog/QMenu 使用不透明背景以避免弹窗穿透。
 
     Code Logic:
-        返回覆盖 QWidget 字体（背景透明）、QScrollBar（纵向/横向 6px 薄圆角半透明）、
+        返回覆盖 QWidget 字体（背景透明）、QMainWindow（渐变底色）、
+        QDialog/QMenu（不透明背景保护）、
+        QScrollBar（纵向/横向 6px 薄圆角半透明）、
         QToolTip（玻璃风格半透明背景加亮边框）的 QSS 字符串。
     """
+    # 弹窗/菜单需要不透明背景，避免被全局 transparent 穿透
+    opaque_bg: str = "#F0F0F6" if not _is_dark else "#2C2C2E"
+
     return f"""
         QWidget {{
             font-family: {FONT_FAMILY};
             font-size: {FONT_SIZE_BODY};
             color: {TEXT_PRIMARY};
             background: transparent;
+        }}
+
+        /* ── 主窗口渐变底色（玻璃效果基层） ── */
+        QMainWindow {{
+            background: {WINDOW_BG};
+        }}
+
+        /* ── 弹窗和菜单使用不透明背景 ── */
+        QDialog {{
+            background: {opaque_bg};
+        }}
+        QMenu {{
+            background: {opaque_bg};
+            border: {GLASS_BORDER_WIDTH} solid {BORDER};
+            border-radius: 8px;
+            padding: 4px;
+        }}
+        QMenu::item {{
+            padding: 6px 24px;
+            border-radius: 4px;
+        }}
+        QMenu::item:selected {{
+            background: {BG_SECONDARY};
+        }}
+        QMessageBox {{
+            background: {opaque_bg};
         }}
 
         /* ── 纵向滚动条 ── */
@@ -394,7 +426,7 @@ def button_primary_style() -> str:
         QPushButton {{
             background: {ACCENT_GRADIENT};
             color: white;
-            border: {GLASS_BORDER_WIDTH} solid rgba(255, 255, 255, 0.20);
+            border: {GLASS_BORDER_WIDTH} solid rgba(255, 255, 255, 51);
             border-radius: {RADIUS_MEDIUM};
             padding: 10px 20px;
             font-size: {FONT_SIZE_BODY};
