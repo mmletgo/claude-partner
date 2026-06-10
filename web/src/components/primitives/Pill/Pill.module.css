@@ -1,0 +1,53 @@
+/* Pill 状态标签样式
+ * 比 Tag 更小、padding 更紧的状态徽章
+ * tone 决定背景与文字颜色；dot 显示前置小圆点
+ */
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-full);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  transition: all var(--motion-fast) var(--ease-standard);
+}
+
+/* ── tone ── */
+.tone-neutral {
+  background-color: var(--surface-warm);
+  color: var(--fg-2);
+}
+
+.tone-success {
+  background-color: color-mix(in oklab, var(--success) 14%, transparent);
+  color: var(--success);
+}
+
+.tone-warn {
+  background-color: color-mix(in oklab, var(--warn) 16%, transparent);
+  color: var(--warn);
+}
+
+.tone-danger {
+  background-color: var(--danger-soft);
+  color: var(--danger);
+}
+
+.tone-accent {
+  background-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ── dot ── */
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background-color: currentColor;
+  flex: 0 0 auto;
+}
