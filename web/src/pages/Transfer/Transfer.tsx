@@ -11,7 +11,7 @@
  *   - 顶部 page header：标题 + 副标题，描述当前页面的能力
  *   - 发送区：设备下拉（来自 devicesApi.list）+ 文件选择按钮 + 拖拽 dropzone
  *   - 任务列表：调用 transferApi.list() 拉取，3 秒 setInterval 刷新
- *   - API 失败 / 返回空时使用 mock 任务展示，保留 transferring/completed/failed 三种状态
+ *   - API 失败 / 返回空时展示空状态和错误提示（含重试按钮）
  *   - 状态计数 Pill（活跃/已完成/失败）实时反映任务分布
  */
 
@@ -24,83 +24,6 @@ import { transferApi } from '@/api/transfer';
 import type { Device, TransferTask } from '@/lib/types';
 import { SendIcon, UploadIcon } from '@/lib/icons';
 import styles from './Transfer.module.css';
-
-// ────────────────────────────────────────────────────────────────
-// Mock 数据：当后端未连接或返回空数组时使用，保证页面有内容展示
-// ────────────────────────────────────────────────────────────────
-
-const MOCK_DEVICES: Device[] = [
-  { id: 'dev-imac', name: "Hans's iMac Studio", address: '192.168.1.45', port: 7891, status: 'online', lastSeen: new Date().toISOString() },
-  { id: 'dev-ubuntu', name: "Hans's Ubuntu Workstation", address: '192.168.1.51', port: 7892, status: 'online', lastSeen: new Date().toISOString() },
-  { id: 'dev-macmini', name: 'Living Room Mac mini', address: '192.168.1.30', port: 7893, status: 'offline', lastSeen: new Date(Date.now() - 2 * 3600_000).toISOString() },
-];
-
-const MOCK_TASKS: TransferTask[] = [
-  {
-    id: 't-001',
-    fileName: 'claude-partner-v0.4.2.zip',
-    filePath: '/Users/hans/Downloads/claude-partner-v0.4.2.zip',
-    fileSize: 245 * 1024 * 1024,
-    direction: 'send',
-    status: 'transferring',
-    progress: 0.78,
-    peerDeviceId: 'dev-ubuntu',
-    peerDeviceName: "Hans's Ubuntu Workstation",
-    speed: 12.4 * 1024 * 1024,
-    startedAt: new Date(Date.now() - 30_000).toISOString(),
-  },
-  {
-    id: 't-002',
-    fileName: 'presentation-deck.key',
-    filePath: '/Users/hans/Documents/presentation-deck.key',
-    fileSize: 38 * 1024 * 1024,
-    direction: 'send',
-    status: 'pending',
-    progress: 0,
-    peerDeviceId: 'dev-imac',
-    peerDeviceName: "Hans's iMac Studio",
-    startedAt: new Date().toISOString(),
-  },
-  {
-    id: 't-003',
-    fileName: 'screenshot-2026-06-10.png',
-    filePath: '/Users/hans/Desktop/screenshot-2026-06-10.png',
-    fileSize: 1.2 * 1024 * 1024,
-    direction: 'send',
-    status: 'completed',
-    progress: 1,
-    peerDeviceId: 'dev-imac',
-    peerDeviceName: "Hans's iMac Studio",
-    startedAt: new Date(Date.now() - 600_000).toISOString(),
-    completedAt: new Date(Date.now() - 540_000).toISOString(),
-  },
-  {
-    id: 't-004',
-    fileName: 'huge-dataset.csv',
-    filePath: '/Users/hans/Data/huge-dataset.csv',
-    fileSize: 1.8 * 1024 * 1024 * 1024,
-    direction: 'send',
-    status: 'failed',
-    progress: 0.34,
-    peerDeviceId: 'dev-imac',
-    peerDeviceName: "Hans's iMac Studio",
-    errorMessage: '设备离线',
-    startedAt: new Date(Date.now() - 86_400_000).toISOString(),
-  },
-  {
-    id: 't-005',
-    fileName: 'project-handoff.pdf',
-    filePath: '/Users/hans/Work/project-handoff.pdf',
-    fileSize: 4.5 * 1024 * 1024,
-    direction: 'receive',
-    status: 'completed',
-    progress: 1,
-    peerDeviceId: 'dev-imac',
-    peerDeviceName: "Hans's iMac Studio",
-    startedAt: new Date(Date.now() - 2 * 3600_000).toISOString(),
-    completedAt: new Date(Date.now() - 2 * 3600_000 + 12_000).toISOString(),
-  },
-];
 
 // 3 秒轮询间隔，平衡实时性与后端压力
 const REFRESH_INTERVAL_MS = 3000;
@@ -121,7 +44,6 @@ export function Transfer() {
   const [tasks, setTasks] = useState<TransferTask[]>([]);
   const [tasksState, setTasksState] = useState<LoadState>('loading');
   const [tasksError, setTasksError] = useState<string | null>(null);
-  const [usedMockTasks, setUsedMockTasks] = useState(false);
 
   // ── 文件选择 / 拖拽 ──
   const [pickedFileName, setPickedFileName] = useState<string | null>(null);
@@ -129,46 +51,35 @@ export function Transfer() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   /**
-   * 拉取设备列表；失败或空时回退到 mock
+   * 拉取设备列表；API 失败或返回空时设为空数组并提示错误
    */
   const loadDevices = useCallback(async () => {
     try {
       const data = await devicesApi.list();
+      setDevices(Array.isArray(data) ? data : []);
       if (Array.isArray(data) && data.length > 0) {
-        setDevices(data);
         setSelectedDeviceId((prev) => prev || data[0]!.id);
-      } else {
-        setDevices(MOCK_DEVICES);
-        setSelectedDeviceId((prev) => prev || MOCK_DEVICES[0]!.id);
       }
       setDevicesState('success');
       setDevicesError(null);
     } catch (err) {
-      setDevices(MOCK_DEVICES);
-      setSelectedDeviceId((prev) => prev || MOCK_DEVICES[0]!.id);
+      setDevices([]);
       setDevicesState('error');
       setDevicesError(err instanceof Error ? err.message : '设备列表加载失败');
     }
   }, []);
 
   /**
-   * 拉取传输任务列表；失败或空时回退到 mock
+   * 拉取传输任务列表；API 失败或返回空时设为空数组并提示错误
    */
   const loadTasks = useCallback(async () => {
     try {
       const data = await transferApi.list();
-      if (Array.isArray(data) && data.length > 0) {
-        setTasks(data);
-        setUsedMockTasks(false);
-      } else {
-        setTasks(MOCK_TASKS);
-        setUsedMockTasks(true);
-      }
+      setTasks(Array.isArray(data) ? data : []);
       setTasksState('success');
       setTasksError(null);
     } catch (err) {
-      setTasks(MOCK_TASKS);
-      setUsedMockTasks(true);
+      setTasks([]);
       setTasksState('error');
       setTasksError(err instanceof Error ? err.message : '任务列表加载失败');
     }
@@ -241,7 +152,7 @@ export function Transfer() {
   const handleSendClick = useCallback(() => {
     if (!pickedFileName || !selectedDeviceId) return;
     // 真实实现应调用 transferApi.send(selectedDeviceId, filePath)
-    // 此处仅在控制台提示，避免 mock 数据下产生误操作
+    // 此处仅在控制台提示，待后端接口完成后接入
     // eslint-disable-next-line no-console
     console.info('[Transfer] would send', pickedFileName, 'to', selectedDeviceId);
   }, [pickedFileName, selectedDeviceId]);
@@ -277,7 +188,7 @@ export function Transfer() {
                 {devicesState === 'loading' ? (
                   <option value="">加载中…</option>
                 ) : devices.length === 0 ? (
-                  <option value="">暂无可用设备</option>
+                  <option value="">未发现设备</option>
                 ) : (
                   devices.map((d) => (
                     <option key={d.id} value={d.id}>
@@ -337,7 +248,10 @@ export function Transfer() {
 
         {devicesState === 'error' ? (
           <p className={styles.notice} role="status">
-            设备列表加载失败：{devicesError}。已使用本地示例数据。
+            设备列表加载失败：{devicesError}。
+            <Button variant="secondary" size="sm" onClick={() => void loadDevices()}>
+              重试
+            </Button>
           </p>
         ) : null}
       </Card>
@@ -400,8 +314,10 @@ export function Transfer() {
 
         {tasksState === 'error' ? (
           <p className={styles.notice} role="status">
-            任务列表加载失败：{tasksError}
-            {usedMockTasks ? '。已显示本地示例数据。' : '。'}
+            任务列表加载失败：{tasksError}。
+            <Button variant="secondary" size="sm" onClick={() => void loadTasks()}>
+              重试
+            </Button>
           </p>
         ) : null}
       </section>

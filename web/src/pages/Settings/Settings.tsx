@@ -4,27 +4,23 @@
  * Business Logic（为什么需要这个页面）:
  *   用户需要集中调整设备名、接收目录、快捷键、同步策略等运行时偏好，
  *   改变会通过表单即时反映在 UI 状态中；"保存"按钮在用户主动提交时
- *   把整张配置表序列化（mock）到本地存储，区分"未保存修改"和"已保存配置"。
+ *   把整张配置表发送到后端持久化，区分"未保存修改"和"已保存配置"。
  *
  * Code Logic（这个页面做什么）:
  *   - 顶部 4 个 Card 区块：基本设置 / 快捷键 / 同步与存储 / 关于
- *   - 单一 useState 对象管理所有字段（deviceName/receiveDir/shortcuts/toggles/theme），
- *     任意 onChange 触发整体 re-render，dirty 检测由浅比较 + ref 实现
+ *   - 组件挂载时从后端加载配置和版本信息
  *   - Toggle 控件内联实现，避免引入额外 Switch 组件；状态切换走
  *     受控的 onClick + role="switch" + aria-checked
  *   - 底部按钮组：恢复默认走 ghost 风格重置状态、保存走 primary 风格
- *     触发 mock 持久化（console.log + localStorage）
+ *     调用后端 API 持久化
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Card, Button, Input, Pill } from '@/components/primitives';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon } from '@/lib/icons';
+import { configApi } from '@/api/config';
+import type { VersionInfo, UpdateCheckResult } from '@/lib/types';
 import styles from './Settings.module.css';
-
-/** 应用版本号（与 src/claude_partner/__init__.py 保持一致） */
-const APP_VERSION = '0.4.0';
-/** 构建日期（mock 静态值，真实环境由 Vite 注入） */
-const BUILD_DATE = '2026-06-10';
 
 /** 单个快捷键字段定义 */
 interface ShortcutField {
@@ -50,22 +46,28 @@ interface SettingsState {
   toggles: ToggleField[];
 }
 
-/** 初始状态工厂函数：用于"恢复默认"按钮重置 */
+/** 快捷键默认值 */
+const DEFAULT_SHORTCUTS: ShortcutField[] = [
+  { id: 'screenshot', label: '截图快捷键', helper: '框选区域并复制到剪贴板', value: 'Cmd+Shift+S' },
+  { id: 'toggle-window', label: '切换窗口', helper: '显示/隐藏主窗口', value: 'Cmd+Shift+P' },
+  { id: 'open-settings', label: '打开设置', helper: '直接定位到本面板', value: 'Cmd+,' },
+  { id: 'quick-send', label: '快速发送', helper: '选择文件并发送到最近设备', value: 'Cmd+Shift+U' },
+];
+
+/** 同步与存储开关默认值 */
+const DEFAULT_TOGGLES: ToggleField[] = [
+  { id: 'auto-sync', label: '启用自动同步', helper: '联网后自动与其他设备同步 Prompt', enabled: true },
+  { id: 'save-history', label: '保存传输历史', helper: '在本地数据库保留 30 天的传输记录', enabled: true },
+  { id: 'encrypt-prompts', label: '加密敏感 Prompt', helper: '对包含密钥/令牌的 Prompt 启用额外加密', enabled: false },
+];
+
+/** 生成默认状态 */
 function createDefaultState(): SettingsState {
   return {
-    deviceName: 'My MacBook',
-    receiveDir: '/Users/hans/claude-partner-files',
-    shortcuts: [
-      { id: 'screenshot', label: '截图快捷键', helper: '框选区域并复制到剪贴板', value: 'Cmd+Shift+S' },
-      { id: 'toggle-window', label: '切换窗口', helper: '显示/隐藏主窗口', value: 'Cmd+Shift+P' },
-      { id: 'open-settings', label: '打开设置', helper: '直接定位到本面板', value: 'Cmd+,' },
-      { id: 'quick-send', label: '快速发送', helper: '选择文件并发送到最近设备', value: 'Cmd+Shift+U' },
-    ],
-    toggles: [
-      { id: 'auto-sync', label: '启用自动同步', helper: '联网后自动与其他设备同步 Prompt', enabled: true },
-      { id: 'save-history', label: '保存传输历史', helper: '在本地数据库保留 30 天的传输记录', enabled: true },
-      { id: 'encrypt-prompts', label: '加密敏感 Prompt', helper: '对包含密钥/令牌的 Prompt 启用额外加密', enabled: false },
-    ],
+    deviceName: '',
+    receiveDir: '',
+    shortcuts: DEFAULT_SHORTCUTS.map((s) => ({ ...s })),
+    toggles: DEFAULT_TOGGLES.map((t) => ({ ...t })),
   };
 }
 
@@ -78,6 +80,13 @@ export function Settings() {
   const [state, setState] = useState<SettingsState>(createDefaultState);
   const initialStateRef = useRef<SettingsState>(state);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [choosingDir, setChoosingDir] = useState(false);
 
   // 计算是否处于"未保存"状态
   const isDirty = useMemo(() => {
@@ -145,42 +154,142 @@ export function Settings() {
   };
 
   /**
-   * 模拟"选择目录"按钮点击 - 真实环境会调用系统的 folder picker
+   * 打开原生目录选择对话框，将返回路径写入 receiveDir
    */
-  const handleChooseDir = () => {
-    // 真实环境：调起原生目录选择器。这里仅给用户一个轻量反馈。
-    // eslint-disable-next-line no-console
-    console.info('[Settings] 触发目录选择器（mock）');
+  const handleChooseDir = async () => {
+    setChoosingDir(true);
+    try {
+      const result = await configApi.chooseDir();
+      if (result.path) {
+        patchState({ receiveDir: result.path });
+      }
+    } catch (err) {
+      // 目录选择取消或失败时静默处理
+    } finally {
+      setChoosingDir(false);
+    }
   };
 
   /**
-   * 保存按钮：把当前 state 持久化（mock）
+   * 保存按钮：把当前 state 发送到后端持久化
    */
-  const handleSave = () => {
+  const handleSave = async () => {
+    setSaving(true);
     try {
-      window.localStorage.setItem('cp-settings', JSON.stringify(state));
-    } catch {
-      // localStorage 可能不可用（隐私模式等），不影响 UI 流程
+      await configApi.update({
+        deviceName: state.deviceName,
+        receiveDir: state.receiveDir,
+        screenshotHotkey: state.shortcuts.find((s) => s.id === 'screenshot')?.value,
+      });
+      initialStateRef.current = state;
+      setSavedAt(new Date());
+    } catch (err) {
+      // 保存失败时在 UI 提示错误
+      setLoadError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setSaving(false);
     }
-    initialStateRef.current = state;
-    setSavedAt(new Date());
   };
 
-  // 进入页面时尝试从 localStorage 恢复（mock 持久化）
-  useEffect(() => {
+  /**
+   * 检查更新按钮：调用后端 updater/check 接口
+   */
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    setUpdateResult(null);
     try {
-      const raw = window.localStorage.getItem('cp-settings');
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<SettingsState>;
-      setState((prev) => {
-        const next = { ...prev, ...parsed };
-        initialStateRef.current = next;
-        return next;
+      const result = await configApi.checkUpdate();
+      setUpdateResult(result);
+    } catch (err) {
+      setUpdateResult({
+        hasUpdate: false,
+        error: err instanceof Error ? err.message : '检查更新失败',
       });
-    } catch {
-      // 解析失败时保持默认状态
+    } finally {
+      setCheckingUpdate(false);
     }
+  };
+
+  // 组件挂载时从后端加载配置和版本信息
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadConfig() {
+      try {
+        const [config, version] = await Promise.all([
+          configApi.get(),
+          configApi.version(),
+        ]);
+        if (cancelled) return;
+
+        const loaded: SettingsState = {
+          deviceName: config.deviceName,
+          receiveDir: config.receiveDir,
+          shortcuts: DEFAULT_SHORTCUTS.map((s) => {
+            if (s.id === 'screenshot') {
+              return { ...s, value: config.screenshotHotkey || s.value };
+            }
+            return { ...s };
+          }),
+          toggles: DEFAULT_TOGGLES.map((t) => ({ ...t })),
+        };
+        setState(loaded);
+        initialStateRef.current = loaded;
+        setVersionInfo(version);
+      } catch (err) {
+        if (cancelled) return;
+        setLoadError(err instanceof Error ? err.message : '加载配置失败');
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadConfig();
+    return () => { cancelled = true; };
   }, []);
+
+  // 渲染更新检查结果的提示文本
+  const updateHint = useMemo(() => {
+    if (checkingUpdate) return '正在检查更新…';
+    if (!updateResult) return '当前为最新版本';
+    if (updateResult.error) return updateResult.error;
+    if (updateResult.hasUpdate) return `发现新版本 v${updateResult.version}`;
+    return '当前为最新版本';
+  }, [updateResult, checkingUpdate]);
+
+  // 加载状态
+  if (loading) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.container}>
+          <header className={styles.header}>
+            <span className={styles.eyebrow}>PREFERENCES</span>
+            <h1 className={styles.title}>设置</h1>
+            <p className={styles.lead}>加载中…</p>
+          </header>
+        </div>
+      </div>
+    );
+  }
+
+  // 加载失败状态
+  if (loadError) {
+    return (
+      <div className={styles.page}>
+        <div className={styles.container}>
+          <header className={styles.header}>
+            <span className={styles.eyebrow}>PREFERENCES</span>
+            <h1 className={styles.title}>设置</h1>
+            <p className={styles.lead} style={{ color: 'var(--color-danger)' }}>
+              加载失败：{loadError}
+            </p>
+          </header>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.page}>
@@ -226,8 +335,8 @@ export function Settings() {
                   onChange={handleReceiveDirChange}
                   icon={<FolderIcon />}
                 />
-                <Button variant="secondary" size="md" onClick={handleChooseDir}>
-                  选择…
+                <Button variant="secondary" size="md" onClick={handleChooseDir} disabled={choosingDir}>
+                  {choosingDir ? '选择中…' : '选择…'}
                 </Button>
               </div>
               <p className={styles.helper}>通过局域网接收到的文件会保存到此目录</p>
@@ -312,12 +421,12 @@ export function Settings() {
               <div className={styles.metaRow}>
                 <dt className={styles.metaKey}>版本号</dt>
                 <dd className={styles.metaValue}>
-                  <Pill tone="accent">v{APP_VERSION}</Pill>
+                  <Pill tone="accent">v{versionInfo?.version ?? '—'}</Pill>
                 </dd>
               </div>
               <div className={styles.metaRow}>
                 <dt className={styles.metaKey}>构建日期</dt>
-                <dd className={styles.metaValue}>{BUILD_DATE}</dd>
+                <dd className={styles.metaValue}>{versionInfo?.buildDate ?? '—'}</dd>
               </div>
               <div className={styles.metaRow}>
                 <dt className={styles.metaKey}>更新来源</dt>
@@ -329,17 +438,14 @@ export function Settings() {
                 variant="secondary"
                 size="md"
                 icon={<SyncIcon />}
-                onClick={() => {
-                  // 真实环境会触发 updater 流程
-                  // eslint-disable-next-line no-console
-                  console.info('[Settings] 检查更新（mock）');
-                }}
+                onClick={handleCheckUpdate}
+                disabled={checkingUpdate}
               >
-                检查更新
+                {checkingUpdate ? '检查中…' : '检查更新'}
               </Button>
               <span className={styles.aboutHint}>
                 <InfoIcon size={14} />
-                <span>当前为最新版本</span>
+                <span>{updateHint}</span>
               </span>
             </div>
           </Card.Body>
@@ -358,8 +464,8 @@ export function Settings() {
             <Button variant="ghost" onClick={handleResetDefaults} disabled={!isDirty}>
               恢复默认
             </Button>
-            <Button variant="primary" onClick={handleSave} disabled={!isDirty}>
-              保存
+            <Button variant="primary" onClick={handleSave} disabled={!isDirty || saving}>
+              {saving ? '保存中…' : '保存'}
             </Button>
           </div>
         </div>

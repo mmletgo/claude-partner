@@ -5,8 +5,10 @@ from aiohttp import web
 from typing import Callable, Awaitable
 import asyncio
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 from claude_partner.config import AppConfig
 from claude_partner.storage.prompt_repo import PromptRepository
@@ -30,8 +32,8 @@ class APIProtocol:
         所有这些都通过本类的统一路由表暴露。
 
     Code Logic（这个类做什么）:
-        定义 12 个 API 端点：
-        - /api/health: 健康检查
+        定义 19 个 API 端点：
+        - /api/health: 健康检查（含 http_port）
         - /api/prompts (GET/POST): 列表/创建本地 Prompt
         - /api/prompts/{id} (GET/PUT/DELETE): 单条 Prompt 的读/改/删
         - /api/devices: 局域网内已发现的对端设备列表
@@ -44,6 +46,11 @@ class APIProtocol:
         - /api/transfer/init: P2P 接收 - 初始化对端发来的传输
         - /api/transfer/chunk/{transfer_id}: P2P 接收 - 接收分块数据
         - /api/transfer/status/{transfer_id}: P2P 接收 - 查询接收端状态
+        - /api/config (GET/PUT): 读写应用配置
+        - /api/config/choose-dir (POST): 打开原生目录选择对话框
+        - /api/version: 获取应用版本信息
+        - /api/updater/check (POST): 触发更新检查
+        - /api/permissions: 检查 macOS 权限状态
     """
 
     def __init__(
@@ -57,6 +64,9 @@ class APIProtocol:
         on_transfer_send: Callable[[str, str, str], Awaitable[object]] | None = None,
         on_transfer_cancel: Callable[[str], bool] | None = None,
         get_transfers: Callable[[], list[dict]] | None = None,
+        on_choose_dir: Callable[[], str] | None = None,
+        on_check_update: Callable[[], Awaitable[dict]] | None = None,
+        check_permissions: Callable[[], dict] | None = None,
     ) -> None:
         """
         Business Logic（为什么需要这个函数）:
@@ -65,6 +75,9 @@ class APIProtocol:
         Code Logic（这个函数做什么）:
             保存依赖注入的组件引用。所有回调均为可选：
             - 设备列表、设备传输任务相关端点需要对应 getter
+            - on_choose_dir: 打开原生目录选择对话框
+            - on_check_update: 触发更新检查并返回结果
+            - check_permissions: 检查 macOS 权限状态
             - 未提供时端点返回 501 Not Implemented（不破坏向后兼容）
         """
         self._config: AppConfig = config
@@ -76,6 +89,9 @@ class APIProtocol:
         self._on_transfer_send: Callable[..., Awaitable[object]] | None = on_transfer_send
         self._on_transfer_cancel: Callable[[str], bool] | None = on_transfer_cancel
         self._get_transfers: Callable[[], list[dict]] | None = get_transfers
+        self._on_choose_dir: Callable[[], str] | None = on_choose_dir
+        self._on_check_update: Callable[[], Awaitable[dict]] | None = on_check_update
+        self._check_permissions: Callable[[], dict] | None = check_permissions
 
     def setup_routes(self, app: web.Application) -> None:
         """
@@ -120,6 +136,20 @@ class APIProtocol:
         app.router.add_get(
             "/api/transfer/status/{transfer_id}", self.handle_transfer_status
         )
+
+        # 前端 REST - 配置
+        app.router.add_get("/api/config", self.handle_get_config)
+        app.router.add_put("/api/config", self.handle_update_config)
+        app.router.add_post("/api/config/choose-dir", self.handle_choose_dir)
+
+        # 前端 REST - 版本信息
+        app.router.add_get("/api/version", self.handle_version)
+
+        # 前端 REST - 更新检查
+        app.router.add_post("/api/updater/check", self.handle_check_update)
+
+        # 前端 REST - 权限检查
+        app.router.add_get("/api/permissions", self.handle_permissions)
 
     # ── 通用工具 ──
 
@@ -190,12 +220,13 @@ class APIProtocol:
             对端设备需要检查本机是否在线且可通信，用于同步前的连通性验证。
 
         Code Logic（这个函数做什么）:
-            返回 JSON 响应 {ok: true, device_id, device_name, ts}。
+            返回 JSON 响应 {ok: true, device_id, device_name, http_port, ts}。
         """
         data: dict = {
             "ok": True,
             "device_id": self._config.device_id,
             "device_name": self._config.device_name,
+            "http_port": self._config.http_port,
             "ts": int(datetime.now(timezone.utc).timestamp()),
         }
         return web.json_response(data)
@@ -628,3 +659,157 @@ class APIProtocol:
             return web.json_response(
                 {"error": str(e)}, status=500
             )
+
+    # ── 前端 配置 ──
+
+    async def handle_get_config(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面需要读取当前应用配置（设备名、接收目录、快捷键等），
+            以便展示和编辑。
+
+        Code Logic:
+            读取 self._config，将 snake_case 字段转为 camelCase 返回给前端。
+            deviceId 和 httpPort 为只读字段也一并返回供前端展示。
+        """
+        try:
+            data: dict = {
+                "deviceId": self._config.device_id,
+                "deviceName": self._config.device_name,
+                "receiveDir": self._config.receive_dir,
+                "screenshotHotkey": self._config.screenshot_hotkey,
+                "httpPort": self._config.http_port,
+            }
+            return web.json_response(data)
+        except Exception as e:
+            logger.error("handle_get_config 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_update_config(self, request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面用户修改配置后需要保存到磁盘，使下次启动时生效。
+
+        Code Logic:
+            解析 JSON body，仅允许更新 deviceName、receiveDir、screenshotHotkey
+            三个字段（deviceId 和 httpPort 为只读）。
+            更新后调用 config.save() 持久化，返回更新后的完整配置。
+        """
+        try:
+            body: dict = await request.json()
+            if "deviceName" in body:
+                self._config.device_name = body["deviceName"]
+            if "receiveDir" in body:
+                self._config.receive_dir = body["receiveDir"]
+            if "screenshotHotkey" in body:
+                self._config.screenshot_hotkey = body["screenshotHotkey"]
+            self._config.save()
+            logger.info("配置已更新并保存")
+            return await self.handle_get_config(request)
+        except Exception as e:
+            logger.error("handle_update_config 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_choose_dir(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面用户修改"文件接收目录"时，需要打开系统原生
+            目录选择对话框让用户选择路径。
+
+        Code Logic:
+            调用注入的 on_choose_dir 回调，该回调会弹出 QFileDialog。
+            返回 {"path": "选中的路径"} 或 {"path": null}（用户取消）。
+            回调未注册时返回 501。
+        """
+        if self._on_choose_dir is None:
+            return web.json_response(
+                {"error": "目录选择功能未启用"}, status=501
+            )
+        try:
+            # QFileDialog 需要在主线程执行，通过 run_in_executor 调用
+            loop: asyncio.AbstractEventLoop = asyncio.get_event_loop()
+            path: str = await loop.run_in_executor(None, self._on_choose_dir)
+            return web.json_response({"path": path if path else None})
+        except Exception as e:
+            logger.error("handle_choose_dir 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    # ── 前端 版本信息 ──
+
+    async def handle_version(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面和关于页面需要展示当前应用版本号，
+            方便用户确认是否需要更新。
+
+        Code Logic:
+            从 claude_partner.__version__ 获取版本号，
+            buildDate 使用 __init__.py 文件的修改时间。
+        """
+        try:
+            import claude_partner
+            version: str = claude_partner.__version__
+
+            # 获取 buildDate：使用 __init__.py 文件的修改时间
+            init_path: Path = Path(claude_partner.__file__)
+            mtime: float = os.path.getmtime(init_path)
+            build_date: str = datetime.fromtimestamp(
+                mtime, tz=timezone.utc
+            ).strftime("%Y-%m-%d")
+
+            return web.json_response({
+                "version": version,
+                "buildDate": build_date,
+            })
+        except Exception as e:
+            logger.error("handle_version 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    # ── 前端 更新检查 ──
+
+    async def handle_check_update(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面用户点击"检查更新"按钮时，需要触发版本检查，
+            并将结果（是否有新版本、版本号、更新说明）返回给前端。
+
+        Code Logic:
+            调用注入的 on_check_update 异步回调，该回调执行
+            GitHub Releases API 检查并返回结果字典。
+            回调未注册时返回 501。
+        """
+        if self._on_check_update is None:
+            return web.json_response(
+                {"error": "更新检查功能未启用"}, status=501
+            )
+        try:
+            result: dict = await self._on_check_update()
+            return web.json_response(result)
+        except Exception as e:
+            logger.error("handle_check_update 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    # ── 前端 权限检查 ──
+
+    async def handle_permissions(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端设置页面需要展示当前 macOS 权限状态（屏幕录制、输入监控），
+            以便用户了解哪些功能可能受限。
+
+        Code Logic:
+            调用注入的 check_permissions 回调，该回调使用
+            Quartz API 检查权限状态并返回字典。
+            非 macOS 平台始终返回已授权。
+            回调未注册时返回 501。
+        """
+        if self._check_permissions is None:
+            return web.json_response(
+                {"error": "权限检查功能未启用"}, status=501
+            )
+        try:
+            result: dict = self._check_permissions()
+            return web.json_response(result)
+        except Exception as e:
+            logger.error("handle_permissions 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)

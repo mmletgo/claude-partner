@@ -4,15 +4,15 @@
  * Business Logic（为什么需要这个页面）:
  *   局域网 P2P 是 Claude Partner 的核心传输通道；用户需要看到当前网络上
  *   通过 mDNS 自动发现的对端设备，了解每个设备的状态、地址和端口，并
- *   知道本机在网络中的标识（方便区分“自己”）。本机信息单独高亮，以便
+ *   知道本机在网络中的标识（方便区分"自己"）。本机信息单独高亮，以便
  *   用户在多设备场景下立即定位自己。
  *
  * Code Logic（这个页面做什么）:
  *   - 页面头部展示标题 + 在线数量 Pill + 副标题 + 手动刷新按钮
- *   - 顶部 outlined Card 显示本机信息（设备名 + IP + 端口 + 状态）
+ *   - 顶部 outlined Card 显示本机信息（通过 /api/health 获取，设备名 + IP + 端口 + 状态）
  *   - 主区域用 auto-fill 网格渲染 DeviceCard，加载/空/错误态分别走
  *     skeleton / empty hint / error block
- *   - 启动后用 setInterval 每 5 秒拉取一次，模拟 SSE 推送设备状态变化；
+ *   - 启动后用 setInterval 每 5 秒拉取一次设备列表；
  *     卸载时清除 interval 防止内存泄漏
  *   - 容器居中、限宽，保证在大窗口下也保持可读
  */
@@ -21,21 +21,38 @@ import type { ChangeEvent } from 'react';
 import { Card, Pill, Button, Input } from '@/components/primitives';
 import { DeviceCard } from '@/components/domain';
 import { devicesApi } from '@/api/devices';
+import type { HealthResponse } from '@/api/devices';
 import { SyncIcon, DevicesIcon, AlertIcon } from '@/lib/icons';
 import type { Device } from '@/lib/types';
 import styles from './Devices.module.css';
 
-/** 页面刷新间隔（ms），用于模拟服务端推送 */
+/** 页面刷新间隔（ms） */
 const REFRESH_INTERVAL_MS = 5000;
 
-/** Mock 本机信息（在真实环境下应由配置或后端注入） */
-const SELF_DEVICE: Device = {
-  id: 'self',
-  name: "Hans's MacBook Pro",
-  address: '192.168.1.42',
-  port: 7842,
-  status: 'online',
-};
+/** 本机设备信息（从 health API 响应转换而来） */
+interface SelfDeviceInfo {
+  id: string;
+  name: string;
+  address: string;
+  port: number;
+  status: 'online' | 'offline';
+}
+
+/**
+ * 将后端 health 响应（snake_case）转换为前端 SelfDeviceInfo（camelCase）
+ *
+ * @param resp - 后端 /api/health 返回的原始数据
+ * @returns 前端使用的本机设备信息
+ */
+function toSelfDevice(resp: HealthResponse): SelfDeviceInfo {
+  return {
+    id: resp.device_id,
+    name: resp.device_name,
+    address: '127.0.0.1',
+    port: resp.http_port,
+    status: 'online',
+  };
+}
 
 /**
  * Devices 页面组件
@@ -44,6 +61,9 @@ const SELF_DEVICE: Device = {
  */
 export function Devices() {
   const [devices, setDevices] = useState<Device[]>([]);
+  const [selfDevice, setSelfDevice] = useState<SelfDeviceInfo | null>(null);
+  const [selfLoading, setSelfLoading] = useState<boolean>(true);
+  const [selfError, setSelfError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState<number>(0);
@@ -51,9 +71,24 @@ export function Devices() {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   /**
+   * 从 /api/health 获取本机设备信息
+   */
+  const fetchSelfDevice = useCallback(async () => {
+    try {
+      setSelfLoading(true);
+      setSelfError(null);
+      const resp = await devicesApi.health();
+      setSelfDevice(toSelfDevice(resp));
+    } catch (err) {
+      setSelfError(err instanceof Error ? err.message : '获取本机信息失败');
+    } finally {
+      setSelfLoading(false);
+    }
+  }, []);
+
+  /**
    * 拉取设备列表；按后端契约映射为前端 Device 类型。
-   * 由于本项目暂无真实后端，采用 mocked 数据 + 失败重试回退：
-   * 任何 API 错误都不会阻塞 UI，而是以空列表 + 错误提示形式呈现。
+   * API 错误以空列表 + 错误提示形式呈现，不会阻塞 UI。
    */
   const fetchDevices = useCallback(async () => {
     try {
@@ -67,12 +102,17 @@ export function Devices() {
     }
   }, []);
 
-  // 首次挂载 + tick 变化时重新拉取，模拟 SSE
+  // 首次挂载时获取本机信息
+  useEffect(() => {
+    fetchSelfDevice();
+  }, [fetchSelfDevice]);
+
+  // 首次挂载 + tick 变化时重新拉取设备列表
   useEffect(() => {
     fetchDevices();
   }, [fetchDevices, tick]);
 
-  // 启动 5s 定时器，模拟服务端推送
+  // 启动 5s 定时器，定期刷新设备列表
   useEffect(() => {
     intervalRef.current = setInterval(() => {
       setTick((prev) => prev + 1);
@@ -85,7 +125,7 @@ export function Devices() {
     };
   }, []);
 
-  // 派生数据：搜索过滤 + 排序（self 永远排第一）
+  // 派生数据：搜索过滤
   const filteredDevices = devices.filter((d) =>
     d.name.toLowerCase().includes(search.trim().toLowerCase()),
   );
@@ -136,23 +176,51 @@ export function Devices() {
 
         {/* 本机信息 */}
         <Card variant="outlined" padding="md" className={styles.selfCard}>
-          <div className={styles.selfRow}>
-            <div className={styles.selfLabel}>
-              <span className={styles.selfDot} aria-hidden="true" />
-              <span>本机信息</span>
+          {selfLoading ? (
+            <div className={styles.selfRow}>
+              <div className={styles.selfLabel}>
+                <span className={styles.selfDot} aria-hidden="true" />
+                <span>本机信息</span>
+              </div>
+              <div className={styles.selfMeta}>
+                <span className={styles.selfName}>加载中…</span>
+              </div>
             </div>
-            <div className={styles.selfMeta}>
-              <span className={styles.selfName}>{SELF_DEVICE.name}</span>
-              <span className={styles.selfSep}>·</span>
-              <span className={styles.selfMono}>
-                {SELF_DEVICE.address}:{SELF_DEVICE.port}
-              </span>
-              <span className={styles.selfSep}>·</span>
-              <Pill tone="accent" className={styles.selfPill}>
-                在线
-              </Pill>
+          ) : selfError ? (
+            <div className={styles.selfRow}>
+              <div className={styles.selfLabel}>
+                <span className={styles.selfDot} aria-hidden="true" />
+                <span>本机信息</span>
+              </div>
+              <div className={styles.selfMeta}>
+                <span className={styles.selfName} style={{ color: 'var(--color-danger)' }}>
+                  {selfError}
+                </span>
+                <span className={styles.selfSep}>·</span>
+                <Button variant="secondary" size="sm" onClick={fetchSelfDevice}>
+                  重试
+                </Button>
+              </div>
             </div>
-          </div>
+          ) : selfDevice ? (
+            <div className={styles.selfRow}>
+              <div className={styles.selfLabel}>
+                <span className={styles.selfDot} aria-hidden="true" />
+                <span>本机信息</span>
+              </div>
+              <div className={styles.selfMeta}>
+                <span className={styles.selfName}>{selfDevice.name}</span>
+                <span className={styles.selfSep}>·</span>
+                <span className={styles.selfMono}>
+                  {selfDevice.address}:{selfDevice.port}
+                </span>
+                <span className={styles.selfSep}>·</span>
+                <Pill tone="accent" className={styles.selfPill}>
+                  在线
+                </Pill>
+              </div>
+            </div>
+          ) : null}
         </Card>
 
         {/* 搜索栏 */}

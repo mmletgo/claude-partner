@@ -10,15 +10,18 @@
  *   - 全屏深色背景（#1a1815 + 双 terracotta 光晕）模拟 macOS 权限弹窗
  *   - 居中 Window 容器（480x520）展示 logo / 标题 / 三条权限卡 / CTA 按钮
  *   - 三条权限卡用 PermissionCard：屏幕录制 / 输入监控 / 通知
- *   - 权限状态由 useEffect + setInterval 模拟：2s 模拟一次；3s 后全部 granted
- *   - "继续使用"按钮在权限全部就绪后启用
+ *   - 权限状态由 useEffect + setInterval 每 2s 调用 configApi.permissions() 轮询
+ *   - 所有权限就绪后自动停止轮询
+ *   - "继续使用"按钮在权限全部就绪后启用，跳转到首页
  *   - 所有 hooks 集中在组件顶部，early return 之前
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import type { ReactElement } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
+import { configApi } from '@/api/config';
 import {
   InfoIcon,
   KeyboardIcon,
@@ -27,6 +30,7 @@ import {
 } from '@/lib/icons';
 import styles from './Welcome.module.css';
 
+/** 单条权限条目的展示格式 */
 interface PermissionEntry {
   id: string;
   icon: ReactElement;
@@ -35,82 +39,123 @@ interface PermissionEntry {
   granted: boolean;
 }
 
-const INITIAL_PERMISSIONS: PermissionEntry[] = [
-  {
-    id: 'screen',
-    icon: <InfoIcon />,
-    title: '屏幕录制',
-    description: '允许截取屏幕内容',
-    granted: false,
-  },
-  {
-    id: 'input',
-    icon: <KeyboardIcon />,
-    title: '输入监控',
-    description: '允许全局快捷键',
-    granted: false,
-  },
-  {
-    id: 'notification',
-    icon: <AlertIcon />,
-    title: '通知权限',
-    description: '允许发送系统通知',
-    granted: false,
-  },
-];
+/**
+ * 将后端 PermissionsStatus 转换为 PermissionEntry 列表
+ *
+ * @param status - 后端返回的权限状态
+ * @returns 用于渲染的权限条目数组
+ */
+function mapPermissions(status: {
+  screenCapture: { granted: boolean };
+  inputMonitoring: { granted: boolean };
+}): PermissionEntry[] {
+  return [
+    {
+      id: 'screenCapture',
+      icon: <InfoIcon />,
+      title: '屏幕录制',
+      description: '允许截取屏幕内容',
+      granted: status.screenCapture.granted,
+    },
+    {
+      id: 'inputMonitoring',
+      icon: <KeyboardIcon />,
+      title: '输入监控',
+      description: '允许全局快捷键',
+      granted: status.inputMonitoring.granted,
+    },
+    {
+      id: 'notification',
+      icon: <AlertIcon />,
+      title: '通知权限',
+      description: '允许发送系统通知',
+      granted: true, // 通知不需要特殊权限
+    },
+  ];
+}
 
 /**
  * Welcome 页面根组件
  *
+ * Business Logic:
+ *   首次使用时引导用户授予系统权限，确保截图、快捷键等核心功能可用。
+ *
+ * Code Logic:
+ *   通过 configApi.permissions() 每 2 秒轮询后端权限状态，
+ *   全部授权后停止轮询并启用"继续使用"按钮。
+ *
  * @returns 全屏权限引导页（不进入 AppShell）
  */
 export function Welcome() {
-  const [permissions, setPermissions] = useState<PermissionEntry[]>(INITIAL_PERMISSIONS);
-  // 记录首次渲染时间戳；3s 后自动把所有权限置为 granted
-  const [mountedAt] = useState<number>(() => Date.now());
+  const navigate = useNavigate();
+  const [permissions, setPermissions] = useState<PermissionEntry[]>([]);
+  // 用于在回调中读取最新 permissions 而不重新注册 effect
+  const permissionsRef = useRef<PermissionEntry[]>(permissions);
+  permissionsRef.current = permissions;
 
-  // 模拟权限轮询：每 2 秒请求一次"授权状态"
+  // 轮询真实权限状态：每 2 秒调用后端 API
   useEffect(() => {
-    const tick = window.setInterval(() => {
-      setPermissions((prev) => {
-        // 已经全部授权就不重复 setState
-        if (prev.every((p) => p.granted)) return prev;
-        return prev.map((p, idx) => {
-          // 错开激活顺序：1s/2s/3s 依次点亮，呈现"逐项就绪"的真实感
-          const elapsed = Date.now() - mountedAt;
-          const threshold = (idx + 1) * 1000;
-          return elapsed >= threshold ? { ...p, granted: true } : p;
-        });
-      });
+    let timerId: ReturnType<typeof setInterval> | null = null;
+
+    const checkPermissions = async () => {
+      try {
+        const status = await configApi.permissions();
+        const entries = mapPermissions(status);
+        setPermissions(entries);
+
+        // 所有权限都已授权，停止轮询
+        if (entries.every((p) => p.granted)) {
+          if (timerId !== null) {
+            window.clearInterval(timerId);
+            timerId = null;
+          }
+        }
+      } catch {
+        // API 调用失败时保持当前状态，下次轮询重试
+      }
+    };
+
+    // 首次立即检查
+    void checkPermissions();
+
+    // 每 2 秒轮询
+    timerId = window.setInterval(() => {
+      void checkPermissions();
     }, 2000);
-    return () => {
-      window.clearInterval(tick);
-    };
-  }, [mountedAt]);
 
-  // 3s 后强制把剩余未授权的全部点亮（兜底）
-  useEffect(() => {
-    const fallback = window.setTimeout(() => {
-      setPermissions((prev) => prev.map((p) => ({ ...p, granted: true })));
-    }, 3000);
     return () => {
-      window.clearTimeout(fallback);
+      if (timerId !== null) {
+        window.clearInterval(timerId);
+      }
     };
   }, []);
 
-  const allGranted = permissions.every((p) => p.granted);
+  const allGranted = permissions.length > 0 && permissions.every((p) => p.granted);
 
-  // 暂时跳过的回调：mock 行为，仅打印到控制台
+  // 暂时跳过：导航到首页
   const handleSkip = useCallback(() => {
-    // eslint-disable-next-line no-console
-    console.info('[Welcome] 用户选择暂时跳过权限引导');
-  }, []);
+    navigate('/');
+  }, [navigate]);
 
-  // 继续使用的回调：mock 行为，仅打印到控制台
+  // 继续使用：权限已就绪，导航到首页
   const handleContinue = useCallback(() => {
-    // eslint-disable-next-line no-console
-    console.info('[Welcome] 权限已就绪，进入应用');
-  }, []);
+    navigate('/');
+  }, [navigate]);
+
+  // loading 状态：permissions 为空表示首次 API 请求尚未返回
+  if (permissions.length === 0) {
+    return (
+      <div className={styles.backdrop}>
+        <div className={styles.window} role="dialog" aria-label="欢迎使用 Claude Partner">
+          <div className={styles.brand} aria-hidden="true">
+            CP
+          </div>
+          <h1 className={styles.title}>欢迎使用 Claude Partner</h1>
+          <p className={styles.subtitle}>正在检查权限状态…</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={styles.backdrop}>

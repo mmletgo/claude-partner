@@ -118,7 +118,7 @@ class Application:
         self._file_sender = FileSender(self._peer_client)
         self._file_receiver = FileReceiver(self._config)
 
-        # 6. API 协议（注册传输回调 + device getter）
+        # 6. API 协议（注册传输回调 + device getter + 配置/更新/权限回调）
         self._protocol = APIProtocol(
             config=self._config,
             prompt_repo=self._prompt_repo,
@@ -129,6 +129,9 @@ class Application:
             on_transfer_send=self._file_sender.send_file,
             on_transfer_cancel=self._cancel_transfer,
             get_transfers=self._get_transfers_for_api,
+            on_choose_dir=self._choose_dir,
+            on_check_update=self._check_update,
+            check_permissions=self._check_permissions_status,
         )
 
         # 7. HTTP 服务端
@@ -164,6 +167,7 @@ class Application:
         try:
             if use_web_frontend:
                 self._main_window = WebMainWindow()
+                self._main_window.show()
                 logger.info("使用新版 WebMainWindow（QWebEngineView + React）")
             else:
                 prompt_panel = PromptPanel(self._prompt_repo, self._config)
@@ -278,6 +282,106 @@ class Application:
             self._file_receiver.cancel(transfer_id)
             return True
         return False
+
+    def _choose_dir(self) -> str:
+        """
+        Business Logic:
+            前端设置页面修改"文件接收目录"时，需要打开系统原生
+            目录选择对话框，让用户通过可视化界面选择路径。
+
+        Code Logic:
+            使用 QFileDialog.getExistingDirectory 弹出目录选择对话框。
+            返回用户选择的路径字符串，取消时返回空字符串。
+        """
+        from PyQt6.QtWidgets import QFileDialog
+        path: str = QFileDialog.getExistingDirectory(
+            None,
+            "选择文件接收目录",
+            self._config.receive_dir if self._config else "",
+        )
+        return path or ""
+
+    async def _check_update(self) -> dict:
+        """
+        Business Logic:
+            前端设置页面用户点击"检查更新"时，需要执行版本检查，
+            并将检查结果返回给 API 层响应给前端。
+
+        Code Logic:
+            调用 UpdateChecker.check_for_update 异步执行版本检查。
+            由于 UpdateChecker 基于信号机制，这里通过手动调用 GitHub API
+            获取结果并构造返回字典：{hasUpdate, version, body}。
+        """
+        import aiohttp
+        from claude_partner.updater.checker import (
+            RELEASES_LATEST_URL,
+            RELEASE_API_URL,
+            SemanticVersion,
+            _GITHUB_HEADERS,
+        )
+        try:
+            timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=15)
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                # 通过重定向获取最新 tag
+                tag_name: str = ""
+                async with session.get(
+                    RELEASES_LATEST_URL, allow_redirects=False
+                ) as resp:
+                    if resp.status == 302:
+                        location: str = resp.headers.get("Location", "")
+                        tag_name = location.rstrip("/").split("/")[-1]
+                    elif resp.status == 200:
+                        tag_name = str(resp.url).rstrip("/").split("/")[-1]
+
+                if not tag_name:
+                    return {"hasUpdate": False, "version": "", "body": ""}
+
+                remote_version: SemanticVersion = SemanticVersion.parse(tag_name)
+                local_version: SemanticVersion = SemanticVersion.parse(__version__)
+
+                if not (remote_version > local_version):
+                    return {"hasUpdate": False, "version": "", "body": ""}
+
+                # 有新版本，获取详情
+                async with session.get(
+                    RELEASE_API_URL, headers=_GITHUB_HEADERS
+                ) as resp:
+                    if resp.status != 200:
+                        return {
+                            "hasUpdate": True,
+                            "version": tag_name.lstrip("v"),
+                            "body": "",
+                        }
+                    data: dict = await resp.json()
+                    return {
+                        "hasUpdate": True,
+                        "version": tag_name.lstrip("v"),
+                        "body": data.get("body", ""),
+                    }
+        except Exception as e:
+            logger.error("更新检查失败: %s", e, exc_info=True)
+            return {"hasUpdate": False, "version": "", "body": "", "error": str(e)}
+
+    @staticmethod
+    def _check_permissions_status() -> dict:
+        """
+        Business Logic:
+            前端设置页面需要展示 macOS 权限状态（屏幕录制、输入监控），
+            让用户了解当前哪些功能可能因权限缺失而不可用。
+
+        Code Logic:
+            复用 welcome_window.py 中的 check_screen_capture_access 和
+            check_input_monitoring_access 函数，返回 camelCase 字典。
+            非 macOS 打包环境直接返回已授权。
+        """
+        from claude_partner.ui.welcome_window import (
+            check_screen_capture_access,
+            check_input_monitoring_access,
+        )
+        return {
+            "screenCapture": {"granted": check_screen_capture_access()},
+            "inputMonitoring": {"granted": check_input_monitoring_access()},
+        }
 
     def _get_transfers_for_api(self) -> list[dict]:
         """

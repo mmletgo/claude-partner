@@ -4,8 +4,8 @@
  */
 
 .sidebar {
-  grid-area: sidebar;
   width: var(--sidebar-width);
+  flex-shrink: 0;
   background: var(--surface);
   border-right: 1px solid var(--border);
   padding: var(--space-5) var(--space-3);
