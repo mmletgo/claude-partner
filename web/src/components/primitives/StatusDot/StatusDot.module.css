@@ -1,0 +1,41 @@
+/* StatusDot 原子组件样式
+ * 单色实心圆点，根据 status 决定颜色
+ */
+
+.dot {
+  display: inline-block;
+  border-radius: var(--radius-full);
+  flex: 0 0 auto;
+  vertical-align: middle;
+}
+
+/* ── size ── */
+.size-sm {
+  width: 8px;
+  height: 8px;
+}
+
+.size-md {
+  width: 10px;
+  height: 10px;
+}
+
+/* ── status 颜色 ── */
+.status-online {
+  background-color: var(--success);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--success) 22%, transparent);
+}
+
+.status-offline {
+  background-color: var(--meta);
+}
+
+.status-busy {
+  background-color: var(--danger);
+  box-shadow: 0 0 0 2px var(--danger-soft);
+}
+
+.status-away {
+  background-color: var(--warn);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--warn) 22%, transparent);
+}

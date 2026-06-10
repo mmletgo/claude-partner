@@ -1,0 +1,107 @@
+/* Welcome 欢迎/权限引导页样式
+ * 全屏深色背景 + 居中窗口容器 + 权限列表 + 底部 CTA
+ * 颜色/间距/圆角/字体 全部走 var(--xxx) token
+ */
+
+.backdrop {
+  min-height: 100vh;
+  width: 100%;
+  background-color: #1a1815;
+  background-image:
+    radial-gradient(ellipse 70% 60% at 30% 20%, var(--accent-soft), transparent 60%),
+    radial-gradient(ellipse 60% 60% at 80% 80%, rgba(245, 244, 237, 0.05), transparent 60%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-10) var(--space-5);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.window {
+  width: 480px;
+  height: 520px;
+  max-width: 100%;
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-window);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  padding: var(--space-10) var(--space-8);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-3);
+  overflow: hidden;
+}
+
+/* ── Logo ── */
+.brand {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-on);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-wide);
+  box-shadow:
+    0 6px 16px rgba(201, 100, 66, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  margin: 0 auto var(--space-3);
+}
+
+/* ── 标题/说明 ── */
+.title {
+  margin: 0;
+  text-align: center;
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-medium);
+  line-height: 1.15;
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+}
+
+.subtitle {
+  margin: 0 0 var(--space-5);
+  text-align: center;
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  color: var(--muted);
+}
+
+/* ── 权限列表 ── */
+.permissionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-5);
+}
+
+/* ── 底部 CTA ── */
+.footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+.hint {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--meta);
+  letter-spacing: var(--tracking-wide);
+}
+
+.actions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
