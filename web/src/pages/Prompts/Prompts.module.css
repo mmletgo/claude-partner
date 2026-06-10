@@ -1,0 +1,390 @@
+/* Prompts 页面样式
+ * 页面：page header + 工具栏（搜索/筛选/同步/新建）+ 网格（卡片/编辑/空态）
+ * 所有颜色/间距/圆角都使用 tokens.css 提供的 var(--xxx)
+ */
+
+.page {
+  padding: var(--space-7) var(--space-10) var(--space-10);
+  max-width: 1180px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* ── 页面头部 ── */
+.pageHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-widest);
+  color: var(--accent);
+  text-transform: uppercase;
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+  color: var(--fg);
+}
+
+.lead {
+  margin: 0;
+  font-size: var(--text-md);
+  line-height: var(--leading-relaxed);
+  color: var(--muted);
+  max-width: 640px;
+}
+
+/* ── 工具栏 ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.searchWrap {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+
+.search {
+  width: 100%;
+}
+
+.chipRow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.chip {
+  height: 30px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+}
+
+.chip:hover {
+  background: var(--surface-warm);
+}
+
+.chipActive {
+  background: var(--accent);
+  color: var(--accent-on);
+  border-color: var(--accent);
+}
+
+.chipCount {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  opacity: 0.7;
+}
+
+.toolbarActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* ── 提示条 ── */
+.notice {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-warm);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+/* ── 网格 ── */
+.gridSection {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: var(--space-5);
+}
+
+/* ── Prompt 卡片 ── */
+.promptCard {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  transition: transform var(--motion-base) var(--ease-standard),
+              box-shadow var(--motion-base) var(--ease-standard);
+}
+
+.promptCard:hover {
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.promptCardEditing {
+  border: 1px solid var(--accent);
+  box-shadow: var(--shadow-md);
+}
+
+.promptHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.promptTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.promptActions {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+}
+
+.promptBody {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.promptContent {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  line-height: var(--leading-relaxed);
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.promptFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+/* ── 编辑表单 ── */
+.editForm {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  height: 100%;
+}
+
+.editTitle {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+  letter-spacing: var(--tracking-tight);
+  padding: 0;
+}
+
+.editTitle:focus {
+  color: var(--accent);
+}
+
+.editContent {
+  width: 100%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--fg);
+  line-height: var(--leading-relaxed);
+  resize: vertical;
+  min-height: 96px;
+  transition: border-color var(--motion-fast) var(--ease-standard);
+}
+
+.editContent:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.editMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+
+.editMetaLabel {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: var(--tracking-wide);
+  color: var(--meta);
+  text-transform: uppercase;
+}
+
+.editSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  height: 26px;
+  padding: 0 var(--space-2);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.editSelect:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ── 空态 ── */
+.empty {
+  padding: var(--space-12) var(--space-6);
+  background: var(--surface);
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  text-align: center;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.empty p {
+  margin: 0;
+  font-size: var(--text-md);
+}
+
+.emptyHint {
+  font-size: var(--text-sm);
+  color: var(--meta);
+}
+
+/* ── 模态确认 ── */
+.modalMask {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in oklab, var(--fg) 30%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: var(--z-modal);
+  padding: var(--space-6);
+}
+
+.modal {
+  width: 100%;
+  max-width: 380px;
+  padding: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.modalTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.modalText {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: var(--leading-relaxed);
+}
+
+.modalActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* ── 骨架屏 ── */
+.skeletonCard {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  height: 160px;
+}
+
+.skeletonBlock {
+  display: block;
+  background: linear-gradient(
+    90deg,
+    var(--surface-warm) 0%,
+    var(--border-soft) 50%,
+    var(--surface-warm) 100%
+  );
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: prompts-shimmer 1.4s var(--ease-standard) infinite;
+}
+
+@keyframes prompts-shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}

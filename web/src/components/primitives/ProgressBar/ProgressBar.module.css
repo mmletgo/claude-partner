@@ -1,0 +1,68 @@
+/* ProgressBar 原子组件样式
+ * 容器为 track，内层为 fill（用 width + transition 表达进度）
+ * 默认带百分比文字标签，可通过 children 覆盖
+ */
+
+.track {
+  position: relative;
+  display: block;
+  width: 100%;
+  background-color: var(--surface-warm);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.size-sm {
+  height: 4px;
+}
+
+.size-md {
+  height: 6px;
+}
+
+.size-lg {
+  height: 8px;
+}
+
+.fill {
+  display: block;
+  height: 100%;
+  border-radius: var(--radius-full);
+  transition: width var(--motion-base) var(--ease-standard),
+    background-color var(--motion-fast) var(--ease-standard);
+}
+
+.tone-accent {
+  background-color: var(--accent);
+}
+
+.tone-success {
+  background-color: var(--success);
+}
+
+.tone-warn {
+  background-color: var(--warn);
+}
+
+.tone-danger {
+  background-color: var(--danger);
+}
+
+/* 带文字标签时（lg 尺寸典型场景），label 浮在右侧 */
+.wrapper {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.label {
+  font-family: var(--font-body);
+  font-size: var(--text-sm);
+  color: var(--fg-2);
+  font-weight: var(--weight-medium);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+  min-width: 36px;
+  text-align: right;
+}

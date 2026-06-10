@@ -1,0 +1,138 @@
+/**
+ * Design Tokens - 单一颜色/字体/间距/圆角/阴影来源
+ * 来源: uiux/ 设计稿（Anthropic 暖米色系统 + terracotta 强调色）
+ * 修改此处可全局生效，禁止在任何组件内硬编码颜色/字体/间距
+ */
+
+:root {
+  /* ── 颜色（浅色模式，默认） ── */
+  --bg: #f5f4ed;
+  --surface: #faf9f5;
+  --surface-warm: #e8e6dc;
+  --fg: #141413;
+  --fg-2: #3d3d3a;
+  --muted: #5e5d59;
+  --meta: #87867f;
+  --border: #f0eee6;
+  --border-soft: #e8e6dc;
+  --accent: #c96442;
+  --accent-on: #faf9f5;
+  --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
+  --accent-hover: color-mix(in oklab, var(--accent) 90%, #141413);
+  --success: #17a34a;
+  --warn: #eab308;
+  --danger: #b53333;
+  --danger-soft: color-mix(in oklab, var(--danger) 12%, transparent);
+
+  /* ── 字体 ── */
+  --font-display: "Anthropic Serif", Georgia, "Times New Roman", serif;
+  --font-body: "Anthropic Sans", "Arial", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+  --font-mono: "Anthropic Mono", ui-monospace, "JetBrains Mono", Menlo, monospace;
+
+  /* ── 字体大小 ── */
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-4xl: 40px;
+  --text-5xl: 56px;
+
+  /* ── 行高 ── */
+  --leading-tight: 1.2;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.6;
+
+  /* ── 字重 ── */
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  /* ── 字间距 ── */
+  --tracking-tight: -0.015em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.02em;
+  --tracking-widest: 0.14em;
+
+  /* ── 间距（4px 基础网格） ── */
+  --space-0: 0;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 28px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+  --space-16: 64px;
+  --space-20: 80px;
+  --space-24: 96px;
+
+  /* ── 圆角 ── */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ── 阴影 ── */
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04), 0 2px 8px rgba(0, 0, 0, 0.06);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.12);
+  --shadow-window: 0 32px 80px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-card-hover: 0 6px 20px rgba(0, 0, 0, 0.10);
+
+  /* ── 动效 ── */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 300ms;
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* ── 布局尺寸 ── */
+  --window-width: 1180px;
+  --window-height: 740px;
+  --titlebar-height: 44px;
+  --sidebar-width: 240px;
+
+  /* ── z-index 层级 ── */
+  --z-base: 0;
+  --z-sticky: 10;
+  --z-overlay: 100;
+  --z-modal: 1000;
+  --z-toast: 2000;
+}
+
+[data-theme="dark"] {
+  --bg: #1f1d1b;
+  --surface: #272522;
+  --surface-warm: #322f2c;
+  --fg: #faf9f5;
+  --fg-2: #d8d6cf;
+  --muted: #a8a59e;
+  --meta: #787671;
+  --border: #2e2b29;
+  --border-soft: #262422;
+  --accent: #d97757;
+  --accent-on: #141413;
+  --accent-soft: color-mix(in oklab, var(--accent) 22%, transparent);
+  --accent-hover: color-mix(in oklab, var(--accent) 80%, #faf9f5);
+  --success: #4ade80;
+  --warn: #facc15;
+  --danger: #ef6b6b;
+  --danger-soft: color-mix(in oklab, var(--danger) 18%, transparent);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
+}

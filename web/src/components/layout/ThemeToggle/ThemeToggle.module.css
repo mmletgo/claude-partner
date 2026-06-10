@@ -1,0 +1,38 @@
+/* ThemeToggle - 浅色/深色切换按钮
+ * 26x26 圆形按钮，浅色模式显示月亮（点击切到深色），深色模式显示太阳
+ */
+
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  padding: 0;
+  -webkit-app-region: no-drag;
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    color var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard);
+}
+
+.toggle:hover {
+  background: var(--surface-warm);
+  color: var(--fg);
+}
+
+.toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
