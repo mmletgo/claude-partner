@@ -9,6 +9,7 @@ block_cipher = None
 project_dir = os.path.dirname(os.path.abspath(SPEC))
 src_dir = os.path.join(project_dir, 'src')
 scripts_dir = os.path.join(project_dir, 'scripts')
+web_dist_dir = os.path.join(project_dir, 'web', 'dist')
 
 # 平台判断
 is_mac = sys.platform == 'darwin'
@@ -32,7 +33,13 @@ a = Analysis(
     [os.path.join(src_dir, 'claude_partner', 'app.py')],
     pathex=[src_dir],
     binaries=[],
-    datas=[],
+    datas=(
+        [(os.path.join(web_dist_dir, 'index.html'), 'web/dist')]
+        + [(os.path.join(web_dist_dir, 'assets', f), os.path.join('web/dist/assets', f))
+           for f in os.listdir(os.path.join(web_dist_dir, 'assets'))
+           if os.path.isfile(os.path.join(web_dist_dir, 'assets', f))]
+        if os.path.isdir(web_dist_dir) else []
+    ),
     hiddenimports=[
         'claude_partner',
         'claude_partner.config',
@@ -60,6 +67,7 @@ a = Analysis(
         'claude_partner.screenshot.overlay',
         'claude_partner.ui',
         'claude_partner.ui.main_window',
+        'claude_partner.ui.web_main_window',
         'claude_partner.ui.prompt_panel',
         'claude_partner.ui.transfer_panel',
         'claude_partner.ui.device_panel',
@@ -88,6 +96,8 @@ a = Analysis(
         'PyQt6.QtCore',
         'PyQt6.QtGui',
         'PyQt6.QtWidgets',
+        'PyQt6.QtWebEngineWidgets',
+        'PyQt6.QtWebEngineCore',
         'PyQt6.sip',
     ],
     hookspath=[],
