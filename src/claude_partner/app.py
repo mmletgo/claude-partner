@@ -26,6 +26,7 @@ from claude_partner.transfer.sender import FileSender
 from claude_partner.transfer.receiver import FileReceiver
 from claude_partner.screenshot.capture import ScreenshotManager
 from claude_partner.ui.main_window import MainWindow
+from claude_partner.ui.web_main_window import WebMainWindow
 from claude_partner.ui.prompt_panel import PromptPanel
 from claude_partner.ui.transfer_panel import TransferPanel
 from claude_partner.ui.device_panel import DevicePanel
@@ -77,7 +78,7 @@ class Application:
         self._discovery: DeviceDiscovery | None = None
         self._sync_engine: SyncEngine | None = None
         self._screenshot_mgr: ScreenshotManager | None = None
-        self._main_window: MainWindow | None = None
+        self._main_window: MainWindow | WebMainWindow | None = None
         self._system_tray: SystemTray | None = None
         self._hotkey_mgr: GlobalHotkeyManager | None = None
         self._settings_panel: SettingsPanel | None = None
@@ -151,27 +152,35 @@ class Application:
         self._hotkey_mgr.start()
         logger.info("全局快捷键启动完成")
 
-        # 12. UI 组件
+        # 12. UI 组件 - 根据 CP_FRONTEND 选择新版 WebMainWindow 或旧 MainWindow
+        use_web_frontend = os.environ.get("CP_FRONTEND", "web") == "web"
+        prompt_panel: PromptPanel | None = None
+        transfer_panel: TransferPanel | None = None
+        device_panel: DevicePanel | None = None
         try:
-            prompt_panel = PromptPanel(self._prompt_repo, self._config)
-            logger.info("PromptPanel 创建完成")
-            transfer_panel = TransferPanel(self._file_sender, self._file_receiver)
-            logger.info("TransferPanel 创建完成")
-            device_panel = DevicePanel()
-            logger.info("DevicePanel 创建完成")
-            self._settings_panel = SettingsPanel(self._config)
-            logger.info("SettingsPanel 创建完成")
-            scratchpad_panel = ScratchpadPanel()
-            logger.info("ScratchpadPanel 创建完成")
+            if use_web_frontend:
+                self._main_window = WebMainWindow()
+                logger.info("使用新版 WebMainWindow（QWebEngineView + React）")
+            else:
+                prompt_panel = PromptPanel(self._prompt_repo, self._config)
+                logger.info("PromptPanel 创建完成")
+                transfer_panel = TransferPanel(self._file_sender, self._file_receiver)
+                logger.info("TransferPanel 创建完成")
+                device_panel = DevicePanel()
+                logger.info("DevicePanel 创建完成")
+                self._settings_panel = SettingsPanel(self._config)
+                logger.info("SettingsPanel 创建完成")
+                scratchpad_panel = ScratchpadPanel()
+                logger.info("ScratchpadPanel 创建完成")
 
-            self._main_window = MainWindow(
-                prompt_panel=prompt_panel,
-                transfer_panel=transfer_panel,
-                device_panel=device_panel,
-                scratchpad_panel=scratchpad_panel,
-                settings_panel=self._settings_panel,
-            )
-            logger.info("MainWindow 创建完成")
+                self._main_window = MainWindow(
+                    prompt_panel=prompt_panel,
+                    transfer_panel=transfer_panel,
+                    device_panel=device_panel,
+                    scratchpad_panel=scratchpad_panel,
+                    settings_panel=self._settings_panel,
+                )
+                logger.info("使用旧版 MainWindow（QTabWidget）")
         except Exception as e:
             logger.error("UI 创建失败: %s", e, exc_info=True)
             raise
@@ -186,11 +195,15 @@ class Application:
             # 托盘失败不阻止应用启动
             self._system_tray = None
 
-        # 连接信号
-        self._connect_signals(prompt_panel, transfer_panel, device_panel)
+        # 连接信号（仅旧版 MainWindow 需要）
+        if not use_web_frontend:
+            assert prompt_panel is not None
+            assert transfer_panel is not None
+            assert device_panel is not None
+            self._connect_signals(prompt_panel, transfer_panel, device_panel)
 
-        # 显示主窗口或欢迎页并加载数据
-        self._show_main_or_welcome(prompt_panel)
+            # 显示主窗口或欢迎页并加载数据
+            self._show_main_or_welcome(prompt_panel)
 
         # 13. 自动更新检查
         self._update_checker = UpdateChecker()
