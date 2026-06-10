@@ -15,16 +15,19 @@
   - 信号: `device_found(object)`, `device_lost(str)`
 
 ### protocol.py - HTTP API 路由
-- `APIProtocol`: 定义 16 个 API 端点，包括前端 REST 和 P2P 协议
+- `APIProtocol`: 定义 19 个 API 端点，包括前端 REST 和 P2P 协议
   - 构造参数（全部可选回调）:
     - `prompt_repo`: PromptRepository，用于 CRUD
     - `on_transfer_init/chunk/status`: 文件接收回调
     - `get_devices`: 设备列表回调（由 app.py 注入 DeviceDiscovery）
     - `on_transfer_send/cancel`: 发送/取消传输回调
     - `get_transfers`: 传输任务列表回调（合并 sender+receiver）
-    - 未注册的回调对应端点点返回 501/404
-  - 前端 REST 端点（12 个）:
-    - `GET /api/health`: 健康检查（{ok, device_id, device_name}）
+    - `on_choose_dir`: 原生目录选择对话框回调（QFileDialog）
+    - `on_check_update`: GitHub Releases 更新检查异步回调
+    - `check_permissions`: macOS 权限检查回调（屏幕录制/输入监控）
+    - 未注册的回调对应端点返回 501/404
+  - 前端 REST 端点（14 个）:
+    - `GET /api/health`: 健康检查（{ok, device_id, device_name, http_port}）
     - `GET /api/prompts`: Prompt 列表（支持 ?search= &tag=）
     - `POST /api/prompts`: 新建 Prompt（创建时 vector_clock={device_id:1}）
     - `GET|PUT|DELETE /api/prompts/{id}`: 单条 Prompt CRUD（deleted 返回 404）
@@ -33,12 +36,17 @@
     - `GET /api/transfer/tasks`: 传输任务列表
     - `POST /api/transfer/send`: 启动文件发送
     - `DELETE /api/transfer/tasks/{id}`: 取消传输
+    - `GET /api/config`: 获取应用配置（camelCase）
+    - `PUT /api/config`: 更新配置（仅 deviceName/receiveDir/screenshotHotkey 可写）
+    - `POST /api/config/choose-dir`: 原生目录选择对话框
+    - `GET /api/version`: 版本号 + 构建日期
+    - `POST /api/updater/check`: 触发 GitHub Releases 更新检查
+    - `GET /api/permissions`: macOS 权限状态检查
   - P2P 协议端点（5 个）:
     - `POST /api/sync/pull|push`: Prompt CRDT 同步
     - `POST /api/transfer/init|chunk/{id}`: 文件分块接收
     - `GET /api/transfer/status/{id}`: 传输状态查询
   - 字段转换: `_prompt_to_frontend_dict()` 将后端 snake_case 转为前端 camelCase
-  - 集成测试: `scripts/test_rest_endpoints.py`（16 个端点全部验证）
 
 ### server.py - HTTP 服务端
 - `HTTPServer`: 封装 aiohttp 的 AppRunner + TCPSite
