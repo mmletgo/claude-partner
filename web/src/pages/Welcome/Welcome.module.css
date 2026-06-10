@@ -24,7 +24,7 @@
   max-width: 100%;
   background: var(--surface);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-window);
+  box-shadow: var(--shadow-lg);
   border: 1px solid rgba(255, 255, 255, 0.04);
   padding: var(--space-10) var(--space-8);
   display: flex;

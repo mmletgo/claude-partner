@@ -3,18 +3,17 @@
  *
  * Business Logic（为什么需要这个组件）:
  *   Claude Partner 是一个三端（macOS / Windows / Linux）桌面工具，
- *   Web 端需要统一展示"窗口"外观（macOS 风格圆角阴影 + 标题栏 +
- *   侧边导航 + 主内容区），并集中提供版本号、主题切换等公共信息。
+ *   Web 端需要提供侧边导航 + 主内容区的基本布局骨架，
+ *   窗口标题栏由 PyQt6 原生提供，无需 Web 端自绘。
+ *   侧边栏 footer 区域集中展示版本号和主题切换。
  *
  * Code Logic（这个组件做什么）:
- *   - 在视口中居中渲染一个最大 1180x740 的窗口容器
- *   - 顶部 TitleBar（标题 "Claude Partner" + 右侧 ThemeToggle）
- *   - 左侧 Sidebar（Logo "CP" + 5 个 NavItem + 版本号 footer）
+ *   - 全屏 flex 布局：左侧 Sidebar（240px）+ 右侧 main 区域
+ *   - Sidebar 内包含 Logo、导航项、footer（版本号 + ThemeToggle）
  *   - 右侧 main 区域是 <Outlet /> 出口，由 React Router 注入子页面，
  *     main 自带 overflow: auto 实现独立滚动
  *
  *   注意：本组件是 <Outlet /> 容器，children 不直接使用。
- *   如需在非路由上下文复用，请使用 Window + TitleBar + Sidebar 自组装。
  */
 import { Outlet } from 'react-router-dom';
 import {
@@ -24,7 +23,6 @@ import {
   DevicesIcon,
   SettingsIcon,
 } from '../../../lib/icons';
-import { TitleBar } from '../TitleBar';
 import { Sidebar } from '../Sidebar';
 import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
@@ -41,35 +39,33 @@ export interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className={styles.shell}>
-      <div className={styles.window}>
-        <TitleBar title="Claude Partner">
-          <ThemeToggle />
-        </TitleBar>
-        <Sidebar
-          footer={
-            <div className={styles.footer}>
-              <span className={styles.footerVersion}>v{APP_VERSION}</span>
-              <span>Claude Partner</span>
+    <div className={styles.layout}>
+      <Sidebar
+        footer={
+          <div className={styles.footer}>
+            <span className={styles.footerVersion}>v{APP_VERSION}</span>
+            <span>Claude Partner</span>
+            <div className={styles.footerToggle}>
+              <ThemeToggle />
             </div>
-          }
-        >
-          <div className={styles.logo}>
-            <span className={styles.logoMark} aria-hidden="true">
-              CP
-            </span>
-            <span className={styles.logoText}>Claude Partner</span>
           </div>
-          <nav className={styles.navList} aria-label="primary">
-            <NavItem to="/" label="Home" icon={<HomeIcon />} />
-            <NavItem to="/transfer" label="Transfer" icon={<TransferIcon />} />
-            <NavItem to="/prompts" label="Prompts" icon={<PromptsIcon />} />
-            <NavItem to="/devices" label="Devices" icon={<DevicesIcon />} />
-            <NavItem to="/settings" label="Settings" icon={<SettingsIcon />} />
-          </nav>
-        </Sidebar>
-        <main className={styles.main}>{children ?? <Outlet />}</main>
-      </div>
+        }
+      >
+        <div className={styles.logo}>
+          <span className={styles.logoMark} aria-hidden="true">
+            CP
+          </span>
+          <span className={styles.logoText}>Claude Partner</span>
+        </div>
+        <nav className={styles.navList} aria-label="primary">
+          <NavItem to="/" label="Home" icon={<HomeIcon />} />
+          <NavItem to="/transfer" label="Transfer" icon={<TransferIcon />} />
+          <NavItem to="/prompts" label="Prompts" icon={<PromptsIcon />} />
+          <NavItem to="/devices" label="Devices" icon={<DevicesIcon />} />
+          <NavItem to="/settings" label="Settings" icon={<SettingsIcon />} />
+        </nav>
+      </Sidebar>
+      <main className={styles.main}>{children ?? <Outlet />}</main>
     </div>
   );
 }

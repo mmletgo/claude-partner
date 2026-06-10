@@ -40,7 +40,26 @@ export interface TransferTask {
 }
 
 export interface AppConfig {
+  deviceId: string;
   deviceName: string;
   receiveDir: string;
-  shortcuts: Record<string, string>;
+  screenshotHotkey: string;
+  httpPort: number;
+}
+
+export interface VersionInfo {
+  version: string;
+  buildDate: string;
+}
+
+export interface UpdateCheckResult {
+  hasUpdate: boolean;
+  version?: string;
+  body?: string;
+  error?: string;
+}
+
+export interface PermissionsStatus {
+  screenCapture: { granted: boolean };
+  inputMonitoring: { granted: boolean };
 }

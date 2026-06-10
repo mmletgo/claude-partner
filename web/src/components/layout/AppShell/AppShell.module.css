@@ -1,41 +1,20 @@
 /* AppShell - 整个应用外壳
- * 整体居中于视口，min-height: 100vh，flex 居中
- * 内部 Window 走 grid 布局：titlebar 顶部横跨，sidebar + main 下方左右分栏
+ * 全屏 flex 布局：左侧 Sidebar + 右侧 main
+ * 窗口标题栏由 PyQt6 原生提供
  */
 
-.shell {
-  min-height: 100vh;
+.layout {
   width: 100%;
-  background: var(--bg);
+  height: 100vh;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-6);
-  box-sizing: border-box;
-}
-
-.window {
-  width: var(--window-width);
-  height: var(--window-height);
-  max-width: 100%;
-  max-height: calc(100vh - var(--space-12));
-  display: grid;
-  grid-template-areas:
-    "titlebar titlebar"
-    "sidebar  main";
-  grid-template-rows: var(--titlebar-height) 1fr;
-  grid-template-columns: var(--sidebar-width) 1fr;
-  background: var(--surface);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-window);
   overflow: hidden;
 }
 
 .main {
-  grid-area: main;
+  flex: 1 1 0;
   background: var(--bg);
   overflow: auto;
-  min-height: 0;
+  min-width: 0;
 }
 
 .logo {
@@ -79,11 +58,15 @@
 .footer {
   display: flex;
   flex-direction: column;
-  gap: var(--space-1);
+  gap: var(--space-2);
   font-size: var(--text-sm);
   color: var(--meta);
 }
 
 .footerVersion {
   font-family: var(--font-mono);
+}
+
+.footerToggle {
+  margin-top: var(--space-2);
 }

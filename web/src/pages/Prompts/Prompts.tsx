@@ -12,7 +12,7 @@
  *   - Prompt 网格：调用 promptsApi.list() 拉取，按搜索关键词 + 激活标签本地过滤
  *   - 点击卡片进入 inline 编辑模式（input + textarea + save/cancel）
  *   - 点击删除时弹 confirm 二次确认
- *   - 失败 / 空数据时回退到 mock 数据，保留 4 类标签
+ *   - 失败时显示错误提示，空数据时显示引导文案
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -23,83 +23,6 @@ import type { Prompt } from '@/lib/types';
 import { PlusIcon, SearchIcon, SyncIcon, TrashIcon, XIcon, CheckIcon, EditIcon } from '@/lib/icons';
 import { debounce } from '@/lib/format';
 import styles from './Prompts.module.css';
-
-// ────────────────────────────────────────────────────────────────
-// Mock 数据：8 条覆盖 work / personal / claude / code 四类标签
-// ────────────────────────────────────────────────────────────────
-
-const MOCK_PROMPTS: Prompt[] = [
-  {
-    id: 'p-001',
-    title: '翻译为学术英语',
-    content: '把任意中文段落改写成 Nature/Science 风格的英文学术英文，保留术语与被动语态。',
-    tag: 'work',
-    updatedAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-002',
-    title: '总结长文为要点',
-    content: '把一篇 5000 字以上的长文压缩为 5–8 条可执行要点，附带原文出处行号。',
-    tag: 'work',
-    updatedAt: new Date(Date.now() - 1 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-003',
-    title: '代码审查 v2',
-    content: '逐行审查 PR diff，按 Bug / 性能 / 风格分组，每条给出可粘贴的修改建议。',
-    tag: 'code',
-    updatedAt: new Date(Date.now() - 3 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-004',
-    title: '写单元测试',
-    content: '为给定函数生成 pytest / vitest 用例，覆盖 happy path + 边界 + 异常分支。',
-    tag: 'code',
-    updatedAt: new Date(Date.now() - 7 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-005',
-    title: '解释正则表达式',
-    content: '把一段复杂 regex 拆解为人类可读的「逐 token 注释」+ 三个匹配示例。',
-    tag: 'code',
-    updatedAt: new Date(Date.now() - 5 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-006',
-    title: '周报模板',
-    content: '基于本周 git 提交记录 + 飞书日历事件自动生成周报 Markdown 草稿。',
-    tag: 'work',
-    updatedAt: new Date(Date.now() - 14 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-007',
-    title: 'Claude 自我评估',
-    content: '让 Claude 在回答末尾给出「我可能错在哪里 + 我会如何验证」的自检段落。',
-    tag: 'claude',
-    updatedAt: new Date(Date.now() - 4 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-008',
-    title: '日记整理',
-    content: '把零散的日记条目按主题聚类，提取本周情绪曲线与高光时刻。',
-    tag: 'personal',
-    updatedAt: new Date(Date.now() - 6 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-009',
-    title: '阅读清单',
-    content: '从一段长书评里提取「金句 + 章节定位 + 行动启示」三栏式速读清单。',
-    tag: 'personal',
-    updatedAt: new Date(Date.now() - 9 * 86_400_000).toISOString(),
-  },
-  {
-    id: 'p-010',
-    title: '重构建议',
-    content: '给定一段遗留代码，输出按「可读性 / 可测性 / 性能」三轴的最小改动建议。',
-    tag: 'code',
-    updatedAt: new Date(Date.now() - 11 * 86_400_000).toISOString(),
-  },
-];
 
 const TAG_OPTIONS = ['work', 'personal', 'claude', 'code'] as const;
 type TagOption = (typeof TAG_OPTIONS)[number];
@@ -122,7 +45,6 @@ export function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [usedMock, setUsedMock] = useState(false);
 
   // ── 搜索 / 筛选 ──
   const [searchInput, setSearchInput] = useState('');
@@ -136,23 +58,16 @@ export function Prompts() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
 
   /**
-   * 拉取 Prompt 列表；失败或空时回退到 mock
+   * 拉取 Prompt 列表；API 成功使用真实数据，失败则保留现有数据或置空并设置错误状态
    */
   const loadPrompts = useCallback(async () => {
     try {
       const data = await promptsApi.list();
-      if (Array.isArray(data) && data.length > 0) {
-        setPrompts(data);
-        setUsedMock(false);
-      } else {
-        setPrompts(MOCK_PROMPTS);
-        setUsedMock(true);
-      }
+      setPrompts(Array.isArray(data) ? data : []);
       setLoadState('success');
       setLoadError(null);
     } catch (err) {
-      setPrompts(MOCK_PROMPTS);
-      setUsedMock(true);
+      setPrompts((prev) => prev);
       setLoadState('error');
       setLoadError(err instanceof Error ? err.message : 'Prompt 列表加载失败');
     }
@@ -233,7 +148,7 @@ export function Prompts() {
       if (!title || !content) return;
 
       if (creatingNew) {
-        // 本地乐观更新（mock 数据时也走同一路径）
+        // 本地乐观更新：先展示，API 成功后替换为服务端返回的真实记录
         const newPrompt: Prompt = {
           id: `local-${Date.now()}`,
           title,
@@ -356,7 +271,6 @@ export function Prompts() {
       {loadState === 'error' ? (
         <p className={styles.notice} role="status">
           列表加载失败：{loadError}
-          {usedMock ? '。已使用本地示例数据。' : '。'}
         </p>
       ) : null}
 
@@ -366,8 +280,17 @@ export function Prompts() {
           <GridSkeleton />
         ) : filtered.length === 0 ? (
           <div className={styles.empty}>
-            <p>没有匹配的 Prompt</p>
-            <p className={styles.emptyHint}>试试更换关键词或清除标签筛选</p>
+            {prompts.length === 0 ? (
+              <>
+                <p>尚未添加 Prompt</p>
+                <p className={styles.emptyHint}>点击上方"新建"按钮创建你的第一条 Prompt</p>
+              </>
+            ) : (
+              <>
+                <p>没有匹配的 Prompt</p>
+                <p className={styles.emptyHint}>试试更换关键词或清除标签筛选</p>
+              </>
+            )}
           </div>
         ) : (
           <ul className={styles.grid}>
