@@ -1,0 +1,83 @@
+/* Card 复合组件样式
+ * 根容器按 variant 选择背景/边框/阴影
+ * Header/Body/Footer 通过 context 继承 padding，也可独立覆盖
+ */
+
+.card {
+  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--font-body);
+  color: var(--fg);
+  transition: all var(--motion-fast) var(--ease-standard);
+}
+
+/* ── variant 容器样式 ── */
+.variant-flat {
+  background-color: var(--surface);
+}
+
+.variant-elevated {
+  background-color: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.variant-outlined {
+  background-color: transparent;
+  border: 1px solid var(--border);
+}
+
+/* ── padding 作用于 Body；Header/Footer 默认让出与 Body 协调的内边距 ── */
+.body {
+  flex: 1 1 auto;
+}
+
+.padding-none .body,
+.padding-none .header,
+.padding-none .footer {
+  padding: 0;
+}
+
+.padding-sm .body,
+.padding-sm .header,
+.padding-sm .footer {
+  padding: var(--space-3) var(--space-4);
+}
+
+.padding-md .body,
+.padding-md .header,
+.padding-md .footer {
+  padding: var(--space-4) var(--space-5);
+}
+
+.padding-lg .body,
+.padding-lg .header,
+.padding-lg .footer {
+  padding: var(--space-6) var(--space-6);
+}
+
+/* ── header 区域样式 ── */
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--text-md);
+  font-weight: var(--weight-semibold);
+  color: var(--fg);
+}
+
+/* ── footer 区域默认右对齐按钮组 ── */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* ── header 与 footer 与 body 之间加一条细分隔线，靠 border-soft 表现 ── */
+.header + .body,
+.body + .footer,
+.header + .footer {
+  border-top: 1px solid var(--border-soft);
+}

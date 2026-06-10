@@ -1,0 +1,292 @@
+/* Settings 页面样式
+ * 单列 720px container，多个 Card 垂直堆叠
+ * 颜色/间距/圆角/动效统一走 design token
+ */
+
+/* ── 页面根 + container ── */
+.page {
+  width: 100%;
+  min-height: 100%;
+  background: var(--bg);
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-8) var(--space-12);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  box-sizing: border-box;
+}
+
+/* ── 头部 ── */
+.header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.eyebrow {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: var(--tracking-widest);
+  text-transform: uppercase;
+  color: var(--meta);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+.lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--text-md);
+  line-height: var(--leading-normal);
+  max-width: 560px;
+}
+
+/* ── Section title ── */
+.sectionTitle {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+}
+
+/* ── 字段 ── */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.field + .field {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
+}
+
+.label {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.helper {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.inputRow > :first-child {
+  flex: 1 1 auto;
+}
+
+/* ── 快捷键 ── */
+.shortcutList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.shortcutRow {
+  display: grid;
+  grid-template-columns: 1fr 220px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.shortcutRow:last-child {
+  border-bottom: none;
+}
+
+.shortcutText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.shortcutLabel {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.shortcutHelper {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.shortcutInput {
+  width: 100%;
+}
+
+/* ── Toggle 列表 ── */
+.toggleList {
+  display: flex;
+  flex-direction: column;
+}
+
+.toggleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border-soft);
+  font-family: inherit;
+  color: inherit;
+  transition: background var(--motion-fast) var(--ease-standard);
+}
+
+.toggleRow:hover {
+  background: var(--surface-warm);
+}
+
+.toggleRow:last-child {
+  border-bottom: none;
+}
+
+.toggleText {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.toggleLabel {
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.toggleHelper {
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+.toggleState {
+  flex: 0 0 auto;
+}
+
+/* ── About 元数据列表 ── */
+.metaList {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.metaRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.metaRow:last-child {
+  border-bottom: none;
+}
+
+.metaKey {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--muted);
+}
+
+.metaValue {
+  margin: 0;
+  font-size: var(--text-base);
+  color: var(--fg);
+  font-family: var(--font-mono);
+}
+
+.aboutActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-soft);
+}
+
+.aboutHint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+  color: var(--muted);
+}
+
+/* ── 底部按钮组 ── */
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  margin-top: var(--space-2);
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  font-size: var(--text-sm);
+}
+
+.dirtyHint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--warn);
+}
+
+.dirtyHint::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--warn);
+}
+
+.savedHint {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.footerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}

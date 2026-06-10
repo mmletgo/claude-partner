@@ -1,0 +1,21 @@
+/* Window 布局组件
+ * 模拟 macOS 窗口外观：圆角 + 大阴影 + 实心 surface 背景
+ * 默认尺寸来自 tokens.css 的 --window-width/--window-height
+ */
+
+.window {
+  background: var(--surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-window);
+  display: grid;
+  grid-template-areas:
+    "titlebar titlebar"
+    "sidebar  main";
+  grid-template-rows: var(--titlebar-height) 1fr;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+  min-width: var(--window-width);
+  min-height: var(--window-height);
+}
