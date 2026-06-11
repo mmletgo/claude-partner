@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent, DragEvent } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Card, Pill } from '@/components/primitives';
 import { TransferItem } from '@/components/domain';
 import { devicesApi } from '@/api/devices';
@@ -34,6 +35,8 @@ type LoadState = 'loading' | 'success' | 'error';
  * Transfer 页面主组件
  */
 export function Transfer() {
+  const { t } = useTranslation(['transfer', 'common']);
+
   // ── 设备列表（目标设备下拉数据源） ──
   const [devices, setDevices] = useState<Device[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string>('');
@@ -65,9 +68,9 @@ export function Transfer() {
     } catch (err) {
       setDevices([]);
       setDevicesState('error');
-      setDevicesError(err instanceof Error ? err.message : '设备列表加载失败');
+      setDevicesError(t('transfer:deviceLoadFailed', { error: err instanceof Error ? err.message : String(err) }));
     }
-  }, []);
+  }, [t]);
 
   /**
    * 拉取传输任务列表；API 失败或返回空时设为空数组并提示错误
@@ -81,9 +84,9 @@ export function Transfer() {
     } catch (err) {
       setTasks([]);
       setTasksState('error');
-      setTasksError(err instanceof Error ? err.message : '任务列表加载失败');
+      setTasksError(t('transfer:taskLoadFailed', { error: err instanceof Error ? err.message : String(err) }));
     }
-  }, []);
+  }, [t]);
 
   // 首次挂载拉取设备
   useEffect(() => {
@@ -166,29 +169,27 @@ export function Transfer() {
       {/* 页面头部 */}
       <header className={styles.pageHeader}>
         <span className={styles.eyebrow}>Transfer</span>
-        <h1 className={styles.title}>文件传输</h1>
-        <p className={styles.lead}>
-          选择目标设备，拖拽或点击发送文件。所有传输走局域网，支持断点续传与 SHA256 校验。
-        </p>
+        <h1 className={styles.title}>{t('transfer:title')}</h1>
+        <p className={styles.lead}>{t('transfer:lead')}</p>
       </header>
 
       {/* 发送区 */}
       <Card variant="elevated" className={styles.sendCard}>
         <div className={styles.sendTop}>
           <label className={styles.field}>
-            <span className={styles.fieldLabel}>目标设备</span>
+            <span className={styles.fieldLabel}>{t('transfer:fieldLabel')}</span>
             <div className={styles.selectWrap}>
               <select
                 className={styles.select}
                 value={selectedDeviceId}
                 onChange={handleDeviceChange}
-                aria-label="选择目标设备"
+                aria-label={t('transfer:selectDevice')}
                 disabled={devicesState === 'loading'}
               >
                 {devicesState === 'loading' ? (
-                  <option value="">加载中…</option>
+                  <option value="">{t('transfer:loading')}</option>
                 ) : devices.length === 0 ? (
-                  <option value="">未发现设备</option>
+                  <option value="">{t('transfer:noDevices')}</option>
                 ) : (
                   devices.map((d) => (
                     <option key={d.id} value={d.id}>
@@ -217,10 +218,12 @@ export function Transfer() {
               onClick={handleSendClick}
               disabled={!pickedFileName || !selectedDeviceId}
             >
-              {pickedFileName ? `发送「${pickedFileName}」` : '选择文件'}
+              {pickedFileName
+                ? t('transfer:sendFile', { file: pickedFileName })
+                : t('transfer:pickFile')}
             </Button>
             <Button variant="secondary" size="md" onClick={handlePickClick}>
-              浏览…
+              {t('transfer:browse')}
             </Button>
           </div>
         </div>
@@ -233,24 +236,24 @@ export function Transfer() {
           onClick={handlePickClick}
           role="button"
           tabIndex={0}
-          aria-label="拖拽文件到此处或点击选择"
+          aria-label={t('transfer:dropAria')}
         >
           <span className={styles.dropIcon} aria-hidden="true">
             <UploadIcon size={20} />
           </span>
           <p className={styles.dropTitle}>
-            {pickedFileName ? `已选择：${pickedFileName}` : '拖拽文件到此处 或 点击选择'}
+            {pickedFileName
+              ? t('transfer:dropTitlePicked', { file: pickedFileName })
+              : t('transfer:dropTitleEmpty')}
           </p>
-          <p className={styles.dropHint}>
-            支持任意大小 · 自动分块 1MB · 断点可续传 · SHA256 校验
-          </p>
+          <p className={styles.dropHint}>{t('transfer:chunkHint')}</p>
         </div>
 
         {devicesState === 'error' ? (
           <p className={styles.notice} role="status">
-            设备列表加载失败：{devicesError}。
+            {devicesError}{' '}
             <Button variant="secondary" size="sm" onClick={() => void loadDevices()}>
-              重试
+              {t('common:action.retry')}
             </Button>
           </p>
         ) : null}
@@ -260,14 +263,17 @@ export function Transfer() {
       <section className={styles.tasksSection}>
         <div className={styles.sectionHead}>
           <h2 className={styles.sectionTitle}>
-            传输任务 <span className={styles.sectionCount}>({tasks.length})</span>
+            {t('transfer:tasksTitle')}{' '}
+            <span className={styles.sectionCount}>({tasks.length})</span>
           </h2>
           <div className={styles.statusPills}>
             <Pill tone="accent" dot>
-              活跃 {statusCounts.active}
+              {t('transfer:active', { n: statusCounts.active })}
             </Pill>
-            <Pill tone="success">已完成 {statusCounts.completed}</Pill>
-            <Pill tone="danger">失败 {statusCounts.failed}</Pill>
+            <Pill tone="success">
+              {t('transfer:completed', { n: statusCounts.completed })}
+            </Pill>
+            <Pill tone="danger">{t('transfer:failed', { n: statusCounts.failed })}</Pill>
           </div>
         </div>
 
@@ -275,8 +281,8 @@ export function Transfer() {
           <TaskListSkeleton />
         ) : tasks.length === 0 ? (
           <div className={styles.empty}>
-            <p>暂无传输任务</p>
-            <p className={styles.emptyHint}>选择目标设备和文件后即可开始传输</p>
+            <p>{t('transfer:empty')}</p>
+            <p className={styles.emptyHint}>{t('transfer:emptyHint')}</p>
           </div>
         ) : (
           <ul className={styles.taskList}>
@@ -314,9 +320,9 @@ export function Transfer() {
 
         {tasksState === 'error' ? (
           <p className={styles.notice} role="status">
-            任务列表加载失败：{tasksError}。
+            {tasksError}{' '}
             <Button variant="secondary" size="sm" onClick={() => void loadTasks()}>
-              重试
+              {t('common:action.retry')}
             </Button>
           </p>
         ) : null}
@@ -329,8 +335,9 @@ export function Transfer() {
  * 任务列表骨架屏（loading 态）
  */
 function TaskListSkeleton() {
+  const { t } = useTranslation(['transfer']);
   return (
-    <ul className={styles.taskList} aria-busy="true" aria-label="加载传输任务">
+    <ul className={styles.taskList} aria-busy="true" aria-label={t('transfer:skeletonAria')}>
       {[0, 1, 2].map((i) => (
         <li key={i} className={styles.skeletonRow}>
           <span

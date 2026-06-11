@@ -19,6 +19,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Button } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
 import { configApi } from '@/api/config';
@@ -43,32 +45,36 @@ interface PermissionEntry {
  * 将后端 PermissionsStatus 转换为 PermissionEntry 列表
  *
  * @param status - 后端返回的权限状态
+ * @param t - i18next 翻译函数（welcome ns）
  * @returns 用于渲染的权限条目数组
  */
-function mapPermissions(status: {
-  screenCapture: { granted: boolean };
-  inputMonitoring: { granted: boolean };
-}): PermissionEntry[] {
+function mapPermissions(
+  status: {
+    screenCapture: { granted: boolean };
+    inputMonitoring: { granted: boolean };
+  },
+  t: TFunction<'welcome'>,
+): PermissionEntry[] {
   return [
     {
-      id: 'screenCapture',
+      id: 'screenRecording',
       icon: <InfoIcon />,
-      title: '屏幕录制',
-      description: '允许截取屏幕内容',
+      title: t('permission.screenRecording.title'),
+      description: t('permission.screenRecording.description'),
       granted: status.screenCapture.granted,
     },
     {
       id: 'inputMonitoring',
       icon: <KeyboardIcon />,
-      title: '输入监控',
-      description: '允许全局快捷键',
+      title: t('permission.inputMonitoring.title'),
+      description: t('permission.inputMonitoring.description'),
       granted: status.inputMonitoring.granted,
     },
     {
-      id: 'notification',
+      id: 'notifications',
       icon: <AlertIcon />,
-      title: '通知权限',
-      description: '允许发送系统通知',
+      title: t('permission.notifications.title'),
+      description: t('permission.notifications.description'),
       granted: true, // 通知不需要特殊权限
     },
   ];
@@ -87,6 +93,7 @@ function mapPermissions(status: {
  * @returns 全屏权限引导页（不进入 AppShell）
  */
 export function Welcome() {
+  const { t } = useTranslation(['welcome']);
   const navigate = useNavigate();
   const [permissions, setPermissions] = useState<PermissionEntry[]>([]);
   // 用于在回调中读取最新 permissions 而不重新注册 effect
@@ -100,7 +107,7 @@ export function Welcome() {
     const checkPermissions = async () => {
       try {
         const status = await configApi.permissions();
-        const entries = mapPermissions(status);
+        const entries = mapPermissions(status, t);
         setPermissions(entries);
 
         // 所有权限都已授权，停止轮询
@@ -146,12 +153,12 @@ export function Welcome() {
   if (permissions.length === 0) {
     return (
       <div className={styles.backdrop}>
-        <div className={styles.window} role="dialog" aria-label="欢迎使用 Claude Partner">
+        <div className={styles.window} role="dialog" aria-label={t('welcome:title')}>
           <div className={styles.brand} aria-hidden="true">
             CP
           </div>
-          <h1 className={styles.title}>欢迎使用 Claude Partner</h1>
-          <p className={styles.subtitle}>正在检查权限状态…</p>
+          <h1 className={styles.title}>{t('welcome:title')}</h1>
+          <p className={styles.subtitle}>{t('welcome:checkingPermission')}</p>
         </div>
       </div>
     );
@@ -159,15 +166,15 @@ export function Welcome() {
 
   return (
     <div className={styles.backdrop}>
-      <div className={styles.window} role="dialog" aria-label="欢迎使用 Claude Partner">
+      <div className={styles.window} role="dialog" aria-label={t('welcome:title')}>
         <div className={styles.brand} aria-hidden="true">
           CP
         </div>
 
-        <h1 className={styles.title}>欢迎使用 Claude Partner</h1>
-        <p className={styles.subtitle}>需要授予以下权限以启用完整功能</p>
+        <h1 className={styles.title}>{t('welcome:title')}</h1>
+        <p className={styles.subtitle}>{t('welcome:subtitle')}</p>
 
-        <div className={styles.permissionList} aria-label="权限列表">
+        <div className={styles.permissionList} aria-label={t('welcome:permissionListAriaLabel')}>
           {permissions.map((p) => (
             <PermissionCard
               key={p.id}
@@ -181,11 +188,11 @@ export function Welcome() {
 
         <footer className={styles.footer}>
           <span className={styles.hint}>
-            {allGranted ? '权限已就绪' : '正在等待系统授权…'}
+            {allGranted ? t('welcome:permissionReady') : t('welcome:waitingPermission')}
           </span>
           <div className={styles.actions}>
             <Button variant="ghost" size="md" onClick={handleSkip}>
-              暂时跳过
+              {t('welcome:skip')}
             </Button>
             <Button
               variant="primary"
@@ -194,7 +201,7 @@ export function Welcome() {
               onClick={handleContinue}
               iconRight={<ArrowRightIcon />}
             >
-              继续使用
+              {t('welcome:continue')}
             </Button>
           </div>
         </footer>
