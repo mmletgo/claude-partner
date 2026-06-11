@@ -15,7 +15,7 @@
  *     调用后端 API 持久化
  *   - 所有用户可见文案经 i18next 翻译（settings ns + common ns）
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -112,7 +112,8 @@ function buildUpdateHint(
 export function Settings() {
   const { t } = useTranslation(['settings', 'common']);
   const [state, setState] = useState<SettingsState>(createDefaultState);
-  const initialStateRef = useRef<SettingsState>(state);
+  // 最近一次"已保存/已加载"的配置快照，用于检测是否处于未保存状态
+  const [initialState, setInitialState] = useState<SettingsState>(createDefaultState);
   const [savedAt, setSavedAt] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -124,10 +125,10 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [choosingDir, setChoosingDir] = useState(false);
 
-  // 计算是否处于"未保存"状态
+  // 计算是否处于"未保存"状态：当前 state 与最近一次已保存/已加载的快照是否一致
   const isDirty = useMemo(() => {
-    return JSON.stringify(state) !== JSON.stringify(initialStateRef.current);
-  }, [state]);
+    return JSON.stringify(state) !== JSON.stringify(initialState);
+  }, [state, initialState]);
 
   // 渲染更新检查结果的提示文本
   const updateHint = useMemo(
@@ -223,7 +224,8 @@ export function Settings() {
         receiveDir: state.receiveDir,
         screenshotHotkey: state.shortcuts.find((s) => s.id === 'screenshot')?.value,
       });
-      initialStateRef.current = state;
+      // 保存成功后，把已保存快照更新为当前 state，使 isDirty 归零
+      setInitialState(state);
       setSavedAt(new Date());
     } catch (err) {
       // 保存失败时在 UI 提示错误
@@ -277,7 +279,8 @@ export function Settings() {
           toggles: DEFAULT_TOGGLES.map((t) => ({ ...t })),
         };
         setState(loaded);
-        initialStateRef.current = loaded;
+        // 把已加载配置作为"未保存"比较的基准快照
+        setInitialState(loaded);
         setVersionInfo(version);
       } catch (err) {
         if (cancelled) return;
@@ -649,9 +652,7 @@ export function Settings() {
                       icon={<DownloadIcon size={14} />}
                       onClick={handleDownload}
                     >
-                      {updateResult.size
-                        ? t('settings:about.downloadUpdate', { size: formatSize(updateResult.size) })
-                        : t('settings:about.downloadUpdate', { size: '' })}
+                      {t('settings:about.downloadUpdate', { size: formatSize(updateResult.size ?? 0) })}
                     </Button>
                   </div>
                 ) : (

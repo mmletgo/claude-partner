@@ -89,11 +89,14 @@ export function Transfer() {
   }, [t]);
 
   // 首次挂载拉取设备
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     void loadDevices();
   }, [loadDevices]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 首次挂载拉取任务，并设置 3 秒轮询
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     void loadTasks();
     const timer = window.setInterval(() => {
@@ -101,6 +104,7 @@ export function Transfer() {
     }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [loadTasks]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── 状态计数（按 status 分组） ──
   const statusCounts = useMemo(() => {
@@ -156,7 +160,6 @@ export function Transfer() {
     if (!pickedFileName || !selectedDeviceId) return;
     // 真实实现应调用 transferApi.send(selectedDeviceId, filePath)
     // 此处仅在控制台提示，待后端接口完成后接入
-    // eslint-disable-next-line no-console
     console.info('[Transfer] would send', pickedFileName, 'to', selectedDeviceId);
   }, [pickedFileName, selectedDeviceId]);
 

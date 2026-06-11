@@ -98,7 +98,11 @@ export function Welcome() {
   const [permissions, setPermissions] = useState<PermissionEntry[]>([]);
   // 用于在回调中读取最新 permissions 而不重新注册 effect
   const permissionsRef = useRef<PermissionEntry[]>(permissions);
-  permissionsRef.current = permissions;
+
+  // 在 effect 中同步 ref（避免 render body 写 ref）
+  useEffect(() => {
+    permissionsRef.current = permissions;
+  }, [permissions]);
 
   // 轮询真实权限状态：每 2 秒调用后端 API
   useEffect(() => {
@@ -135,7 +139,7 @@ export function Welcome() {
         window.clearInterval(timerId);
       }
     };
-  }, []);
+  }, [t]);
 
   const allGranted = permissions.length > 0 && permissions.every((p) => p.granted);
 
