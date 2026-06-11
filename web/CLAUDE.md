@@ -16,6 +16,7 @@
 - **API 模块**: `src/api/prompts.ts`, `src/api/config.ts` 等 — 各资源 RESTful 调用
 - **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理，自定义多标签 + 动态标签筛选）/ Scratchpad（速记本，纯内存临时记事）/ Settings / Transfer / Devices
 - **路由**: `src/App.tsx` — React Router，`/` → Home，`/prompts` → Prompts，`/scratchpad` → Scratchpad 等
+- **自定义 Hook**: `src/hooks/` — `useTheme`（浅/深主题切换与跨组件同步）、`useAppVersion`（应用版本号，统一从后端 `/api/version` 获取，**禁止前端硬编码版本号**，唯一权威来源是后端 `__init__.py` 的 `__version__`）
 
 ## Vite 代理（开发模式）
 
