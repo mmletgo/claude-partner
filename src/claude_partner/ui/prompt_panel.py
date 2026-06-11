@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QLabel,
     QMessageBox,
+    QFrame,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QGuiApplication
@@ -250,6 +251,13 @@ class PromptPanel(QWidget):
         toolbar_layout.addWidget(self._btn_new)
 
         main_layout.addLayout(toolbar_layout)
+
+        # 分隔线
+        separator: QFrame = QFrame()
+        separator.setFrameShape(QFrame.Shape.HLine)
+        separator.setStyleSheet(f"color: {theme.BORDER}; background: transparent;")
+        separator.setFixedHeight(1)
+        main_layout.addWidget(separator)
 
         # === 标签筛选行（独立一行） ===
         tag_filter_layout: QHBoxLayout = QHBoxLayout()
