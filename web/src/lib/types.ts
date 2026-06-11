@@ -58,7 +58,32 @@ export interface UpdateCheckResult {
   hasUpdate: boolean;
   version?: string;
   body?: string;
+  /** 当前平台安装包的浏览器下载地址，无匹配资源时为空 */
+  downloadUrl?: string;
+  /** 当前平台安装包文件名，无匹配资源时为空 */
+  filename?: string;
+  /** 安装包字节数，无匹配资源时为 0 */
+  size?: number;
   error?: string;
+}
+
+/** 更新下载状态机状态值 */
+export type UpdateDownloadStatusValue =
+  | 'idle'
+  | 'downloading'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export interface UpdateDownloadStatus {
+  status: UpdateDownloadStatusValue;
+  /** 下载进度 0.0 ~ 1.0 */
+  progress: number;
+  error: string;
+  filePath: string;
+  url: string;
+  filename: string;
+  size: number;
 }
 
 export interface PermissionsStatus {

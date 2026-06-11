@@ -67,6 +67,10 @@ class APIProtocol:
         get_transfers: Callable[[], list[dict]] | None = None,
         on_choose_dir: Callable[[], str] | None = None,
         on_check_update: Callable[[], Awaitable[dict]] | None = None,
+        on_update_download: Callable[[str, str], Awaitable[dict]] | None = None,
+        get_update_download_status: Callable[[], dict] | None = None,
+        on_update_install: Callable[[], dict] | None = None,
+        on_update_cancel: Callable[[], dict] | None = None,
         check_permissions: Callable[[], dict] | None = None,
         actual_port: int = 0,
     ) -> None:
@@ -94,6 +98,10 @@ class APIProtocol:
         self._get_transfers: Callable[[], list[dict]] | None = get_transfers
         self._on_choose_dir: Callable[[], str] | None = on_choose_dir
         self._on_check_update: Callable[[], Awaitable[dict]] | None = on_check_update
+        self._on_update_download: Callable[[str, str], Awaitable[dict]] | None = on_update_download
+        self._get_update_download_status: Callable[[], dict] | None = get_update_download_status
+        self._on_update_install: Callable[[], dict] | None = on_update_install
+        self._on_update_cancel: Callable[[], dict] | None = on_update_cancel
         self._check_permissions: Callable[[], dict] | None = check_permissions
         self._actual_port: int = actual_port
 
@@ -152,6 +160,12 @@ class APIProtocol:
 
         # 前端 REST - 更新检查
         app.router.add_post("/api/updater/check", self.handle_check_update)
+
+        # 前端 REST - 更新下载/安装
+        app.router.add_post("/api/updater/download", self.handle_update_download)
+        app.router.add_get("/api/updater/download/status", self.handle_update_download_status)
+        app.router.add_post("/api/updater/download/cancel", self.handle_update_download_cancel)
+        app.router.add_post("/api/updater/install", self.handle_update_install)
 
         # 前端 REST - 权限检查
         app.router.add_get("/api/permissions", self.handle_permissions)
@@ -832,6 +846,76 @@ class APIProtocol:
             return web.json_response(result)
         except Exception as e:
             logger.error("handle_check_update 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_update_download(self, request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端发现新版本后点击"下载更新"，需要后端流式下载安装包。
+            请求体含 {url, filename}，由前端从更新检查结果的 downloadUrl/filename 透传。
+
+        Code Logic:
+            解析请求体的 url 和 filename，调用注入的 on_update_download 异步回调
+            启动后台下载任务（结果通过状态端点轮询）。回调未注册返回 501。
+        """
+        if self._on_update_download is None:
+            return web.json_response({"error": "更新下载功能未启用"}, status=501)
+        try:
+            body: dict = await request.json()
+            url: str = str(body.get("url", ""))
+            filename: str = str(body.get("filename", ""))
+            result: dict = await self._on_update_download(url, filename)
+            return web.json_response(result)
+        except Exception as e:
+            logger.error("handle_update_download 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_update_download_status(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端下载进度条需要轮询当前下载状态（进度百分比/状态/错误/文件路径）。
+
+        Code Logic:
+            调用注入的 get_update_download_status 回调返回状态字典。
+        """
+        if self._get_update_download_status is None:
+            return web.json_response({"error": "更新下载功能未启用"}, status=501)
+        try:
+            return web.json_response(self._get_update_download_status())
+        except Exception as e:
+            logger.error("handle_update_download_status 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_update_download_cancel(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            用户下载过程中点击"取消"，需要中止下载并清理临时文件。
+
+        Code Logic:
+            调用注入的 on_update_cancel 回调，设置取消标记。
+        """
+        if self._on_update_cancel is None:
+            return web.json_response({"error": "更新下载功能未启用"}, status=501)
+        try:
+            return web.json_response(self._on_update_cancel())
+        except Exception as e:
+            logger.error("handle_update_download_cancel 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_update_install(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            下载完成后用户点击"安装并重启"，需要执行三平台安装逻辑并重启。
+
+        Code Logic:
+            调用注入的 on_update_install 回调，执行平台安装脚本（进程随后退出）。
+        """
+        if self._on_update_install is None:
+            return web.json_response({"error": "更新安装功能未启用"}, status=501)
+        try:
+            return web.json_response(self._on_update_install())
+        except Exception as e:
+            logger.error("handle_update_install 异常: %s", e, exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
 
     # ── 前端 权限检查 ──

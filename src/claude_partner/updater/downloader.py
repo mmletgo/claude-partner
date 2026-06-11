@@ -38,6 +38,7 @@ class UpdateDownloader(QObject):
     download_progress = pyqtSignal(float)  # 下载进度，0.0 ~ 1.0
     download_completed = pyqtSignal(str)  # 下载完成，传文件绝对路径
     download_failed = pyqtSignal(str)  # 下载失败，传错误信息
+    download_cancelled = pyqtSignal()  # 用户主动取消下载
 
     def __init__(self) -> None:
         """
@@ -108,7 +109,7 @@ class UpdateDownloader(QObject):
                             # 清理临时文件
                             if temp_path.exists():
                                 temp_path.unlink()
-                            self.download_failed.emit("下载已被用户取消")
+                            self.download_cancelled.emit()
                             return
 
                         f.write(chunk)

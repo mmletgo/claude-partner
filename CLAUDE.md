@@ -69,10 +69,11 @@ web/                → React 前端，有独立 CLAUDE.md
 - 支持断点续传：接收端告知已接收 offset
 
 ### 应用更新
-- 不自动检查；用户通过前端设置面板「检查更新」按钮手动触发（调 POST /api/updater/check）
-- GitHub Releases API 获取最新版本，语义化版本比较
-- 自动匹配当前平台下载资源（macOS DMG / Windows EXE / Linux tar.gz）
-- 流式下载到 `~/.claude-partner/updates/`，支持进度显示和取消
+- 不自动检查；前端设置面板「检查更新」按钮手动触发（POST /api/updater/check，返回 downloadUrl/filename/size）
+- 发现新版本后前端「下载更新」按钮流式下载（POST /api/updater/download），进度条轮询 GET /api/updater/download/status（800ms）
+- 支持取消下载（POST /api/updater/download/cancel）；下载完成后「安装并重启」（POST /api/updater/install）
+- GitHub Releases API 语义化版本比较，match_platform_asset 自动匹配当前平台资源
+- 流式下载到 `~/.claude-partner/updates/`（64KB chunk，.downloading 临时文件原子重命名）
 - 三平台安装策略：macOS 挂载 DMG 替换 .app / Windows CMD 脚本替换 EXE / Linux shell 脚本替换可执行文件
 - 版本号定义在 `src/claude_partner/__init__.py` 的 `__version__`
 

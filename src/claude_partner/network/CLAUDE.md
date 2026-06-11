@@ -23,11 +23,15 @@
     - `on_transfer_send/cancel`: 发送/取消传输回调
     - `get_transfers`: 传输任务列表回调（合并 sender+receiver）
     - `on_choose_dir`: 原生目录选择对话框回调（QFileDialog）
-    - `on_check_update`: GitHub Releases 更新检查异步回调
+    - `on_check_update`: GitHub Releases 更新检查异步回调（返回 downloadUrl/filename/size）
+    - `on_update_download`: 启动更新包下载异步回调（参数 url, filename）
+    - `get_update_download_status`: 查询下载进度状态回调（供轮询）
+    - `on_update_install`: 安装已下载更新包回调（三平台替换重启）
+    - `on_update_cancel`: 取消下载回调
     - `check_permissions`: macOS 权限检查回调（屏幕录制/输入监控）
     - `actual_port`: HTTP 服务端实际监听端口（动态分配时由 app.py 通过 set_actual_port() 设置）
     - 未注册的回调对应端点返回 501/404
-  - 前端 REST 端点（15 个）:
+  - 前端 REST 端点（19 个）:
     - `GET /api/health`: 健康检查（{ok, device_id, device_name, http_port}）
     - `GET /api/prompts`: Prompt 列表（支持 ?search= &tag=）
     - `POST /api/prompts`: 新建 Prompt（接受 `tags: string[]` 或旧版 `tag: string`，创建时 vector_clock={device_id:1}）
@@ -42,7 +46,11 @@
     - `PUT /api/config`: 更新配置（仅 deviceName/receiveDir/screenshotHotkey 可写）
     - `POST /api/config/choose-dir`: 原生目录选择对话框
     - `GET /api/version`: 版本号 + 构建日期
-    - `POST /api/updater/check`: 触发 GitHub Releases 更新检查
+    - `POST /api/updater/check`: 触发 GitHub Releases 更新检查（返回 downloadUrl/filename/size）
+    - `POST /api/updater/download`: 启动更新包下载（body: {url, filename}）
+    - `GET /api/updater/download/status`: 轮询下载进度（status/progress/error/filePath）
+    - `POST /api/updater/download/cancel`: 取消下载
+    - `POST /api/updater/install`: 安装已下载更新包并重启
     - `GET /api/permissions`: macOS 权限状态检查
   - P2P 协议端点（5 个）:
     - `POST /api/sync/pull|push`: Prompt CRDT 同步
