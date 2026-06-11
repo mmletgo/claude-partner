@@ -29,6 +29,7 @@
     - `on_update_install`: 安装已下载更新包回调（三平台替换重启）
     - `on_update_cancel`: 取消下载回调
     - `check_permissions`: macOS 权限检查回调（屏幕录制/输入监控）
+    - `request_permissions`: macOS 权限请求回调（触发授权弹窗+打开设置面板，参数 perm_type）
     - `actual_port`: HTTP 服务端实际监听端口（动态分配时由 app.py 通过 set_actual_port() 设置）
     - 未注册的回调对应端点返回 501/404
   - 前端 REST 端点（19 个）:
@@ -52,6 +53,7 @@
     - `POST /api/updater/download/cancel`: 取消下载
     - `POST /api/updater/install`: 安装已下载更新包并重启
     - `GET /api/permissions`: macOS 权限状态检查
+    - `POST /api/permissions/request`: 触发 macOS 权限请求并打开设置面板
   - P2P 协议端点（5 个）:
     - `POST /api/sync/pull|push`: Prompt CRDT 同步
     - `POST /api/transfer/init|chunk/{id}`: 文件分块接收

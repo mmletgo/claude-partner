@@ -138,6 +138,7 @@ class Application:
             on_update_install=self._install_update,
             on_update_cancel=self._cancel_update_download,
             check_permissions=self._check_permissions_status,
+            request_permissions=self._request_permissions,
         )
 
         # 7. HTTP 服务端
@@ -471,6 +472,28 @@ class Application:
             "screenCapture": {"granted": check_screen_capture_access()},
             "inputMonitoring": {"granted": check_input_monitoring_access()},
         }
+
+    @staticmethod
+    def _request_permissions(perm_type: str) -> dict:
+        """
+        Business Logic:
+            前端授权流程需要触发 macOS 系统授权弹窗并打开对应设置面板，
+            让用户完成屏幕录制/输入监控权限的授予。
+
+        Code Logic:
+            screenCapture 先调用 request_screen_capture_access 触发系统弹窗，
+            再调用 open_permission_settings 打开设置面板；inputMonitoring
+            仅打开设置面板。返回 {ok, requested, opened}，非 macOS 相应字段为 False。
+        """
+        from claude_partner.ui.permissions import (
+            open_permission_settings,
+            request_screen_capture_access,
+        )
+        requested: bool = False
+        if perm_type == "screenCapture":
+            requested = request_screen_capture_access()
+        opened: bool = open_permission_settings(perm_type)
+        return {"ok": True, "requested": requested, "opened": opened}
 
     def _get_transfers_for_api(self) -> list[dict]:
         """
