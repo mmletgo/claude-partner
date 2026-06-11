@@ -52,6 +52,7 @@ class APIProtocol:
         - /api/version: 获取应用版本信息
         - /api/updater/check (POST): 触发更新检查
         - /api/permissions: 检查 macOS 权限状态
+        - /api/permissions/request (POST): 触发 macOS 权限请求并打开设置面板
     """
 
     def __init__(
@@ -72,6 +73,7 @@ class APIProtocol:
         on_update_install: Callable[[], dict] | None = None,
         on_update_cancel: Callable[[], dict] | None = None,
         check_permissions: Callable[[], dict] | None = None,
+        request_permissions: Callable[[str], dict] | None = None,
         actual_port: int = 0,
     ) -> None:
         """
@@ -84,6 +86,7 @@ class APIProtocol:
             - on_choose_dir: 打开原生目录选择对话框
             - on_check_update: 触发更新检查并返回结果
             - check_permissions: 检查 macOS 权限状态
+            - request_permissions: 触发 macOS 权限请求并打开设置面板（参数 perm_type）
             - actual_port: HTTP 服务端实际监听端口（动态分配时与配置端口不同）
             - 未提供时端点返回 501 Not Implemented（不破坏向后兼容）
         """
@@ -103,6 +106,7 @@ class APIProtocol:
         self._on_update_install: Callable[[], dict] | None = on_update_install
         self._on_update_cancel: Callable[[], dict] | None = on_update_cancel
         self._check_permissions: Callable[[], dict] | None = check_permissions
+        self._request_permissions: Callable[[str], dict] | None = request_permissions
         self._actual_port: int = actual_port
 
     def setup_routes(self, app: web.Application) -> None:
@@ -167,8 +171,9 @@ class APIProtocol:
         app.router.add_post("/api/updater/download/cancel", self.handle_update_download_cancel)
         app.router.add_post("/api/updater/install", self.handle_update_install)
 
-        # 前端 REST - 权限检查
+        # 前端 REST - 权限检查 / 请求
         app.router.add_get("/api/permissions", self.handle_permissions)
+        app.router.add_post("/api/permissions/request", self.handle_permissions_request)
 
     # ── 通用工具 ──
 
@@ -941,4 +946,32 @@ class APIProtocol:
             return web.json_response(result)
         except Exception as e:
             logger.error("handle_permissions 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_permissions_request(self, request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端「去设置/请求授权」流程需要后端触发 macOS 系统授权弹窗
+            并打开对应设置面板，引导用户开启屏幕录制/输入监控权限。
+
+        Code Logic:
+            解析 body 中的 type（screenCapture/inputMonitoring），校验后
+            调用注入的 request_permissions 回调（CGRequest + open 设置面板），
+            返回 {ok, requested, opened}。回调未注册返回 501，未知类型返回 400。
+        """
+        if self._request_permissions is None:
+            return web.json_response(
+                {"error": "权限请求功能未启用"}, status=501
+            )
+        try:
+            body: dict = await request.json()
+            perm_type: str = str(body.get("type", ""))
+            if perm_type not in ("screenCapture", "inputMonitoring"):
+                return web.json_response(
+                    {"error": f"未知权限类型: {perm_type}"}, status=400
+                )
+            result: dict = self._request_permissions(perm_type)
+            return web.json_response(result)
+        except Exception as e:
+            logger.error("handle_permissions_request 异常: %s", e, exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
