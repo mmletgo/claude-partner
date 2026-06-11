@@ -48,9 +48,14 @@
 /* ── 工具栏 ── */
 .toolbar {
   display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.toolbarMain {
+  display: flex;
   align-items: center;
   gap: var(--space-3);
-  flex-wrap: wrap;
 }
 
 .searchWrap {
@@ -63,7 +68,7 @@
 }
 
 .chipRow {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: var(--space-1);
   flex-wrap: wrap;
