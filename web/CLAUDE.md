@@ -14,8 +14,8 @@
 
 - **API 客户端**: `src/api/client.ts` — BASE_URL 为空字符串，使用 `window.location.origin` 构建请求 URL
 - **API 模块**: `src/api/prompts.ts`, `src/api/config.ts` 等 — 各资源 RESTful 调用
-- **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理）/ Settings / Transfer / Devices
-- **路由**: `src/App.tsx` — React Router，`/` → Home，`/prompts` → Prompts 等
+- **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理，自定义多标签 + 动态标签筛选）/ Scratchpad（速记本，纯内存临时记事）/ Settings / Transfer / Devices
+- **路由**: `src/App.tsx` — React Router，`/` → Home，`/prompts` → Prompts，`/scratchpad` → Scratchpad 等
 
 ## Vite 代理（开发模式）
 

@@ -25,6 +25,8 @@ export interface PromptCardPrompt {
   id: string;
   title: string;
   content: string;
+  tags?: string[];
+  /** @deprecated 使用 tags 字段代替 */
   tag?: string;
   /** ISO 时间字符串 */
   updatedAt: string;
@@ -76,7 +78,11 @@ function PromptCardInner({ prompt, onEdit, onDelete, onCopy, className, style }:
     <Card variant="elevated" className={[styles.card, className].filter(Boolean).join(' ')} style={style}>
       <Card.Header className={styles.header}>
         <h4 className={styles.title}>{prompt.title}</h4>
-        {prompt.tag ? <Tag className={styles.tag}>{prompt.tag}</Tag> : null}
+        {prompt.tags && prompt.tags.length > 0 ? (
+          <div className={styles.tagList}>
+            {prompt.tags.map((t) => <Tag key={t} size="sm">{t}</Tag>)}
+          </div>
+        ) : prompt.tag ? <Tag className={styles.tag}>{prompt.tag}</Tag> : null}
       </Card.Header>
 
       <Card.Body className={styles.body}>

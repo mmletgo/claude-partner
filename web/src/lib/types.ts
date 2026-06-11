@@ -6,6 +6,8 @@ export interface Prompt {
   id: string;
   title: string;
   content: string;
+  tags: string[];
+  /** @deprecated 使用 tags 字段代替 */
   tag?: string;
   updatedAt: string;
   vectorClock?: Record<string, number>;

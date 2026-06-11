@@ -213,6 +213,12 @@
   gap: var(--space-3);
 }
 
+.tagList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+
 /* ── 编辑表单 ── */
 .editForm {
   display: flex;
@@ -259,9 +265,9 @@
 }
 
 .editMeta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
   margin-top: var(--space-2);
 }
 
@@ -271,26 +277,6 @@
   letter-spacing: var(--tracking-wide);
   color: var(--meta);
   text-transform: uppercase;
-}
-
-.editSelect {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  height: 26px;
-  padding: 0 var(--space-2);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  color: var(--fg);
-  font-family: var(--font-body);
-  font-size: var(--text-sm);
-  cursor: pointer;
-}
-
-.editSelect:focus {
-  outline: none;
-  border-color: var(--accent);
 }
 
 /* ── 空态 ── */

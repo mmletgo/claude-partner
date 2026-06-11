@@ -197,3 +197,11 @@ export const MoreIcon = ({ size, ...rest }: IconProps) => (
     <circle cx="12" cy="8" r="1" />
   </svg>
 );
+
+export const ScratchpadIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M4.5 1.5h6l3 3v9a1.5 1.5 0 0 1-1.5 1.5h-7.5A1.5 1.5 0 0 1 3.5 14V3a1.5 1.5 0 0 1 1-1.5Z" />
+    <path d="M10.5 1.5v3h3" />
+    <path d="M6 8h4M6 10.5h3" />
+  </svg>
+);

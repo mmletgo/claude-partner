@@ -15,7 +15,7 @@
   - 信号: `device_found(object)`, `device_lost(str)`
 
 ### protocol.py - HTTP API 路由
-- `APIProtocol`: 定义 19 个 API 端点，包括前端 REST 和 P2P 协议
+- `APIProtocol`: 定义 20 个 API 端点，包括前端 REST 和 P2P 协议
   - 构造参数（全部可选回调）:
     - `prompt_repo`: PromptRepository，用于 CRUD
     - `on_transfer_init/chunk/status`: 文件接收回调
@@ -27,11 +27,12 @@
     - `check_permissions`: macOS 权限检查回调（屏幕录制/输入监控）
     - `actual_port`: HTTP 服务端实际监听端口（动态分配时由 app.py 通过 set_actual_port() 设置）
     - 未注册的回调对应端点返回 501/404
-  - 前端 REST 端点（14 个）:
+  - 前端 REST 端点（15 个）:
     - `GET /api/health`: 健康检查（{ok, device_id, device_name, http_port}）
     - `GET /api/prompts`: Prompt 列表（支持 ?search= &tag=）
-    - `POST /api/prompts`: 新建 Prompt（创建时 vector_clock={device_id:1}）
-    - `GET|PUT|DELETE /api/prompts/{id}`: 单条 Prompt CRUD（deleted 返回 404）
+    - `POST /api/prompts`: 新建 Prompt（接受 `tags: string[]` 或旧版 `tag: string`，创建时 vector_clock={device_id:1}）
+    - `GET /api/prompts/tags`: 获取所有不重复标签列表
+    - `GET|PUT|DELETE /api/prompts/{id}`: 单条 Prompt CRUD（deleted 返回 404；PUT 接受 `tags` 数组）
     - `GET /api/devices`: 设备列表
     - `POST /api/sync`: 触发同步
     - `GET /api/transfer/tasks`: 传输任务列表

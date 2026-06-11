@@ -1,0 +1,35 @@
+/* TagInput 多标签编辑器样式
+ * 外框 focus 变色 + 内嵌透明输入框
+ */
+
+.container {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  min-height: 32px;
+  background: var(--bg-primary);
+  transition: border-color 0.15s;
+}
+
+.container:focus-within {
+  border-color: var(--accent);
+}
+
+.input {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: var(--text-sm);
+  color: var(--fg);
+  flex: 1;
+  min-width: 80px;
+  padding: 2px 0;
+}
+
+.input::placeholder {
+  color: var(--fg-muted);
+}

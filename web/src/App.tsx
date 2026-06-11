@@ -3,6 +3,7 @@ import { AppShell } from './components/layout/AppShell';
 import { Home } from './pages/Home';
 import { Transfer } from './pages/Transfer';
 import { Prompts } from './pages/Prompts';
+import { Scratchpad } from './pages/Scratchpad';
 import { Devices } from './pages/Devices';
 import { Settings } from './pages/Settings';
 import { Welcome } from './pages/Welcome';
@@ -18,6 +19,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/transfer" element={<Transfer />} />
         <Route path="/prompts" element={<Prompts />} />
+        <Route path="/scratchpad" element={<Scratchpad />} />
         <Route path="/devices" element={<Devices />} />
         <Route path="/settings" element={<Settings />} />
         {isDev && <Route path="/design-system" element={<DesignSystem />} />}

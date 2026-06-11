@@ -26,3 +26,6 @@ export { Welcome } from './Welcome';
 export type { } from './Welcome';
 
 export { DesignSystem } from './DesignSystem';
+
+export { Scratchpad } from './Scratchpad';
+export type { } from './Scratchpad';
