@@ -235,16 +235,26 @@ export function Prompts() {
 
       {/* 工具栏 */}
       <div className={styles.toolbar}>
-        <div className={styles.searchWrap}>
-          <Input
-            type="search"
-            value={searchInput}
-            onChange={handleSearchInput}
-            placeholder="Search prompts…"
-            icon={<SearchIcon />}
-            aria-label="搜索 Prompt"
-            className={styles.search}
-          />
+        <div className={styles.toolbarMain}>
+          <div className={styles.searchWrap}>
+            <Input
+              type="search"
+              value={searchInput}
+              onChange={handleSearchInput}
+              placeholder="Search prompts…"
+              icon={<SearchIcon />}
+              aria-label="搜索 Prompt"
+              className={styles.search}
+            />
+          </div>
+          <div className={styles.toolbarActions}>
+            <Button variant="secondary" size="sm" icon={<SyncIcon />} onClick={handleSync}>
+              同步
+            </Button>
+            <Button variant="primary" size="sm" icon={<PlusIcon />} onClick={handleCreate}>
+              新建
+            </Button>
+          </div>
         </div>
         <div className={styles.chipRow} role="group" aria-label="按标签筛选">
           <FilterChip
@@ -262,14 +272,6 @@ export function Prompts() {
               onClick={() => setActiveTag(t)}
             />
           ))}
-        </div>
-        <div className={styles.toolbarActions}>
-          <Button variant="secondary" size="sm" icon={<SyncIcon />} onClick={handleSync}>
-            同步
-          </Button>
-          <Button variant="primary" size="sm" icon={<PlusIcon />} onClick={handleCreate}>
-            新建
-          </Button>
         </div>
       </div>
 
