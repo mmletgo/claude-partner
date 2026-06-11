@@ -1,3 +1,41 @@
 {
-  "app": { "name": "Claude Partner" }
+  "app": { "name": "Claude Partner" },
+  "action": {
+    "copy": "Copy",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "refresh": "Refresh",
+    "new": "New",
+    "edit": "Edit",
+    "search": "Search",
+    "open": "Open",
+    "retry": "Retry",
+    "continue": "Continue",
+    "pause": "Pause",
+    "resume": "Resume"
+  },
+  "status": {
+    "device": {
+      "online": "Online",
+      "offline": "Offline",
+      "busy": "Busy",
+      "away": "Away"
+    },
+    "transfer": {
+      "pending": "Pending",
+      "transferring": "Transferring",
+      "completed": "Completed",
+      "failed": "Failed",
+      "cancelled": "Cancelled"
+    }
+  },
+  "direction": {
+    "send": "Sending to peer",
+    "receive": "Receiving from peer"
+  },
+  "empty": {
+    "noResults": "No results"
+  }
 }
