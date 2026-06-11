@@ -27,6 +27,7 @@ import {
 import { Sidebar } from '../Sidebar';
 import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
+import { LanguageSwitcher } from '../LanguageSwitcher';
 import styles from './AppShell.module.css';
 
 // 版本号应与 src/claude_partner/__init__.py 的 __version__ 保持一致
@@ -47,6 +48,7 @@ export function AppShell({ children }: AppShellProps) {
             <span className={styles.footerVersion}>v{APP_VERSION}</span>
             <span>Claude Partner</span>
             <div className={styles.footerToggle}>
+              <LanguageSwitcher />
               <ThemeToggle />
             </div>
           </div>
