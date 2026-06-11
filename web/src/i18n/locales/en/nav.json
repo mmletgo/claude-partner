@@ -1,1 +1,8 @@
-{}
+{
+  "home": "Home",
+  "transfer": "Transfer",
+  "prompts": "Prompts",
+  "scratchpad": "Scratchpad",
+  "devices": "Devices",
+  "settings": "Settings"
+}
