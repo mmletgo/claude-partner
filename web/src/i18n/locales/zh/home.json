@@ -4,6 +4,7 @@
   "lede": "集中保存、跨设备同步你的 Claude 提示词。在局域网内任意设备上调用，不再因为换台电脑就丢失上下文。",
   "now": "现在",
   "local": "本机",
+  "localValue": "本机设备",
   "lan": "局域网",
   "devicesOnline": "{{count}} 台在线",
   "disconnected": "未连接",

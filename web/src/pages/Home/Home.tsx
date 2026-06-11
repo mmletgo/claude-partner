@@ -12,6 +12,7 @@
  *   - "最近的 Prompts" 区域：调用 promptsApi.list() 拉取最新 5 条并用 PromptCard 渲染
  *     loading / empty / error 三种状态各自有专属空态
  *   - 设备数用 devicesApi.list() 异步拉取，仅用于"发现设备"卡片的副标题
+ *   - 本机设备名用 configApi.get() 拉取，用于 meta 行显示
  *   - 所有可见文案经 i18n（home ns）；局域网在线数为英文复数，调用
  *     t('home:devicesOnline', { count }) 自动按语言选择单复数 key
  *   - 所有 hooks 放在任何 early return 之前（符合 React rules of hooks + 父项目 hook 顺序约定）
@@ -30,6 +31,7 @@ import {
 } from '@/lib/icons';
 import { promptsApi } from '@/api/prompts';
 import { devicesApi } from '@/api/devices';
+import { configApi } from '@/api/config';
 import type { Prompt, Device } from '@/lib/types';
 import styles from './Home.module.css';
 
@@ -67,6 +69,7 @@ export function Home() {
   const [promptState, setPromptState] = useState<LoadState>('loading');
   const [promptError, setPromptError] = useState<string | null>(null);
   const [onlineCount, setOnlineCount] = useState<number>(0);
+  const [deviceName, setDeviceName] = useState<string>('');
 
   // 时钟每秒更新一次；卸载时清理 timer
   useEffect(() => {
@@ -123,7 +126,24 @@ export function Home() {
     };
   }, []);
 
-  // 派生元信息（deviceName 暂用占位；后续可从 AppConfig 注入）
+  // 本机设备名：从 AppConfig 获取，用于 meta 行显示
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const config = await configApi.get();
+        if (!cancelled) setDeviceName(config.deviceName);
+      } catch {
+        // 配置获取失败不影响主流程，metaValue 回退占位
+        if (!cancelled) setDeviceName('');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // 派生元信息
   const meta: MetaState = {
     ...DEFAULT_META,
     time: formatClock(now),
@@ -149,7 +169,7 @@ export function Home() {
             <span className={styles.metaDivider} aria-hidden="true" />
             <span className={styles.metaItem}>
               <span className={styles.metaLabel}>{t('home:local')}</span>
-              <span className={styles.metaValue}>{t('home:local')}</span>
+              <span className={styles.metaValue}>{deviceName || t('home:localValue')}</span>
             </span>
             <span className={styles.metaDivider} aria-hidden="true" />
             <span className={styles.metaItem}>

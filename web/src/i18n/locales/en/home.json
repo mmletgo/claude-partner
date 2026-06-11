@@ -4,6 +4,7 @@
   "lede": "Centrally store and sync your Claude prompts across devices. Invoke them from any device on the LAN without losing context when you switch computers.",
   "now": "Now",
   "local": "This device",
+  "localValue": "this device",
   "lan": "LAN",
   "devicesOnline": "{{count}} device online",
   "devicesOnline_other": "{{count}} devices online",
