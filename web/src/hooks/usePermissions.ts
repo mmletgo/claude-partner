@@ -45,7 +45,11 @@ export function usePermissions(
   const { stopWhenGranted = false } = options;
   const [status, setStatus] = useState<PermissionsStatus | null>(null);
   const statusRef = useRef<PermissionsStatus | null>(null);
-  statusRef.current = status;
+
+  // 在 effect 中同步 ref，避免 render 期间写 ref（react-hooks/refs 规则）
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
 
   const refresh = useCallback(async () => {
     try {
