@@ -1,1 +1,28 @@
-{}
+{
+  "title": "Welcome to Claude Partner",
+  "subtitle": "Grant the following permissions to enable full functionality",
+  "checkingPermission": "Checking permission status…",
+  "permissionReady": "Permissions ready",
+  "waitingPermission": "Waiting for system authorization…",
+  "skip": "Skip for now",
+  "continue": "Continue",
+  "permissionListAriaLabel": "Permission list",
+  "permission": {
+    "screenRecording": {
+      "title": "Screen Recording",
+      "description": "Allow capturing screen content"
+    },
+    "inputMonitoring": {
+      "title": "Input Monitoring",
+      "description": "Allow global keyboard shortcuts"
+    },
+    "notifications": {
+      "title": "Notifications",
+      "description": "Allow sending system notifications"
+    }
+  },
+  "permissionCard": {
+    "granted": "Granted",
+    "goSettings": "Open Settings"
+  }
+}

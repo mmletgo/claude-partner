@@ -14,6 +14,7 @@
  */
 
 import { memo, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button, Pill } from '@/components/primitives';
 import { CheckIcon, ArrowRightIcon } from '@/lib/icons';
 import styles from './PermissionCard.module.css';
@@ -40,6 +41,7 @@ export interface PermissionCardProps {
  * @returns 64px 高的静态信息卡片
  */
 function PermissionCardInner({ icon, title, description, granted, onRequestAccess, className, style }: PermissionCardProps) {
+  const { t } = useTranslation(['welcome']);
   const handleClick = useCallback(() => {
     onRequestAccess?.();
   }, [onRequestAccess]);
@@ -59,7 +61,7 @@ function PermissionCardInner({ icon, title, description, granted, onRequestAcces
         {granted ? (
           <Pill tone="success" dot className={styles.statusPill}>
             <CheckIcon size={12} />
-            <span>已授权</span>
+            <span>{t('welcome:permissionCard.granted')}</span>
           </Pill>
         ) : (
           <Button
@@ -69,7 +71,7 @@ function PermissionCardInner({ icon, title, description, granted, onRequestAcces
             iconRight={<ArrowRightIcon />}
             className={styles.actionButton}
           >
-            去设置
+            {t('welcome:permissionCard.goSettings')}
           </Button>
         )}
       </div>
