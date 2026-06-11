@@ -105,7 +105,7 @@ export function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [t]);
 
   // 设备数：用于"发现设备"卡片副标题
   useEffect(() => {

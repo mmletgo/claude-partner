@@ -79,16 +79,18 @@ export function Prompts() {
     }
   }, [t]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     void loadPrompts();
   }, [loadPrompts]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // ── 搜索 300ms debounce ──
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const debouncedSetSearch = useCallback(
-    debounce((v: unknown) => {
-      if (typeof v === 'string') setSearch(v);
-    }, 300),
+  const debouncedSetSearch = useMemo(
+    () =>
+      debounce((v: unknown) => {
+        if (typeof v === 'string') setSearch(v);
+      }, 300),
     [],
   );
 

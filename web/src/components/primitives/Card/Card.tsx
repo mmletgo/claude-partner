@@ -11,6 +11,7 @@
  *   子组件读取 context 决定自身 padding（也支持局部 props 覆盖）；
  *   复合组件通过 Object.assign 暴露为 Card.X，让调用方可链式书写。
  */
+/* eslint-disable react-refresh/only-export-components -- 复合组件 Object.assign 模式，Header/Body/Footer 为组件属性，react-refresh 误报 */
 
 import { createContext, useContext } from 'react';
 import type { HTMLAttributes, ReactNode } from 'react';

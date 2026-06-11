@@ -105,14 +105,18 @@ export function Devices() {
   }, [t]);
 
   // 首次挂载时获取本机信息
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     fetchSelfDevice();
   }, [fetchSelfDevice]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 首次挂载 + tick 变化时重新拉取设备列表
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     fetchDevices();
   }, [fetchDevices, tick]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 启动 5s 定时器，定期刷新设备列表
   useEffect(() => {
