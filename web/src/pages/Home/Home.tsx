@@ -12,11 +12,14 @@
  *   - "最近的 Prompts" 区域：调用 promptsApi.list() 拉取最新 5 条并用 PromptCard 渲染
  *     loading / empty / error 三种状态各自有专属空态
  *   - 设备数用 devicesApi.list() 异步拉取，仅用于"发现设备"卡片的副标题
+ *   - 所有可见文案经 i18n（home ns）；局域网在线数为英文复数，调用
+ *     t('home:devicesOnline', { count }) 自动按语言选择单复数 key
  *   - 所有 hooks 放在任何 early return 之前（符合 React rules of hooks + 父项目 hook 顺序约定）
  */
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { Card, Pill } from '@/components/primitives';
 import { PromptCard } from '@/components/domain';
 import {
@@ -33,16 +36,14 @@ import styles from './Home.module.css';
 /** Home 页面拉取状态：loading（首屏骨架）/ ready（已拿到数据） / error（接口失败） */
 type LoadState = 'loading' | 'ready' | 'error';
 
-/** 元信息行：当前时间（秒级更新），设备名（占位），局域网在线设备数 */
+/** 元信息行：当前时间（秒级更新），局域网在线设备数 */
 interface MetaState {
   time: string;
-  deviceName: string;
   onlineCount: number;
 }
 
 const DEFAULT_META: MetaState = {
   time: '--:--',
-  deviceName: '本机',
   onlineCount: 0,
 };
 
@@ -60,6 +61,7 @@ function formatClock(d: Date): string {
  * @returns 在 AppShell main 区域中渲染的内容
  */
 export function Home() {
+  const { t } = useTranslation(['home']);
   const [now, setNow] = useState<Date>(() => new Date());
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptState, setPromptState] = useState<LoadState>('loading');
@@ -94,7 +96,7 @@ export function Home() {
       } catch (err) {
         if (cancelled) return;
         setPromptState('error');
-        setPromptError(err instanceof Error ? err.message : '未知错误');
+        setPromptError(err instanceof Error ? err.message : t('home:unknownError'));
       }
     })();
     return () => {
@@ -135,45 +137,42 @@ export function Home() {
         <section className={styles.hero}>
           <div className={styles.eyebrow}>
             <span className={styles.eyebrowDot} aria-hidden="true" />
-            Claude Partner
+            {t('home:eyebrow')}
           </div>
-          <h1 className={styles.title}>Prompt 管理</h1>
-          <p className={styles.lede}>
-            集中保存、跨设备同步你的 Claude 提示词。在局域网内任意设备上调用，
-            不再因为换台电脑就丢失上下文。
-          </p>
+          <h1 className={styles.title}>{t('home:title')}</h1>
+          <p className={styles.lede}>{t('home:lede')}</p>
           <div className={styles.metaRow}>
             <span className={styles.metaItem}>
-              <span className={styles.metaLabel}>现在</span>
+              <span className={styles.metaLabel}>{t('home:now')}</span>
               <span className={styles.metaValue}>{meta.time}</span>
             </span>
             <span className={styles.metaDivider} aria-hidden="true" />
             <span className={styles.metaItem}>
-              <span className={styles.metaLabel}>本机</span>
-              <span className={styles.metaValue}>{meta.deviceName}</span>
+              <span className={styles.metaLabel}>{t('home:local')}</span>
+              <span className={styles.metaValue}>{t('home:local')}</span>
             </span>
             <span className={styles.metaDivider} aria-hidden="true" />
             <span className={styles.metaItem}>
-              <span className={styles.metaLabel}>局域网</span>
+              <span className={styles.metaLabel}>{t('home:lan')}</span>
               <Pill tone={meta.onlineCount > 0 ? 'success' : 'neutral'}>
                 {meta.onlineCount > 0
-                  ? `${meta.onlineCount} 台在线`
-                  : '未连接'}
+                  ? t('home:devicesOnline', { count: meta.onlineCount })
+                  : t('home:disconnected')}
               </Pill>
             </span>
           </div>
         </section>
 
         {/* ── Quick Actions ── */}
-        <section className={styles.quickActions} aria-label="快捷操作">
+        <section className={styles.quickActions} aria-label={t('home:quickActionsAria')}>
           <Link to="/prompts" className={styles.qaLink}>
             <Card variant="elevated" className={styles.qaCard}>
               <Card.Body padding="md" className={styles.qaBody}>
                 <div className={styles.qaIcon} aria-hidden="true">
                   <PlusIcon />
                 </div>
-                <h3 className={styles.qaTitle}>新建 Prompt</h3>
-                <p className={styles.qaDesc}>打开 Prompt 库，开始记录一条新提示词。</p>
+                <h3 className={styles.qaTitle}>{t('home:newPrompt')}</h3>
+                <p className={styles.qaDesc}>{t('home:newPromptDesc')}</p>
               </Card.Body>
             </Card>
           </Link>
@@ -184,8 +183,8 @@ export function Home() {
                 <div className={styles.qaIcon} aria-hidden="true">
                   <TransferIcon />
                 </div>
-                <h3 className={styles.qaTitle}>发送文件</h3>
-                <p className={styles.qaDesc}>把文件拖给已配对的设备，1MB 分块 + 断点续传。</p>
+                <h3 className={styles.qaTitle}>{t('home:sendFile')}</h3>
+                <p className={styles.qaDesc}>{t('home:sendFileDesc')}</p>
               </Card.Body>
             </Card>
           </Link>
@@ -196,11 +195,11 @@ export function Home() {
                 <div className={styles.qaIcon} aria-hidden="true">
                   <DevicesIcon />
                 </div>
-                <h3 className={styles.qaTitle}>发现设备</h3>
+                <h3 className={styles.qaTitle}>{t('home:discoverDevices')}</h3>
                 <p className={styles.qaDesc}>
                   {onlineCount > 0
-                    ? `当前 ${onlineCount} 台设备在线，点此查看。`
-                    : '扫描局域网，发现尚未配对的设备。'}
+                    ? t('home:discoverDevicesOnline', { count: onlineCount })
+                    : t('home:discoverDevicesEmpty')}
                 </p>
               </Card.Body>
             </Card>
@@ -208,11 +207,11 @@ export function Home() {
         </section>
 
         {/* ── 最近的 Prompts ── */}
-        <section className={styles.recent} aria-label="最近的 Prompts">
+        <section className={styles.recent} aria-label={t('home:recentAria')}>
           <header className={styles.recentHead}>
-            <h2 className={styles.recentTitle}>最近的 Prompts</h2>
+            <h2 className={styles.recentTitle}>{t('home:recentPrompts')}</h2>
             <Link to="/prompts" className={styles.viewAll}>
-              查看全部
+              {t('home:viewAll')}
               <ArrowRightIcon size={14} />
             </Link>
           </header>
@@ -226,19 +225,17 @@ export function Home() {
               </>
             ) : promptState === 'error' ? (
               <div className={styles.empty} role="alert">
-                <p className={styles.emptyTitle}>加载失败</p>
+                <p className={styles.emptyTitle}>{t('home:loadFailed')}</p>
                 <p className={styles.emptyDesc}>
-                  {promptError ?? '请稍后重试'}
+                  {promptError ?? t('home:loadFailedFallback')}
                 </p>
               </div>
             ) : prompts.length === 0 ? (
               <div className={styles.empty}>
-                <p className={styles.emptyTitle}>暂无 Prompt</p>
-                <p className={styles.emptyDesc}>
-                  点击下方"新建 Prompt"开始记录第一条。
-                </p>
+                <p className={styles.emptyTitle}>{t('home:emptyPrompt')}</p>
+                <p className={styles.emptyDesc}>{t('home:emptyPromptDesc')}</p>
                 <Link to="/prompts" className={styles.emptyCta}>
-                  前往 Prompt 库
+                  {t('home:goPromptLibrary')}
                   <ArrowRightIcon size={14} />
                 </Link>
               </div>
