@@ -90,3 +90,14 @@ export interface PermissionsStatus {
   screenCapture: { granted: boolean };
   inputMonitoring: { granted: boolean };
 }
+
+export type PermissionType = 'screenCapture' | 'inputMonitoring';
+
+export interface PermissionRequestResult {
+  ok: boolean;
+  /** 是否触发了系统授权弹窗（仅 screenCapture 且首次可能为 true） */
+  requested: boolean;
+  /** 是否成功打开了系统设置面板 */
+  opened: boolean;
+  error?: string;
+}

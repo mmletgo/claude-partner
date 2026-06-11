@@ -16,6 +16,8 @@ import type {
   UpdateCheckResult,
   UpdateDownloadStatus,
   PermissionsStatus,
+  PermissionType,
+  PermissionRequestResult,
 } from '@/lib/types';
 
 export const configApi = {
@@ -49,4 +51,8 @@ export const configApi = {
 
   /** 检查 macOS 权限状态（屏幕录制、输入监控） */
   permissions: () => api.get<PermissionsStatus>('/api/permissions'),
+
+  /** 触发权限请求（弹系统授权框 + 打开设置面板） */
+  requestPermission: (type: PermissionType) =>
+    api.post<PermissionRequestResult>('/api/permissions/request', { type }),
 };
