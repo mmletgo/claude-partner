@@ -25,3 +25,6 @@ export type {
 
 export { PermissionCard } from './PermissionCard';
 export type { PermissionCardProps } from './PermissionCard';
+
+export { TagInput } from './TagInput';
+export type { TagInputProps } from './TagInput';

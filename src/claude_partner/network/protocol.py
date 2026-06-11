@@ -32,9 +32,10 @@ class APIProtocol:
         所有这些都通过本类的统一路由表暴露。
 
     Code Logic（这个类做什么）:
-        定义 19 个 API 端点：
+        定义 20 个 API 端点：
         - /api/health: 健康检查（含 http_port）
         - /api/prompts (GET/POST): 列表/创建本地 Prompt
+        - /api/prompts/tags (GET): 获取所有不重复标签
         - /api/prompts/{id} (GET/PUT/DELETE): 单条 Prompt 的读/改/删
         - /api/devices: 局域网内已发现的对端设备列表
         - /api/sync (POST): 触发全局同步引擎
@@ -110,6 +111,7 @@ class APIProtocol:
         # 前端 REST - Prompt CRUD
         app.router.add_get("/api/prompts", self.handle_list_prompts)
         app.router.add_post("/api/prompts", self.handle_create_prompt)
+        app.router.add_get("/api/prompts/tags", self.handle_list_tags)
         app.router.add_get("/api/prompts/{prompt_id}", self.handle_get_prompt)
         app.router.add_put("/api/prompts/{prompt_id}", self.handle_update_prompt)
         app.router.add_delete("/api/prompts/{prompt_id}", self.handle_delete_prompt)
@@ -172,13 +174,14 @@ class APIProtocol:
     def _prompt_to_frontend_dict(p: Prompt) -> dict:
         """
         Business Logic:
-            前端 web/src/lib/types.ts Prompt 类型使用 camelCase + tag 单数字段，
-            与后端 Prompt.to_dict()（snake_case + tags 数组）不一致。
+            前端 web/src/lib/types.ts Prompt 类型使用 camelCase，
+            与后端 Prompt.to_dict()（snake_case）不一致。
             必须在 API 层做一次转换，避免修改后端 dataclass。
 
         Code Logic:
             将 snake_case → camelCase 字段名；
-            tags[0] 投影为 tag（单标签）以匹配前端 UI 习惯；
+            tags 数组直接传递给前端（多标签主用字段）；
+            tag 字段保留 tags[0] 投影，仅为旧版前端向后兼容；
             ISO datetime 保持原样。
         """
         return {
@@ -277,20 +280,29 @@ class APIProtocol:
     async def handle_create_prompt(self, request: web.Request) -> web.Response:
         """
         Business Logic:
-            前端"新建 Prompt"按钮提交 {title, content, tag}。
+            前端"新建 Prompt"按钮提交 {title, content, tags?, tag?}。
+            支持多标签（tags 数组）和旧版单标签（tag 字符串）两种格式。
 
         Code Logic:
             解析 JSON -> 构造 Prompt（生成 uuid，vector_clock 初始 {device_id: 1}）-> repo.create
+            优先使用 tags 数组，若不存在则回退到旧版 tag 字段。
             返回 201 + 完整 dict。
         """
         try:
             body: dict = await request.json()
             now: datetime = datetime.now(timezone.utc)
+            # 解析标签：优先 tags 数组，回退到旧版 tag 字符串
+            if "tags" in body and isinstance(body["tags"], list):
+                tags: list[str] = [t.strip() for t in body["tags"] if t.strip()]
+            elif body.get("tag"):
+                tags = [body["tag"].strip()]
+            else:
+                tags = []
             prompt = Prompt(
                 id=str(uuid.uuid4()),
                 title=body.get("title", "").strip(),
                 content=body.get("content", ""),
-                tags=[body["tag"]] if body.get("tag") else [],
+                tags=tags,
                 created_at=now,
                 updated_at=now,
                 device_id=self._config.device_id,
@@ -326,9 +338,10 @@ class APIProtocol:
         Business Logic:
             前端编辑表单保存时提交修改；本端编辑时需要推进 vector_clock
             {device_id: +1} 以标记这是本端的新版本（CRDT 行为）。
+            支持多标签（tags 数组）和旧版单标签（tag 字符串）两种格式。
 
         Code Logic:
-            读 id -> get_by_id -> 更新字段 -> 自增 vector_clock[self._config.device_id]
+            读 id -> get_by_id -> 更新字段（tags 优先于 tag）-> 自增 vector_clock[self._config.device_id]
             -> repo.update。
         """
         try:
@@ -342,8 +355,10 @@ class APIProtocol:
                 prompt.title = body["title"].strip()
             if "content" in body:
                 prompt.content = body["content"]
-            if "tag" in body:
-                prompt.tags = [body["tag"]] if body["tag"] else []
+            if "tags" in body and isinstance(body["tags"], list):
+                prompt.tags = [t.strip() for t in body["tags"] if t.strip()]
+            elif "tag" in body:
+                prompt.tags = [body["tag"].strip()] if body["tag"] else []
             prompt.updated_at = datetime.now(timezone.utc)
             # 推进本端计数器
             prompt.vector_clock[self._config.device_id] = (
@@ -377,6 +392,21 @@ class APIProtocol:
             return web.json_response({"ok": True, "id": prompt_id})
         except Exception as e:
             logger.error("handle_delete_prompt 异常: %s", e, exc_info=True)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def handle_list_tags(self, _request: web.Request) -> web.Response:
+        """
+        Business Logic:
+            前端标签筛选栏需要动态获取所有已存在的标签列表，用于展示可选标签。
+
+        Code Logic:
+            调用 prompt_repo.get_all_tags() 获取所有不重复标签，返回 JSON 数组。
+        """
+        try:
+            tags: list[str] = await self._prompt_repo.get_all_tags()
+            return web.json_response(tags)
+        except Exception as e:
+            logger.error("handle_list_tags 异常: %s", e, exc_info=True)
             return web.json_response({"error": str(e)}, status=500)
 
     # ── 前端 设备 ──

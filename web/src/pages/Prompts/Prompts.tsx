@@ -18,21 +18,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { Button, Card, Input, Tag } from '@/components/primitives';
+import { TagInput } from '@/components/domain/TagInput';
 import { promptsApi } from '@/api/prompts';
 import type { Prompt } from '@/lib/types';
 import { PlusIcon, SearchIcon, SyncIcon, TrashIcon, XIcon, CheckIcon, EditIcon } from '@/lib/icons';
 import { debounce } from '@/lib/format';
 import styles from './Prompts.module.css';
 
-const TAG_OPTIONS = ['work', 'personal', 'claude', 'code'] as const;
-type TagOption = (typeof TAG_OPTIONS)[number];
-
 /** 编辑卡片用的草稿状态 */
 interface DraftPrompt {
   id: string;
   title: string;
   content: string;
-  tag: TagOption;
+  tags: string[];
 }
 
 type LoadState = 'loading' | 'success' | 'error';
@@ -49,7 +47,8 @@ export function Prompts() {
   // ── 搜索 / 筛选 ──
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [activeTag, setActiveTag] = useState<TagOption | 'all'>('all');
+  const [activeTag, setActiveTag] = useState<string>('all');
+  const [allTags, setAllTags] = useState<string[]>([]);
 
   // ── 编辑 / 新建 / 删除 ──
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -62,8 +61,12 @@ export function Prompts() {
    */
   const loadPrompts = useCallback(async () => {
     try {
-      const data = await promptsApi.list();
+      const [data, tags] = await Promise.all([
+        promptsApi.list(),
+        promptsApi.listTags(),
+      ]);
       setPrompts(Array.isArray(data) ? data : []);
+      setAllTags(Array.isArray(tags) ? tags : []);
       setLoadState('success');
       setLoadError(null);
     } catch (err) {
@@ -99,7 +102,10 @@ export function Prompts() {
   const filtered = useMemo(() => {
     const lower = search.trim().toLowerCase();
     return prompts.filter((p) => {
-      if (activeTag !== 'all' && p.tag !== activeTag) return false;
+      if (activeTag !== 'all') {
+        const promptTags = p.tags ?? (p.tag ? [p.tag] : []);
+        if (!promptTags.includes(activeTag)) return false;
+      }
       if (!lower) return true;
       return (
         p.title.toLowerCase().includes(lower) ||
@@ -111,9 +117,11 @@ export function Prompts() {
   // ── 各标签计数（用于 chip 上的数字角标） ──
   const tagCounts = useMemo(() => {
     const counts: Record<string, number> = { all: prompts.length };
-    for (const t of TAG_OPTIONS) counts[t] = 0;
     for (const p of prompts) {
-      if (p.tag && counts[p.tag] !== undefined) counts[p.tag] += 1;
+      const promptTags = p.tags ?? (p.tag ? [p.tag] : []);
+      for (const t of promptTags) {
+        counts[t] = (counts[t] || 0) + 1;
+      }
     }
     return counts;
   }, [prompts]);
@@ -126,9 +134,7 @@ export function Prompts() {
       id: p.id,
       title: p.title,
       content: p.content,
-      tag: ((TAG_OPTIONS as readonly string[]).includes(p.tag ?? '')
-        ? (p.tag as TagOption)
-        : 'work'),
+      tags: p.tags ?? (p.tag ? [p.tag] : []),
     });
   }, []);
 
@@ -145,7 +151,7 @@ export function Prompts() {
       if (!draft) return;
       const title = draft.title.trim();
       const content = draft.content.trim();
-      if (!title || !content) return;
+      if (!content) return;
 
       if (creatingNew) {
         // 本地乐观更新：先展示，API 成功后替换为服务端返回的真实记录
@@ -153,12 +159,12 @@ export function Prompts() {
           id: `local-${Date.now()}`,
           title,
           content,
-          tag: draft.tag,
+          tags: draft.tags,
           updatedAt: new Date().toISOString(),
         };
         setPrompts((prev) => [newPrompt, ...prev]);
         try {
-          const created = await promptsApi.create({ title, content, tag: draft.tag });
+          const created = await promptsApi.create({ title, content, tags: draft.tags });
           if (created) {
             setPrompts((prev) => prev.map((p) => (p.id === newPrompt.id ? created : p)));
           }
@@ -170,12 +176,12 @@ export function Prompts() {
         setPrompts((prev) =>
           prev.map((p) =>
             p.id === draft.id
-              ? { ...p, title, content, tag: draft.tag, updatedAt: new Date().toISOString() }
+              ? { ...p, title, content, tags: draft.tags, updatedAt: new Date().toISOString() }
               : p,
           ),
         );
         try {
-          await promptsApi.update(draft.id, { title, content, tag: draft.tag });
+          await promptsApi.update(draft.id, { title, content, tags: draft.tags });
         } catch {
           // 静默失败：保留本地更新
         }
@@ -212,7 +218,7 @@ export function Prompts() {
   const handleCreate = useCallback(() => {
     setEditingId(null);
     setCreatingNew(true);
-    setDraft({ id: `new-${Date.now()}`, title: '', content: '', tag: 'work' });
+    setDraft({ id: `new-${Date.now()}`, title: '', content: '', tags: [] });
   }, []);
 
   // ── 渲染 ──
@@ -247,7 +253,7 @@ export function Prompts() {
             active={activeTag === 'all'}
             onClick={() => setActiveTag('all')}
           />
-          {TAG_OPTIONS.map((t) => (
+          {allTags.map((t) => (
             <FilterChip
               key={t}
               label={t}
@@ -421,7 +427,11 @@ function PromptCardView({
         <p className={styles.promptContent}>{prompt.content}</p>
       </Card.Body>
       <Card.Footer className={styles.promptFoot}>
-        {prompt.tag ? <Tag size="sm">{prompt.tag}</Tag> : <span />}
+        {prompt.tags && prompt.tags.length > 0 ? (
+          <div className={styles.tagList}>
+            {prompt.tags.map((t) => <Tag key={t} size="sm">{t}</Tag>)}
+          </div>
+        ) : prompt.tag ? <Tag size="sm">{prompt.tag}</Tag> : <span />}
       </Card.Footer>
     </Card>
   );
@@ -464,19 +474,11 @@ function EditPromptCard({
             rows={4}
           />
           <div className={styles.editMeta}>
-            <span className={styles.editMetaLabel}>标签</span>
-            <select
-              className={styles.editSelect}
-              value={draft.tag}
-              onChange={(e) => onChange({ ...draft, tag: e.target.value as TagOption })}
-              aria-label="选择标签"
-            >
-              {TAG_OPTIONS.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+            <TagInput
+              tags={draft.tags}
+              onChange={(tags) => onChange({ ...draft, tags })}
+              placeholder="输入标签后按 Enter 添加"
+            />
           </div>
         </Card.Body>
         <Card.Footer className={styles.promptFoot}>
@@ -494,7 +496,7 @@ function EditPromptCard({
             size="sm"
             icon={<CheckIcon />}
             type="submit"
-            disabled={!draft.title.trim() || !draft.content.trim()}
+            disabled={!draft.content.trim()}
           >
             保存
           </Button>
