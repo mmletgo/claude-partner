@@ -22,6 +22,7 @@
 
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { useAppVersion } from '@/hooks/useAppVersion';
 import {
   Button,
   Card,
@@ -339,6 +340,8 @@ export function DesignSystem() {
   const [inputValue, setInputValue] = useState<string>('claude-partner-7842');
   const [searchValue, setSearchValue] = useState<string>('搜索 prompt...');
   const [inputPassword, setInputPassword] = useState<string>('a-very-secret-token');
+  // 应用版本号来自后端 __version__（与 AppShell / Settings 同源），用于页头与页脚展示
+  const version = useAppVersion();
 
   /**
    * 通用 input change handler
@@ -359,7 +362,7 @@ export function DesignSystem() {
           <div className={styles.headerText}>
             <h1 className={styles.title}>设计系统</h1>
             <p className={styles.subtitle}>
-              Claude Partner 设计系统 v0.4.0 · 仅开发环境可见
+              Claude Partner 设计系统 v{version ?? '—'} · 仅开发环境可见
             </p>
           </div>
           <ThemeToggle className={styles.themeToggle} />
@@ -820,7 +823,7 @@ export function DesignSystem() {
 
           {/* ───────── 11. 页脚 ───────── */}
           <footer className={styles.pageFooter}>
-            <span>Claude Partner Design System v0.4.0</span>
+            <span>Claude Partner Design System v{version ?? '—'}</span>
             <span>{ICON_LIBRARY.length} icons · 15 colors · 10 spacing · 4 radius · 4 shadow</span>
           </footer>
         </main>

@@ -24,14 +24,11 @@ import {
   DevicesIcon,
   SettingsIcon,
 } from '../../../lib/icons';
+import { useAppVersion } from '../../../hooks/useAppVersion';
 import { Sidebar } from '../Sidebar';
 import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
 import styles from './AppShell.module.css';
-
-// 版本号应与 src/claude_partner/__init__.py 的 __version__ 保持一致
-// 此处先硬编码 0.2.0 作为占位；后续可通过 Vite 环境变量注入
-const APP_VERSION = '0.2.0';
 
 export interface AppShellProps {
   /** 路由出口占位（一般由 react-router 注入 <Outlet />，可显式覆盖） */
@@ -39,12 +36,16 @@ export interface AppShellProps {
 }
 
 export function AppShell({ children }: AppShellProps) {
+  // 版本号以后端 __init__.py 的 __version__ 为唯一权威来源，通过 useAppVersion
+  // 从 /api/version 动态获取，前端不再硬编码，避免发版漏改导致版本不一致。
+  const version = useAppVersion();
+
   return (
     <div className={styles.layout}>
       <Sidebar
         footer={
           <div className={styles.footer}>
-            <span className={styles.footerVersion}>v{APP_VERSION}</span>
+            <span className={styles.footerVersion}>v{version ?? '—'}</span>
             <span>Claude Partner</span>
             <div className={styles.footerToggle}>
               <ThemeToggle />
