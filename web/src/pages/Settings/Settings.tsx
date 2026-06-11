@@ -17,9 +17,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { Card, Button, Input, Pill } from '@/components/primitives';
-import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon } from '@/lib/icons';
+import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
-import type { VersionInfo, UpdateCheckResult } from '@/lib/types';
+import type { VersionInfo, UpdateCheckResult, UpdateDownloadStatus } from '@/lib/types';
 import styles from './Settings.module.css';
 
 /** 单个快捷键字段定义 */
@@ -85,6 +85,8 @@ export function Settings() {
   const [versionInfo, setVersionInfo] = useState<VersionInfo | null>(null);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [downloadStatus, setDownloadStatus] = useState<UpdateDownloadStatus | null>(null);
+  const [installing, setInstalling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [choosingDir, setChoosingDir] = useState(false);
 
@@ -197,6 +199,7 @@ export function Settings() {
   const handleCheckUpdate = async () => {
     setCheckingUpdate(true);
     setUpdateResult(null);
+    setDownloadStatus(null);
     try {
       const result = await configApi.checkUpdate();
       setUpdateResult(result);
@@ -249,6 +252,83 @@ export function Settings() {
     void loadConfig();
     return () => { cancelled = true; };
   }, []);
+
+  // 下载进行中时轮询进度状态，每 800ms 一次；进入终态（completed/failed/cancelled）后停止
+  useEffect(() => {
+    if (downloadStatus?.status !== 'downloading') return;
+    let active = true;
+    const timer = window.setInterval(async () => {
+      if (!active) return;
+      try {
+        const status = await configApi.getDownloadStatus();
+        if (active) setDownloadStatus(status);
+      } catch {
+        // 轮询失败静默，下一轮重试
+      }
+    }, 800);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [downloadStatus?.status]);
+
+  /**
+   * 启动更新下载：透传检查结果的 downloadUrl/filename，立即进入 downloading 状态
+   */
+  const handleDownload = async () => {
+    if (!updateResult?.downloadUrl || !updateResult?.filename) return;
+    // 乐观进入 downloading，让进度条立即显示
+    setDownloadStatus({
+      status: 'downloading',
+      progress: 0,
+      error: '',
+      filePath: '',
+      url: updateResult.downloadUrl,
+      filename: updateResult.filename,
+      size: updateResult.size ?? 0,
+    });
+    try {
+      await configApi.downloadUpdate(updateResult.downloadUrl, updateResult.filename);
+    } catch (err) {
+      setDownloadStatus({
+        status: 'failed',
+        progress: 0,
+        error: err instanceof Error ? err.message : '启动下载失败',
+        filePath: '',
+        url: '',
+        filename: '',
+        size: 0,
+      });
+    }
+  };
+
+  /**
+   * 取消正在进行的下载
+   */
+  const handleCancelDownload = async () => {
+    try {
+      await configApi.cancelDownload();
+      setDownloadStatus((prev) =>
+        prev ? { ...prev, status: 'cancelled' } : prev,
+      );
+    } catch {
+      // 取消失败静默
+    }
+  };
+
+  /**
+   * 安装已下载的更新包并重启（进程随后退出）
+   */
+  const handleInstall = async () => {
+    setInstalling(true);
+    try {
+      await configApi.installUpdate();
+    } catch {
+      // 安装失败静默，用户可重试
+    } finally {
+      setInstalling(false);
+    }
+  };
 
   // 渲染更新检查结果的提示文本
   const updateHint = useMemo(() => {
@@ -448,6 +528,96 @@ export function Settings() {
                 <span>{updateHint}</span>
               </span>
             </div>
+
+            {/* 发现新版本时展示：版本说明 + 下载/进度/安装 */}
+            {updateResult?.hasUpdate ? (
+              <div className={styles.updateBlock}>
+                <div className={styles.metaRow}>
+                  <span className={styles.metaKey}>最新版本</span>
+                  <Pill tone="accent">v{updateResult.version}</Pill>
+                </div>
+                {updateResult.body ? (
+                  <p className={styles.updateBody}>{updateResult.body}</p>
+                ) : null}
+
+                {downloadStatus?.status === 'downloading' ? (
+                  <div className={styles.progressRow}>
+                    <div className={styles.progressBar}>
+                      <div
+                        className={styles.progressFill}
+                        style={{ width: `${Math.round(downloadStatus.progress * 100)}%` }}
+                      />
+                    </div>
+                    <span className={styles.progressText}>
+                      {Math.round(downloadStatus.progress * 100)}%
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      icon={<XIcon size={14} />}
+                      onClick={handleCancelDownload}
+                    >
+                      取消
+                    </Button>
+                  </div>
+                ) : downloadStatus?.status === 'completed' ? (
+                  <div className={styles.updateActions}>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<DownloadIcon size={14} />}
+                      onClick={handleInstall}
+                      disabled={installing}
+                    >
+                      {installing ? '安装中…' : '安装并重启'}
+                    </Button>
+                    <span className={styles.aboutHint}>下载完成，点击后应用将重启</span>
+                  </div>
+                ) : downloadStatus?.status === 'failed' ? (
+                  <div className={styles.updateActions}>
+                    <span className={styles.updateError}>
+                      {downloadStatus.error || '下载失败'}
+                    </span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<DownloadIcon size={14} />}
+                      onClick={handleDownload}
+                    >
+                      重试下载
+                    </Button>
+                  </div>
+                ) : downloadStatus?.status === 'cancelled' ? (
+                  <div className={styles.updateActions}>
+                    <span className={styles.aboutHint}>下载已取消</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      icon={<DownloadIcon size={14} />}
+                      onClick={handleDownload}
+                    >
+                      重新下载
+                    </Button>
+                  </div>
+                ) : updateResult.downloadUrl ? (
+                  <div className={styles.updateActions}>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      icon={<DownloadIcon size={14} />}
+                      onClick={handleDownload}
+                    >
+                      下载更新
+                      {updateResult.size ? `（${formatSize(updateResult.size)}）` : ''}
+                    </Button>
+                  </div>
+                ) : (
+                  <span className={styles.aboutHint}>
+                    未找到当前平台的安装包，请前往 GitHub Releases 手动下载
+                  </span>
+                )}
+              </div>
+            ) : null}
           </Card.Body>
         </Card>
 
@@ -483,6 +653,24 @@ export function Settings() {
 function formatTime(d: Date): string {
   const pad = (n: number) => n.toString().padStart(2, '0');
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/**
+ * 把字节数格式化为人类可读的大小字符串（B/KB/MB/GB）
+ *
+ * @param bytes 字节数
+ * @returns 形如 "12.3 MB" 的字符串
+ */
+function formatSize(bytes: number): string {
+  if (!bytes) return '';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 Settings.displayName = 'Settings';

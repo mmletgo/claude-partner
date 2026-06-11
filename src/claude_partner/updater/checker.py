@@ -255,21 +255,8 @@ class UpdateChecker(QObject):
 
                 data: dict = await resp.json()
 
-            # 匹配当前平台的下载资源
-            platform_suffix: str = self._get_platform_suffix()
-            assets: list[dict] = data.get("assets", [])
-
-            download_url: str = ""
-            download_filename: str = ""
-            download_size: int = 0
-
-            for asset in assets:
-                name: str = asset.get("name", "")
-                if platform_suffix in name:
-                    download_url = asset.get("browser_download_url", "")
-                    download_filename = name
-                    download_size = asset.get("size", 0)
-                    break
+            # 匹配当前平台的下载资源（复用 match_platform_asset）
+            download_url, download_filename, download_size = match_platform_asset(data)
 
             if not download_url:
                 # 没有匹配的平台资源，仍然通知用户有新版本（可手动下载）
@@ -350,3 +337,27 @@ class UpdateChecker(QObject):
             await self._session.close()
             self._session = None
             logger.info("UpdateChecker session 已关闭")
+
+
+def match_platform_asset(release_data: dict) -> tuple[str, str, int]:
+    """
+    Business Logic（为什么需要这个函数）:
+        版本检查（app.py _check_update）和下载安装流程都需要从 GitHub Release
+        的 assets 中找到当前平台的安装包 URL，逻辑一致，需复用避免重复实现。
+
+    Code Logic（这个函数做什么）:
+        接收 GitHub Release API 返回的 JSON 字典，用 UpdateChecker._get_platform_suffix
+        匹配当前平台的 asset，返回 (download_url, filename, size) 三元组。
+        无匹配时三项均为空/0。
+    """
+    platform_suffix: str = UpdateChecker._get_platform_suffix()
+    assets: list[dict] = release_data.get("assets", [])
+    for asset in assets:
+        name: str = asset.get("name", "")
+        if platform_suffix in name:
+            return (
+                asset.get("browser_download_url", ""),
+                name,
+                asset.get("size", 0),
+            )
+    return "", "", 0

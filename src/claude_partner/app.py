@@ -9,7 +9,7 @@ import os
 import signal
 import sys
 from pathlib import Path
-from typing import NoReturn
+from typing import TYPE_CHECKING
 
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import Qt
@@ -31,6 +31,9 @@ from claude_partner.ui.tray import SystemTray
 from claude_partner.ui import theme
 from claude_partner.hotkey.listener import GlobalHotkeyManager
 from claude_partner import __version__
+
+if TYPE_CHECKING:
+    from claude_partner.updater.downloader import UpdateDownloader
 
 logger: logging.Logger = logging.getLogger(__name__)
 
@@ -72,6 +75,16 @@ class Application:
         self._main_window: WebMainWindow | None = None
         self._system_tray: SystemTray | None = None
         self._hotkey_mgr: GlobalHotkeyManager | None = None
+        self._update_downloader: UpdateDownloader | None = None
+        self._update_download_state: dict = {
+            "status": "idle",
+            "progress": 0.0,
+            "error": "",
+            "filePath": "",
+            "url": "",
+            "filename": "",
+            "size": 0,
+        }
 
     async def start(self) -> None:
         """
@@ -120,6 +133,10 @@ class Application:
             get_transfers=self._get_transfers_for_api,
             on_choose_dir=self._choose_dir,
             on_check_update=self._check_update,
+            on_update_download=self._start_update_download,
+            get_update_download_status=self._get_update_download_status,
+            on_update_install=self._install_update,
+            on_update_cancel=self._cancel_update_download,
             check_permissions=self._check_permissions_status,
         )
 
@@ -254,7 +271,9 @@ class Application:
 
         Code Logic:
             手动调用 GitHub Releases API 获取最新版本，
-            与本地 __version__ 语义化比较后构造返回字典：{hasUpdate, version, body}。
+            与本地 __version__ 语义化比较；有新版本时用 match_platform_asset
+            匹配当前平台资源，构造返回字典：
+            {hasUpdate, version, body, downloadUrl, filename, size}。
         """
         import aiohttp
         from claude_partner.updater.checker import (
@@ -262,6 +281,7 @@ class Application:
             RELEASE_API_URL,
             SemanticVersion,
             _GITHUB_HEADERS,
+            match_platform_asset,
         )
         try:
             timeout: aiohttp.ClientTimeout = aiohttp.ClientTimeout(total=15)
@@ -286,7 +306,7 @@ class Application:
                 if not (remote_version > local_version):
                     return {"hasUpdate": False, "version": "", "body": ""}
 
-                # 有新版本，获取详情
+                # 有新版本，获取详情 + 匹配平台资源
                 async with session.get(
                     RELEASE_API_URL, headers=_GITHUB_HEADERS
                 ) as resp:
@@ -297,14 +317,139 @@ class Application:
                             "body": "",
                         }
                     data: dict = await resp.json()
+                    download_url, download_filename, download_size = (
+                        match_platform_asset(data)
+                    )
                     return {
                         "hasUpdate": True,
                         "version": tag_name.lstrip("v"),
                         "body": data.get("body", ""),
+                        "downloadUrl": download_url,
+                        "filename": download_filename,
+                        "size": download_size,
                     }
         except Exception as e:
             logger.error("更新检查失败: %s", e, exc_info=True)
             return {"hasUpdate": False, "version": "", "body": "", "error": str(e)}
+
+    def _get_or_create_downloader(self) -> "UpdateDownloader":
+        """
+        Business Logic:
+            更新下载需要流式进度报告和取消能力，UpdateDownloader 基于信号机制，
+            需要单例持有并在首次下载时连接一次信号，避免重复连接导致状态回调叠加。
+
+        Code Logic:
+            懒创建 UpdateDownloader，连接 4 个信号（进度/完成/失败/取消）到
+            _update_download_state 状态字典的更新方法，返回单例。
+        """
+        from claude_partner.updater.downloader import UpdateDownloader
+
+        if self._update_downloader is None:
+            self._update_downloader = UpdateDownloader()
+            self._update_downloader.download_progress.connect(
+                self._on_download_progress
+            )
+            self._update_downloader.download_completed.connect(
+                self._on_download_completed
+            )
+            self._update_downloader.download_failed.connect(self._on_download_failed)
+            self._update_downloader.download_cancelled.connect(
+                self._on_download_cancelled
+            )
+        return self._update_downloader
+
+    def _on_download_progress(self, progress: float) -> None:
+        """下载进度信号回调，更新状态字典进度值。"""
+        self._update_download_state["progress"] = progress
+
+    def _on_download_completed(self, file_path: str) -> None:
+        """下载完成信号回调，更新状态为 completed 并保存文件路径。"""
+        self._update_download_state["status"] = "completed"
+        self._update_download_state["progress"] = 1.0
+        self._update_download_state["filePath"] = file_path
+        logger.info("更新下载完成: %s", file_path)
+
+    def _on_download_failed(self, error: str) -> None:
+        """下载失败信号回调，更新状态为 failed 并保存错误信息。"""
+        self._update_download_state["status"] = "failed"
+        self._update_download_state["error"] = error
+        logger.error("更新下载失败: %s", error)
+
+    def _on_download_cancelled(self) -> None:
+        """下载取消信号回调，更新状态为 cancelled。"""
+        self._update_download_state["status"] = "cancelled"
+        logger.info("更新下载已取消")
+
+    async def _start_update_download(self, url: str, filename: str) -> dict:
+        """
+        Business Logic:
+            前端发现新版本后点击"下载更新"，需要后端流式下载安装包并支持进度轮询。
+
+        Code Logic:
+            重置状态为 downloading（保留 url/filename/size），通过单例下载器
+            异步发起下载。下载结果通过信号异步更新状态字典，前端轮询 status 端点读取。
+        """
+        if not url or not filename:
+            return {"ok": False, "error": "缺少下载 URL 或文件名"}
+        # 已在下载中，拒绝重复触发
+        if self._update_download_state["status"] == "downloading":
+            return {"ok": False, "error": "已有下载任务进行中"}
+
+        self._update_download_state = {
+            "status": "downloading",
+            "progress": 0.0,
+            "error": "",
+            "filePath": "",
+            "url": url,
+            "filename": filename,
+            "size": self._update_download_state.get("size", 0),
+        }
+        downloader = self._get_or_create_downloader()
+        asyncio.ensure_future(downloader.download(url, filename))
+        return {"ok": True}
+
+    def _get_update_download_status(self) -> dict:
+        """
+        Business Logic:
+            前端下载进度条需要轮询当前下载状态（进度/状态/错误）。
+
+        Code Logic:
+            返回内部 _update_download_state 字典的副本。
+        """
+        return dict(self._update_download_state)
+
+    def _cancel_update_download(self) -> dict:
+        """
+        Business Logic:
+            用户下载过程中改变主意，需要中途取消下载。
+
+        Code Logic:
+            调用单例下载器的 cancel()，下一 chunk 检测标记后停止并清理临时文件，
+            随后触发 download_cancelled 信号更新状态。
+        """
+        if self._update_downloader is not None:
+            self._update_downloader.cancel()
+            return {"ok": True}
+        return {"ok": False, "error": "无下载任务"}
+
+    def _install_update(self) -> dict:
+        """
+        Business Logic:
+            下载完成后用户点击"安装并重启"，需要执行平台安装逻辑并重启应用。
+
+        Code Logic:
+            检查状态为 completed 且文件路径存在，调用 UpdateInstaller.install_and_restart
+            执行三平台替换重启（进程会退出，不会返回）。未就绪时返回错误。
+        """
+        from claude_partner.updater.installer import UpdateInstaller
+
+        state = self._update_download_state
+        file_path: str = state.get("filePath", "")
+        if state.get("status") != "completed" or not file_path:
+            return {"ok": False, "error": "安装包未就绪，请先完成下载"}
+        # 安装并退出（非阻塞外脚本接管，进程随后退出）
+        UpdateInstaller.install_and_restart(file_path)
+        return {"ok": True}
 
     @staticmethod
     def _check_permissions_status() -> dict:
@@ -460,6 +605,9 @@ class Application:
 
         if self._database is not None:
             await self._database.close()
+
+        if self._update_downloader is not None:
+            await self._update_downloader.close()
 
         logger.info("应用已关闭")
 

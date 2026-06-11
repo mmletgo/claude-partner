@@ -7,7 +7,7 @@
 ## 文件说明
 
 - `__init__.py` → 导出 UpdateChecker, UpdateInfo, UpdateDownloader, UpdateInstaller
-- `checker.py` → 版本检查器（GitHub Releases API + 语义化版本比较）
+- `checker.py` → 版本检查器（GitHub Releases API + 语义化版本比较）+ `match_platform_asset` 复用函数
 - `downloader.py` → 异步下载器（流式下载 + 进度报告 + 取消支持）
 - `installer.py` → 三平台安装器（DMG/EXE/TAR.GZ 自动替换重启）
 
@@ -17,8 +17,13 @@
 1. GET `https://api.github.com/repos/mmletgo/claude-partner/releases/latest`
 2. 解析 tag_name 为 SemanticVersion（纯标准库实现，不依赖 packaging）
 3. 与当前 __version__ 比较（SemanticVersion.__gt__）
-4. 从 assets 中匹配当前平台的下载文件（子串匹配 platform_suffix）
+4. 从 assets 中匹配当前平台的下载文件（复用 `match_platform_asset`）
 5. 发射 update_available / update_not_available / check_failed 信号
+
+### match_platform_asset(data) 模块函数
+- 输入 GitHub Release API 返回的 JSON，用 `_get_platform_suffix` 匹配当前平台 asset
+- 返回 `(download_url, filename, size)` 三元组，无匹配时三项为空/0
+- 被 UpdateChecker.check_for_update 和 app.py `_check_update` 共同复用
 
 ### SemanticVersion
 - 解析 "v1.2.3" 或 "1.2.3" 格式，缺失段默认为 0
@@ -51,6 +56,8 @@
 - 下载超时: total=600s, sock_read=120s
 - Chunk 大小: 64KB
 - 临时文件后缀: .downloading
+- 信号: `download_progress(float)` / `download_completed(str)` / `download_failed(str)` / `download_cancelled()`
+- 取消与失败分离：用户主动取消 emit `download_cancelled`（app.py 据此将状态置为 cancelled），网络/IO 错误才 emit `download_failed`
 
 ## 安装器 (UpdateInstaller)
 
