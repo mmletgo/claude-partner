@@ -16,7 +16,8 @@
 - **API 模块**: `src/api/prompts.ts`, `src/api/config.ts` 等 — 各资源 RESTful 调用
 - **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理，自定义多标签 + 动态标签筛选）/ Scratchpad（速记本，纯内存临时记事）/ Settings / Transfer / Devices
 - **路由**: `src/App.tsx` — React Router，`/` → Home，`/prompts` → Prompts，`/scratchpad` → Scratchpad 等
-- **自定义 Hook**: `src/hooks/` — `useTheme`（浅/深主题切换与跨组件同步）、`useAppVersion`（应用版本号，统一从后端 `/api/version` 获取，**禁止前端硬编码版本号**，唯一权威来源是后端 `__init__.py` 的 `__version__`）、`useLanguage`（中英文切换，复刻 useTheme 的 localStorage + 自定义事件同步范式）
+- **macOS 权限流程**: 首次启动 `OnboardingGuard`(`App.tsx`)检测权限未就绪 → 跳 `/welcome`(`usePermissions` 轮询，`PermissionCard` 点击触发后端 `POST /api/permissions/request` 弹系统授权框 + 打开设置面板)；完成引导写 `localStorage cp-permission-onboarded`。平时侧栏底部 `PermissionStatusBadge`(AppShell)常驻兜底，未授权时可点击触发同一授权流程。
+- **自定义 Hook**: `src/hooks/` — `useTheme`（浅/深主题切换与跨组件同步）、`useAppVersion`（应用版本号，统一从后端 `/api/version` 获取，**禁止前端硬编码版本号**，唯一权威来源是后端 `__init__.py` 的 `__version__`）、`useLanguage`（中英文切换，复刻 useTheme 的 localStorage + 自定义事件同步范式）、`usePermissions`（macOS 权限状态轮询 + 请求授权，导出 `PERMISSION_ONBOARDED_KEY` 供 OnboardingGuard/Welcome 共享）
 - **i18n**: `src/i18n/` — react-i18next 多 namespace（en/zh）；语言检测 localStorage(`cp-lang`) > `navigator.language` > en；切换器在 Sidebar 底部。**禁止在组件里硬编码用户可见中/英文字面量**，一律走 `src/i18n/locales/{en,zh}/<ns>.json` + `t('<ns>:<key>')`。详见下方「i18n 国际化」。
 
 ## Vite 代理（开发模式）
