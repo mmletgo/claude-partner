@@ -16,6 +16,7 @@
  *   注意：本组件是 <Outlet /> 容器，children 不直接使用。
  */
 import { Outlet } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import {
   HomeIcon,
   TransferIcon,
@@ -28,6 +29,7 @@ import { useAppVersion } from '../../../hooks/useAppVersion';
 import { Sidebar } from '../Sidebar';
 import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
+import { LanguageSwitcher } from '../LanguageSwitcher';
 import styles from './AppShell.module.css';
 
 export interface AppShellProps {
@@ -39,7 +41,9 @@ export function AppShell({ children }: AppShellProps) {
   // 版本号以后端 __init__.py 的 __version__ 为唯一权威来源，通过 useAppVersion
   // 从 /api/version 动态获取，前端不再硬编码，避免发版漏改导致版本不一致。
   const version = useAppVersion();
-
+  // 传入命名空间数组,让 react-i18next v17 的 t() 类型校验 ns:key 形式
+  // (无参时 t() 只接受 defaultNS 即 common 的扁平 key,'nav:*' 会类型报错)
+  const { t } = useTranslation(['common', 'nav']);
   return (
     <div className={styles.layout}>
       <Sidebar
@@ -48,6 +52,7 @@ export function AppShell({ children }: AppShellProps) {
             <span className={styles.footerVersion}>v{version ?? '—'}</span>
             <span>Claude Partner</span>
             <div className={styles.footerToggle}>
+              <LanguageSwitcher />
               <ThemeToggle />
             </div>
           </div>
@@ -60,12 +65,12 @@ export function AppShell({ children }: AppShellProps) {
           <span className={styles.logoText}>Claude Partner</span>
         </div>
         <nav className={styles.navList} aria-label="primary">
-          <NavItem to="/" label="Home" icon={<HomeIcon />} />
-          <NavItem to="/transfer" label="Transfer" icon={<TransferIcon />} />
-          <NavItem to="/prompts" label="Prompts" icon={<PromptsIcon />} />
-          <NavItem to="/scratchpad" label="Scratchpad" icon={<ScratchpadIcon />} />
-          <NavItem to="/devices" label="Devices" icon={<DevicesIcon />} />
-          <NavItem to="/settings" label="Settings" icon={<SettingsIcon />} />
+          <NavItem to="/" label={t('nav:home')} icon={<HomeIcon />} />
+          <NavItem to="/transfer" label={t('nav:transfer')} icon={<TransferIcon />} />
+          <NavItem to="/prompts" label={t('nav:prompts')} icon={<PromptsIcon />} />
+          <NavItem to="/scratchpad" label={t('nav:scratchpad')} icon={<ScratchpadIcon />} />
+          <NavItem to="/devices" label={t('nav:devices')} icon={<DevicesIcon />} />
+          <NavItem to="/settings" label={t('nav:settings')} icon={<SettingsIcon />} />
         </nav>
       </Sidebar>
       <main className={styles.main}>{children ?? <Outlet />}</main>
