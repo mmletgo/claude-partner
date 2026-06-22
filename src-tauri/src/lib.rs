@@ -15,6 +15,7 @@ mod cc;
 mod commands;
 mod config;
 mod error;
+mod health;
 mod hotkey;
 mod models;
 mod net;
