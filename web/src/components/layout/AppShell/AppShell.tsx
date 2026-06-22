@@ -27,6 +27,7 @@ import {
   DevicesIcon,
   TerminalIcon,
   SettingsIcon,
+  HealthIcon,
 } from '../../../lib/icons';
 import { useAppVersion } from '../../../hooks/useAppVersion';
 import { Sidebar } from '../Sidebar';
@@ -34,6 +35,8 @@ import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
 import { LanguageSwitcher } from '../LanguageSwitcher';
 import { PermissionStatusBadge } from '@/components/domain';
+import ReminderToast from '@/pages/Health/ReminderToast';
+import WaterToast from '@/pages/Health/WaterToast';
 import styles from './AppShell.module.css';
 
 export interface AppShellProps {
@@ -78,10 +81,16 @@ export function AppShell({ children }: AppShellProps) {
           <NavItem to="/devices" label={t('nav:devices')} icon={<DevicesIcon />} />
           <NavItem to="/ssh" label={t('nav:ssh')} icon={<TerminalIcon />} />
           <NavItem to="/settings" label={t('nav:settings')} icon={<SettingsIcon />} />
+          <NavItem to="/health" label={t('nav:health')} icon={<HealthIcon />} />
         </nav>
         <PermissionStatusBadge />
       </Sidebar>
       <main className={styles.main}>{children ?? <Outlet />}</main>
+      {/* 健康提醒 toast:主窗口常驻悬浮卡(久坐提醒 + 喝水提醒),
+          监听后端 health:reminder / health:water 事件,非 overlay 路由,
+          仅在 AppShell 内渲染,截图选区页(/screenshot-overlay)不会挂载 */}
+      <ReminderToast />
+      <WaterToast />
     </div>
   );
 }

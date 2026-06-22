@@ -26,6 +26,7 @@ import enWelcome from './locales/en/welcome.json';
 import enSettings from './locales/en/settings.json';
 import enCcHistory from './locales/en/ccHistory.json';
 import enSsh from './locales/en/ssh.json';
+import enHealth from './locales/en/health.json';
 
 import zhCommon from './locales/zh/common.json';
 import zhNav from './locales/zh/nav.json';
@@ -39,6 +40,7 @@ import zhWelcome from './locales/zh/welcome.json';
 import zhSettings from './locales/zh/settings.json';
 import zhCcHistory from './locales/zh/ccHistory.json';
 import zhSsh from './locales/zh/ssh.json';
+import zhHealth from './locales/zh/health.json';
 
 export type AppLanguage = 'en' | 'zh';
 export const LANGUAGE_STORAGE_KEY = 'cp-lang';
@@ -76,6 +78,7 @@ export const resources = {
     settings: enSettings,
     ccHistory: enCcHistory,
     ssh: enSsh,
+    health: enHealth,
   },
   zh: {
     common: zhCommon,
@@ -90,6 +93,7 @@ export const resources = {
     settings: zhSettings,
     ccHistory: zhCcHistory,
     ssh: zhSsh,
+    health: zhHealth,
   },
 } as const;
 

@@ -27,6 +27,18 @@ extern "C" {
     fn CGRequestScreenCaptureAccess() -> bool;
 }
 
+// ── macOS ApplicationServices FFI（辅助功能权限）──────────────────────────
+// AX* 符号位于 ApplicationServices/HIServices 子框架，未必被 Tauri 依赖链
+// （core-graphics/xcap 只链 CoreGraphics）带入，故此处显式 link framework。
+// 与上面 CG*「不写 #[link]」刻意区分。若编译器报 framework 已链接的 warning，可移除该 link。
+
+// AXIsProcessTrusted：当前进程被加入「隐私 → 辅助功能」白名单返回 true（10.2+）。
+#[cfg(target_os = "macos")]
+#[link(name = "ApplicationServices", kind = "framework")]
+extern "C" {
+    fn AXIsProcessTrusted() -> bool;
+}
+
 /// CGEventTapLocation：在事件流中的插入位置（kCGHIDEventTap = 0）。
 #[cfg(target_os = "macos")]
 const CG_HID_EVENT_TAP: u32 = 0;
@@ -84,6 +96,8 @@ pub struct PermissionState {
 pub struct PermissionsStatus {
     pub screen_capture: PermissionState,
     pub input_monitoring: PermissionState,
+    /// 辅助功能权限（健康提醒活动窗口标题采样依赖；macOS 需手动授权）。
+    pub accessibility: PermissionState,
 }
 
 /// 请求权限的结果（前端约定字段：ok / requested / opened）。
@@ -106,6 +120,9 @@ fn settings_url(perm_type: &str) -> Option<&'static str> {
         ),
         "inputMonitoring" => Some(
             "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
+        ),
+        "accessibility" => Some(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
         ),
         _ => None,
     }
@@ -153,6 +170,21 @@ pub fn check_input_monitoring_access() -> bool {
     true
 }
 
+/// 检测辅助功能权限（macOS 用 AXIsProcessTrusted；非 macOS 一律 true）。
+///
+/// Business Logic: 健康提醒的活动窗口标题/进程名采样依赖辅助功能权限（active-win-pos-rs
+///     底层走 AX API）。未授权时采不到窗口标题，需引导用户前往「隐私 → 辅助功能」开启。
+/// Code Logic: FFI 调 ApplicationServices 的 `AXIsProcessTrusted`（仅查询不弹框）。
+#[cfg(target_os = "macos")]
+pub fn check_accessibility_access() -> bool {
+    unsafe { AXIsProcessTrusted() }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn check_accessibility_access() -> bool {
+    true
+}
+
 /// 查询全量权限状态（供 `check_permissions` 命令调用）。
 ///
 /// Business Logic: 前端 usePermissions hook 初始化与轮询时调用。
@@ -163,6 +195,9 @@ pub fn check_permissions() -> PermissionsStatus {
         },
         input_monitoring: PermissionState {
             granted: check_input_monitoring_access(),
+        },
+        accessibility: PermissionState {
+            granted: check_accessibility_access(),
         },
     }
 }
@@ -228,6 +263,19 @@ pub fn request_permission(
                 };
                 RequestPermissionResult {
                     ok: check_input_monitoring_access(),
+                    requested: false,
+                    opened,
+                }
+            }
+            "accessibility" => {
+                // 无系统 request API（AXIsProcessTrusted 仅查询），只能 open 设置面板引导
+                let opened = if open_settings {
+                    open_permission_settings(perm_type)
+                } else {
+                    false
+                };
+                RequestPermissionResult {
+                    ok: check_accessibility_access(),
                     requested: false,
                     opened,
                 }

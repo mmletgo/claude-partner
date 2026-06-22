@@ -20,10 +20,11 @@ src/
 ├── config.rs          — AppConfig：读旧 ~/.claude-partner/config.json，缺失生成默认 [已实现]
 ├── cc/                — Claude Code 历史采集（collector）+ 合并（merger，复用 sync/vector_clock）+ 同步（engine）+ 模型 [已实现]
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
-├── commands/          — #[tauri::command]：prompts + cc_history + cloud_sync + config + devices + sync + transfer + screenshot + permissions + updater [已实现]
+├── commands/          — #[tauri::command]：prompts + cc_history + cloud_sync + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health [已实现]
 ├── models/prompt.rs   — PromptRow（snake_case，DB/同步）+ PromptDto（camelCase，前端） [已实现]
 ├── storage/prompt_repo.rs — sqlx 运行期 query（非宏），list/get/create/update/soft_delete/list_tags [已实现]
 ├── storage/cc_history_repo.rs — claude_history 表 CRUD + bulk_ingest(IGNORE)/bulk_upsert(REPLACE) + scan_state [已实现]
+├── storage/health_repo.rs — activity_records/water_records 读写 + aggregate_minutes 统计 [已实现]
 ├── sync/              — 向量时钟 + LWW 合并 + engine              [M4]
 ├── net/               — mdns-sd 发现 + axum server + reqwest client [已实现 M3]
 ├── transfer/          — 分块传输 + SHA256 + 断点续传              [M5]
@@ -31,6 +32,7 @@ src/
 ├── permissions/       — macOS 权限 FFI（CGPreflight/CGRequest/CGEventTap） [M7 已实现]
 ├── hotkey.rs          — pynput→plugin 快捷键格式转换 + 注册/热更新  [M7 已实现]
 ├── tray.rs            — 系统托盘（Tauri 2 tray API）              [M7 已实现]
+├── health/            — 久坐监测 daemon（state 状态机 + monitor 采样 + reminder 免打扰） [已实现]
 └── commands/updater.rs — 自动更新 5 命令（check/download/status/cancel/install，对齐前端 types.ts）[M8 已实现]
 migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TABLE IF NOT EXISTS 兼容旧库）
 ```
@@ -246,6 +248,36 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **DTO 锁定契约（前端依赖）**：`CloudSyncConfigDto`{repoUrl,enabled,auto,intervalSecs,branch}、`CloudSyncResult`{ok,pulled,pushed,note,syncedAt}、`TestCloudSyncResult`{ok,gitVersion,defaultBranch,error}。
 - **scheduler**（`cloud_sync/scheduler.rs`）：`start(state) -> CancellationToken` spawn 后台任务，`loop { select!{ cancel => break, sleep(interval) => tick } }`。**每 tick 重读 config**：interval = `cloud_sync_interval_secs`（实时生效），`!enabled || !auto` 则 continue（仍按新 interval 等待），否则跑 `trigger_cloud_sync`（错误仅 tracing::error）。首次先 sleep 再检查（不立即跑）。setup **无条件启动**（内部按 config 决定），故配置变更无需重启 scheduler。返回的 token 存 `AppState.cloud_sync_cancel`，`RunEvent::Exit` 时 cancel。
 - **AppState 扩展**：`cloud_sync_cancel: Arc<Mutex<Option<CancellationToken>>>`。`config_dir` 由 private 提升为 pub（cloud_sync 复用）。无新表（init_db 不变）、无新依赖（用 tokio::process + std::fs + 既有 tokio-util/chrono/dirs/uuid）。
+
+## 健康提醒已落地行为约定（src/health/ + storage/health_repo.rs + commands/health.rs）
+
+- **功能定位**：久坐监测 + 工作/休息状态机 + 系统通知提醒（可选喝水/屏幕时长统计）。每分钟采样前台键鼠活跃度，连续工作达阈值触发久坐提醒；支持免打扰时段 / 手动暂停 / 贪睡 / 跳过。前端入口「健康提醒」设置页（状态展示 + 配置 + 暂停/贪睡/跳过按钮）。
+- **macOS 权限（accessibility）**：键鼠采样（device_query）依赖 macOS Accessibility 权限。`permissions/mod.rs` 加 `check_accessibility_access()`（FFI 调 ApplicationServices `AXIsProcessTrusted`，仅查询不弹框）+ `request_permission("accessibility")`（无系统 request API，open_settings=true 打开 Privacy_Accessibility 面板引导）。`check_permissions` 返回新增 `accessibility: {granted}`。前端首次启动 OnboardingGuard/侧栏 PermissionStatusBadge/设置页权限 Card 复用同一权限流程引导授权（与 screenCapture/inputMonitoring 同一套）。
+- **托盘暂停菜单**：`tray.rs` 主菜单加「暂停/恢复监测」项（id `tray_pause`，toggle），点击切 `state.health.paused` 原子标记（与 `commands::health::toggle_health_paused` 复用同一份运行时标记，不落盘、重启失效）。
+- **架构（双线程 daemon，`health/mod.rs::start_health_daemon`）**：一个 `std::thread` 采样（线程局部持有非 Send 的 `DeviceState`/`DeviceQuerySampler`），跨线程只传 `ActivitySample`（Send 纯数据）；一个 `tauri::async_runtime::spawn` 处理 task（`select!{cancel, rx.recv()}` 范式，复用 cc/collector.rs）。daemon **在 lib.rs setup 同步段调用**（`app.manage` 之后），内部用 `tauri::async_runtime::spawn` 而非 `tokio::spawn`（主线程无 reactor），返回 `CancellationToken` 存 `AppState.health_cancel`，`RunEvent::Exit` 时 cancel 优雅停止。
+- **状态机（`health/state.rs::HealthStateMachine`，纯算法）**：每分钟喂 `(active: bool, now_ts: i64, &HealthThresholds)` 推进一拍。相位流转：Idle/Resting + 活跃 → 开新工作窗口；Working + 活跃 → 续 `last_active_ts`；Working + 停歇且距上次活动 ≥ `break_seconds` → 关窗口入 Resting（报告被关闭窗口）；其余保持。提醒判定：仅 Working 态，窗口自然时长 ≥ `work_window_seconds` 且本窗口未提醒过 → `should_remind` + 标记 `reminded`（同窗口去重）。配 7 单测。`StateOutcome.state`/`reminder_closed_window` 供未来统计扩展（当前 daemon 仅消费 `should_remind`，故 struct `#[allow(dead_code)]`）。
+- **采样（`health/monitor.rs`）**：`ActivitySampler` trait + `DeviceQuerySampler`（macOS 用 device_query 查键鼠状态，对比上次鼠标坐标/按键数判活跃；活跃时 active-win-pos-rs 查窗口标题/进程名）+ `MockSampler`（测试用，按预设布尔序列循环；当前 `#[allow(dead_code)]`）。`ActivitySample { is_active, process_name, window_title }` 是跨线程纯数据。
+- **提醒触发（`health/mod.rs::handle_sample`）**：每分钟 → 写活动记录 →（enabled && !paused）推进状态机 → `should_remind` 且未贪睡且不在 DND 时段且 `notify_enabled` → emit `health:reminder` 事件（载荷 `{workWindowSeconds}`，系统通知由前端监听后弹）。若 `reminder_fullscreen` 开启则 emit 后调 `open_health_overlay` 每屏弹透明置顶遮罩窗口（Plan 2）。跨 await 不持 RwLockReadGuard：开头 `state.config.read().unwrap().health.clone()` 先 clone 配置副本释放锁。DND 判定（`health/reminder.rs::is_in_dnd`）支持跨午夜（如 22:00-07:00）。
+- **全屏遮罩提醒（Plan 2，`health/mod.rs::open_health_overlay`/`close_health_overlay`）**：开启 `reminder_fullscreen` 后，久坐提醒 emit 后每屏建一个透明置顶遮罩窗口（复用截图透明窗口构建模式：`WebviewWindowBuilder` decorations(false)/transparent(true)/always_on_top(true)/focused(true)/skip_taskbar(true)/resizable(false)），label = `health-overlay-{i}`，url = `/health-overlay?display={i}`，几何直接用 xcap `monitor.x()/y()/width()/height()`（逻辑点，不除 scale，与截图 overlay 一致）。窗口需 `app.macOSPrivateApi: true`（已开）。`close_health_overlay` 遍历 `webview_windows()` 关闭 `health-overlay-` 前缀全部窗口（供前端遮罩页推迟/跳过按钮经 `close_health_overlay` 命令调用）。capabilities `default.json` windows 数组含 `health-overlay-*` 通配（遮罩页 invoke 才被放行）。
+- **运行时共享状态（`health/mod.rs::HealthRuntime`）**：`machine: Mutex<HealthStateMachine>`（状态机）+ `snooze_until: Mutex<Option<i64>>`（贪睡到期秒级时间戳）+ `paused: AtomicBool`（手动暂停标记，不落盘）。daemon task 与命令层共享同一份 `Arc<HealthRuntime>`。
+- **存储（`storage/health_repo.rs`）**：两张表，lib.rs 内联建表（`HEALTH_SCHEMA` activity_records / `WATER_SCHEMA` water_records）。`activity_records` 以分钟级 unix 时间戳 `ts` 为主键，同分钟重采 `INSERT OR REPLACE` 覆盖。方法：`insert_activity`（daemon 每分钟写）、`aggregate_minutes(since_ts)`（SQL 层 `SUM(CASE WHEN is_active=1/0 ...)` 计活跃/闲置分钟数，无记录回退 0）、`get_app_usage(since_ts)`（按 process_name 聚合活跃分钟倒序，WHERE 过滤 is_active=1 且 process_name 非空，返回 `Vec<(String,i64)>`）、`get_hourly_activity(since_ts)`（`(ts/3600%24)` 取 UTC 小时桶 GROUP BY 聚合，返回长度恒 24 的活跃分钟数组，范围外桶忽略）、`cleanup_older_than(cutoff)`（定期清过期明细）、`get_activities_since`/`insert_water`（公共 API 预留，当前 `#[allow(dead_code)]`）。配 3 单测。
+- **配置（`config.rs::HealthConfig`）**：`AppConfig.health: HealthConfig`（`#[serde(default)]` 兼容旧 config.json 无此字段）。字段：`enabled`/`work_window_seconds`(默认 45min)/`break_seconds`(默认 5min)/`record_window_title`/`retain_days`(默认 90)/`notify_enabled`/`dnd_start`/`dnd_end`(Option<String> "HH:MM")/`water_enabled`/`water_interval_seconds`(默认 1h)/`reminder_fullscreen`(Plan 2 全屏遮罩开关，`#[serde(default)]` 默认 false)。各字段 `#[serde(default = "...")]` 单字段缺失回退（reminder_fullscreen 用裸 `#[serde(default)]` 回退 false）。
+- **命令层（`commands/health.rs`，lib.rs invoke_handler 注册）**：
+  - `get_health_config` → `HealthConfigDto`（全部配置字段，供前端配置表单初始化；避免 `get_health_status` 只含运行时相位 + 阈值不够用，导致前端 updateConfig 拼凑配置字段清零）
+  - `get_health_status` → `HealthStatusDto`（enabled/paused/phase[idle/working/resting]/windowStartTs?/workWindowSeconds/breakSeconds/snoozeUntil?）
+  - `toggle_health_enabled(enabled)` → 写 config.health.enabled + save → `HealthConfigDto`
+  - `toggle_health_paused(paused)` → store 原子标记（不落盘，重启失效）
+  - `snooze_reminder(minutes)` → 设 `snooze_until = now + minutes*60`
+  - `skip_reminder` → 重置状态机回 Idle + 清 snooze
+  - `update_health_config(config: HealthConfigDto)` → 整体覆盖 config.health + save → `HealthConfigDto`
+  - `get_activity_stats(sinceTs)` → `ActivityStatsDto`（activeMinutes/idleMinutes，委托 `aggregate_minutes`）
+  - `get_activity_detail(sinceTs)` → `ActivityDetailDto`（appUsage[AppUsageItem{name,minutes}] + hourly[24]，委托 `get_app_usage` + `get_hourly_activity`，供前端 StatsChart recharts 图表渲染，Plan 2 Task 4）
+  - `record_water` → 更新喝水计时状态 + 清未响应提醒 + 落库 water_records
+  - `close_health_overlay(app)` → 关闭所有 `health-overlay-*` 前缀遮罩窗口（供前端遮罩页推迟/跳过按钮调用，Plan 2）
+  - 3 DTO 全 `#[serde(rename_all="camelCase")]`；HealthConfigDto 双向（配置回写，含 reminderFullscreen）。
+- **依赖（Cargo.toml）**：`device_query`(macOS 键鼠)、`rdev`(Win/Linux 全局事件)、`active-win-pos-rs`(活动窗口)、`tauri-plugin-notification`(系统通知)、`tauri-plugin-autostart`(开机自启)。lib.rs Builder 注册 `.plugin(tauri_plugin_notification::init())` + `.plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))`。
+- **AppState 扩展**：`health: Arc<HealthRuntime>`、`health_repo: Arc<HealthRepo>`、`health_cancel: Arc<Mutex<Option<CancellationToken>>>`（全 Arc 包裹，AppState 仍 `#[derive(Clone)]`）。
+- **capabilities 待办**：前端真正 invoke health 命令或弹系统通知时，需确认 `capabilities/default.json` 含 notification/autostart 权限集（本模块 Rust 侧闭环，capabilities 留给前端接入 task 补）。
 
 ## 关键约定
 

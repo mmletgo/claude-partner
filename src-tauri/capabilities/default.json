@@ -4,13 +4,15 @@
   "description": "enables the default permissions",
   "windows": [
     "main",
-    "screenshot-overlay-*"
+    "screenshot-overlay-*",
+    "health-overlay-*"
   ],
   "permissions": [
     "core:default",
     "core:event:default",
     "dialog:default",
     "updater:default",
-    "process:default"
+    "process:default",
+    "notification:default"
   ]
 }

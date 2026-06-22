@@ -20,6 +20,8 @@ use tauri::{
 const MENU_SHOW: &str = "tray_show";
 /// 截图菜单项 id。
 const MENU_SCREENSHOT: &str = "tray_screenshot";
+/// 暂停/恢复健康监测菜单项 id（toggle：点击切换 paused 原子标记）。
+const MENU_PAUSE: &str = "tray_pause";
 /// 退出菜单项 id。
 const MENU_QUIT: &str = "tray_quit";
 
@@ -42,8 +44,9 @@ pub(crate) fn show_main_window(app: &AppHandle) {
 pub fn build_tray(app: &AppHandle) -> Result<(), AppError> {
     let show_item = MenuItem::with_id(app, MENU_SHOW, "显示主窗口", true, None::<&str>)?;
     let shot_item = MenuItem::with_id(app, MENU_SCREENSHOT, "截图", true, None::<&str>)?;
+    let pause_item = MenuItem::with_id(app, MENU_PAUSE, "暂停/恢复监测", true, None::<&str>)?;
     let quit_item = MenuItem::with_id(app, MENU_QUIT, "退出", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show_item, &shot_item, &quit_item])?;
+    let menu = Menu::with_items(app, &[&show_item, &shot_item, &pause_item, &quit_item])?;
 
     TrayIconBuilder::with_id("main-tray")
         .icon(app.default_window_icon().cloned().ok_or_else(|| {
@@ -58,6 +61,15 @@ pub fn build_tray(app: &AppHandle) -> Result<(), AppError> {
                 if let Err(e) = overlay::start_region_capture(app) {
                     tracing::error!("托盘触发截图失败: {e}");
                 }
+            }
+            MENU_PAUSE => {
+                // toggle 健康监测暂停标记（AtomicBool，不落盘，重启失效）。
+                // 对照 commands/health.rs::toggle_health_paused 的语义，复用同一份运行时标记。
+                use std::sync::atomic::Ordering;
+                let state: tauri::State<crate::state::AppState> = app.state();
+                let cur = state.health.paused.load(Ordering::Relaxed);
+                state.health.paused.store(!cur, Ordering::Relaxed);
+                tracing::info!("健康监测 {}", if !cur { "已暂停" } else { "已恢复" });
             }
             MENU_QUIT => app.exit(0),
             _ => {}

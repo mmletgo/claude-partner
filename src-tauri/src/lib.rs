@@ -16,6 +16,7 @@ mod cloud_sync;
 mod commands;
 mod config;
 mod error;
+mod health;
 mod hotkey;
 mod models;
 mod net;
@@ -35,7 +36,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::commands::{
     cc_history as cc_history_cmd, claude_md as claude_md_cmd, cloud_sync as cloud_sync_cmd,
     config as config_cmd,
-    devices as device_cmd,
+    devices as device_cmd, health as health_cmd,
     permissions as permissions_cmd, prompts as prompt_cmd, screenshot as screenshot_cmd,
     ssh_target as ssh_target_cmd, sync as sync_cmd, transfer as transfer_cmd,
     updater as updater_cmd,
@@ -135,6 +136,19 @@ const SSH_TARGET_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ssh_targets (
     updated_at TEXT NOT NULL,
     deleted INTEGER DEFAULT 0
 )";
+
+/// 健康提醒 - 每分钟活动采样表（分钟级 unix 时间戳为主键，同分钟重采覆盖）。
+const HEALTH_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS activity_records (
+    ts INTEGER PRIMARY KEY,
+    is_active INTEGER NOT NULL,
+    process_name TEXT,
+    window_title TEXT
+)";
+
+/// 健康提醒 - 喝水打卡表（以时间戳为主键，INSERT OR REPLACE 幂等）。
+const WATER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS water_records (
+    ts INTEGER PRIMARY KEY
+)";
 /// 初始化数据库连接池：开启 WAL，手动建表，返回 SqlitePool。
 ///
 /// Business Logic: 单连接语义与 Python aiosqlite 一致（max_connections(1)）。
@@ -166,6 +180,9 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
     sqlx::query(CLAUDE_MD_SCHEMA).execute(&pool).await?;
     // SSH 连接目标表（host 主键 + 端口 + 用户名 + 向量时钟，跨设备同步）
     sqlx::query(SSH_TARGET_SCHEMA).execute(&pool).await?;
+    // 健康提醒：活动采样表 + 喝水记录表（在 CLAUDE_MD_SCHEMA 之后执行）
+    sqlx::query(HEALTH_SCHEMA).execute(&pool).await?;
+    sqlx::query(WATER_SCHEMA).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -191,6 +208,13 @@ pub fn run() {
         // process 提供 restart 能力（rust 侧用 app.request_restart()）
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        // M10 健康提醒：notification 供前端弹出久坐提醒（后端仅 emit 事件，通知文案/弹窗走前端），
+        // autostart 提供开机自启能力（macOS 用 LaunchAgent；第二参 args 为 None 表示无额外启动参数）。
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // 日志统一由 run() 开头的 tracing_subscriber 接管（tracing 宏 + 经 tracing-log 桥接 log）。
             // 不再注册 tauri-plugin-log：它也会设置全局 log logger，与 tracing_subscriber 冲突，
@@ -211,6 +235,11 @@ pub fn run() {
                 let cc_history_repo = Arc::new(ClaudeHistoryRepo::new(pool.clone()));
                 let claude_md_repo = Arc::new(ClaudeMdRepo::new(pool.clone()));
                 let ssh_target_repo = Arc::new(SshTargetRepo::new(pool.clone()));
+                // 健康提醒：仓库（共享 pool）+ 运行时（状态机/贪睡/暂停）+ daemon 取消令牌占位
+                let health_repo = Arc::new(crate::storage::health_repo::HealthRepo::new(pool.clone()));
+                let health = Arc::new(crate::health::HealthRuntime::new());
+                let health_cancel =
+                    Arc::new(Mutex::new(None::<tokio_util::sync::CancellationToken>));
                 let state = AppState {
                     config: Arc::new(RwLock::new(config)),
                     db: pool,
@@ -238,6 +267,10 @@ pub fn run() {
                     cc_collector_cancel: Arc::new(Mutex::new(None)),
                     // 云端同步：后台 scheduler 取消令牌（start 在 manage 之后调用）
                     cloud_sync_cancel: Arc::new(Mutex::new(None)),
+                    // 健康提醒：运行时 + 仓库 + daemon 取消令牌（start 在 manage 之后调用）
+                    health,
+                    health_repo,
+                    health_cancel,
                 };
 
                 // 4) 启动 axum HTTP server（绑定动态端口，回填 actual_http_port）
@@ -274,6 +307,40 @@ pub fn run() {
                 let state: tauri::State<'_, AppState> = app.state();
                 let cancel = crate::cloud_sync::scheduler::start(state.inner().clone());
                 *state.cloud_sync_cancel.lock().unwrap() = Some(cancel);
+            }
+
+            // 启动健康监测 daemon（采样线程 + 处理 task），取消令牌存入 AppState 供应用退出时优雅停止。
+            // start_health_daemon 内部用 tauri::async_runtime::spawn，同步段调用安全（无需当前线程 reactor）。
+            {
+                let state: tauri::State<'_, AppState> = app.state();
+                let cancel = crate::health::start_health_daemon(
+                    app.handle().clone(),
+                    Arc::new(state.inner().clone()),
+                );
+                *state.health_cancel.lock().unwrap() = Some(cancel);
+            }
+
+            // M10 健康提醒：按 config.health.enabled 同步开机自启（enabled→注册 LaunchAgent，disabled→移除）。
+            // 简单实现：每次启动按 enabled 强同步。tauri_plugin_autostart 用 macOS LaunchAgent，
+            // enable/disable 内部幂等（重复调用安全）。失败仅记录不阻断启动。
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let state: tauri::State<'_, AppState> = app.state();
+                let want_autostart = state
+                    .config
+                    .read()
+                    .expect("config 读锁中毒")
+                    .health
+                    .enabled;
+                let autostart = app.autolaunch();
+                if want_autostart {
+                    if let Err(e) = autostart.enable() {
+                        tracing::warn!("开机自启 enable 失败: {e}");
+                    }
+                } else if let Err(e) = autostart.disable() {
+                    tracing::warn!("开机自启 disable 失败: {e}");
+                }
+                tracing::info!("开机自启: {}", if want_autostart { "已启用" } else { "已禁用" });
             }
 
             // M7：创建系统托盘（图标 + 菜单 + 双击显窗），失败仅记录不阻断启动
@@ -342,6 +409,18 @@ pub fn run() {
             cloud_sync_cmd::update_cloud_sync_config,
             cloud_sync_cmd::trigger_cloud_sync_cmd,
             cloud_sync_cmd::test_cloud_sync,
+            // M10 健康提醒（11 命令：配置/状态/开关/暂停/贪睡/跳过/配置回写/统计/活动明细/喝水/全屏遮罩）
+            health_cmd::get_health_config,
+            health_cmd::get_health_status,
+            health_cmd::toggle_health_enabled,
+            health_cmd::toggle_health_paused,
+            health_cmd::snooze_reminder,
+            health_cmd::skip_reminder,
+            health_cmd::update_health_config,
+            health_cmd::get_activity_stats,
+            health_cmd::get_activity_detail,
+            health_cmd::record_water,
+            health_cmd::close_health_overlay,
         ])
         .build(tauri::generate_context!())
         .map_err(|e| {
@@ -365,6 +444,11 @@ pub fn run() {
                 if let Some(t) = state.cloud_sync_cancel.lock().unwrap().take() {
                     t.cancel();
                     tracing::info!("云端同步 scheduler 已停止");
+                }
+                // 停止健康监测 daemon（采样线程 + 处理 task）
+                if let Some(t) = state.health_cancel.lock().unwrap().take() {
+                    t.cancel();
+                    tracing::info!("健康监测 daemon 已停止");
                 }
                 tracing::info!("应用已退出，mDNS 已注销");
             }

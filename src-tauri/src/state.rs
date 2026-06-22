@@ -78,6 +78,12 @@ pub struct AppState {
     pub cc_collector_cancel: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
     /// 云端同步（GitHub 私有仓库）后台 scheduler 的取消令牌（应用退出时 cancel 优雅停止）
     pub cloud_sync_cancel: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
+    /// 健康提醒运行时共享状态（状态机 + 贪睡/暂停标记，daemon task 与命令层共享同一份）
+    pub health: Arc<crate::health::HealthRuntime>,
+    /// 健康提醒数据库仓库（activity_records / water_records 读写，统计活跃/闲置分钟数）
+    pub health_repo: Arc<crate::storage::health_repo::HealthRepo>,
+    /// 健康监测 daemon 的取消令牌（应用退出时 cancel 优雅停止采样/处理任务）
+    pub health_cancel: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
 }
 
 impl AppState {

@@ -229,3 +229,9 @@ export const TerminalIcon = ({ size, ...rest }: IconProps) => (
     <path d="M8.5 10h4" />
   </svg>
 );
+
+export const HealthIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M1.5 8h2l1.5-3.5L7.5 12 10 5l1.5 3h3" />
+  </svg>
+);

@@ -55,12 +55,14 @@ export function ClaudeMd() {
     }
   }, [showToast]);
 
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect,setState 在 await 后异步执行 */
   useEffect(() => {
     // 挂载时拉取 CLAUDE.md：fetch 后 setState 是合法的 mount-load 模式，
     // set-state-in-effect 规则对此误报，局部豁免。
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
+  /* eslint-enable react-hooks/set-state-in-effect */
 
   // 卸载时清掉可能挂着的 toast 定时器，避免 setState on unmounted
   useEffect(() => {

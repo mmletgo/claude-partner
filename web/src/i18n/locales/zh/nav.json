@@ -7,5 +7,6 @@
   "claudeMd": "CLAUDE.md",
   "devices": "设备",
   "ssh": "SSH",
-  "settings": "设置"
+  "settings": "设置",
+  "health": "健康提醒"
 }
