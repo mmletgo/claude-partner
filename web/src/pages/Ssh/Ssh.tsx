@@ -54,6 +54,9 @@ export function Ssh() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copiedHost, setCopiedHost] = useState<string | null>(null);
+  // 同步状态：进行中标记 + 结果反馈文案（短暂显示后自动清除）
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
   // 手动添加表单
   const [mHost, setMHost] = useState('');
   const [mUser, setMUser] = useState('');
@@ -198,6 +201,24 @@ export function Ssh() {
     setMLabel('');
   };
 
+  /** 触发跨设备同步（复用 trigger_sync，一次同步全部含 SSH 目标），显示结果反馈 */
+  const handleSync = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const r = await sshApi.sync();
+      setSyncMsg(
+        r.synced > 0 ? t('ssh:synced', { count: r.synced }) : t('ssh:syncNoDevices'),
+      );
+    } catch {
+      setSyncMsg(t('ssh:syncFailed'));
+    } finally {
+      setSyncing(false);
+      // 反馈文案 3 秒后自动清除
+      setTimeout(() => setSyncMsg(null), 3000);
+    }
+  };
+
   return (
     <div className={styles.page}>
       <div className={styles.container}>
@@ -214,6 +235,18 @@ export function Ssh() {
               ) : null}
             </h1>
             <p className={styles.lead}>{t('ssh:desc')}</p>
+          </div>
+          <div className={styles.headerActions}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<SyncIcon />}
+              onClick={handleSync}
+              loading={syncing}
+            >
+              {syncing ? t('ssh:syncing') : t('ssh:syncConfig')}
+            </Button>
+            {syncMsg ? <span className={styles.syncMsg}>{syncMsg}</span> : null}
           </div>
         </header>
 

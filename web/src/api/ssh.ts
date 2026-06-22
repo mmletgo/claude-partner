@@ -39,4 +39,11 @@ export const sshApi = {
 
   /** 查询本机操作系统（归一化 mac/windows/ubuntu） */
   getOsInfo: () => invoke<OsInfo>('get_os_info'),
+
+  /**
+   * 触发一次跨设备同步（复用后端 trigger_sync，一次同步全部含 SSH 目标）。
+   * 返回 { accepted, synced, note }：synced 为实际成功同步的对端设备数。
+   */
+  sync: () =>
+    invoke<{ accepted: boolean; synced: number; note: string }>('trigger_sync'),
 };

@@ -29,6 +29,17 @@
   flex-wrap: wrap;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.syncMsg {
+  font-size: 13px;
+  color: var(--muted);
+}
+
 .headerText {
   display: flex;
   flex-direction: column;
