@@ -290,6 +290,27 @@ pub fn run() {
                 *state.health_cancel.lock().unwrap() = Some(cancel);
             }
 
+            // M10 健康提醒：按 config.health.enabled 同步开机自启（enabled→注册 LaunchAgent，disabled→移除）。
+            // 简单实现：每次启动按 enabled 强同步。tauri_plugin_autostart 用 macOS LaunchAgent，
+            // enable/disable 内部幂等（重复调用安全）。失败仅记录不阻断启动。
+            {
+                use tauri_plugin_autostart::ManagerExt;
+                let state: tauri::State<'_, AppState> = app.state();
+                let want_autostart = state
+                    .config
+                    .read()
+                    .expect("config 读锁中毒")
+                    .health
+                    .enabled;
+                let autostart = app.autolaunch();
+                if want_autostart {
+                    let _ = autostart.enable();
+                } else {
+                    let _ = autostart.disable();
+                }
+                tracing::info!("开机自启: {}", if want_autostart { "已启用" } else { "已禁用" });
+            }
+
             // M7：创建系统托盘（图标 + 菜单 + 双击显窗），失败仅记录不阻断启动
             if let Err(e) = tray::build_tray(app.handle()) {
                 tracing::error!("系统托盘创建失败: {e}");
