@@ -1,0 +1,90 @@
+/* ── 页面容器 ── */
+.page {
+  padding: var(--space-6) var(--space-8);
+  max-width: 960px;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.pageHeader {
+  margin-bottom: var(--space-6);
+}
+
+.eyebrow {
+  display: block;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  margin-bottom: var(--space-1);
+}
+
+.title {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--fg);
+  margin: 0;
+}
+
+.lead {
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  margin: var(--space-1) 0 0;
+}
+
+/* ── 工具栏 ── */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  flex-shrink: 0;
+}
+
+.unsaved {
+  font-size: var(--text-sm);
+  color: var(--accent, var(--fg-muted));
+  margin-left: var(--space-2);
+}
+
+.charCount {
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  color: var(--fg-muted);
+  margin-left: auto;
+}
+
+/* ── 编辑区 ── */
+.editor {
+  flex: 1;
+  width: 100%;
+  min-height: 300px;
+  padding: var(--space-4);
+  font-family: var(--font-mono);
+  font-size: var(--text-md);
+  line-height: 1.6;
+  color: var(--fg);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  resize: vertical;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.editor:focus {
+  border-color: var(--accent);
+}
+
+.editor::placeholder {
+  color: var(--fg-muted);
+}
+
+/* ── 操作反馈提示 ── */
+.toast {
+  margin-top: var(--space-3);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}

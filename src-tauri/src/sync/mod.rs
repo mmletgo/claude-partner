@@ -8,6 +8,7 @@
 //! Code Logic: vector_clock 与 merger 为纯函数无 IO，配单测保证与 Python 逐字等价；
 //!     engine 持有 AppState，调 prompt_repo / peer_client 完成实际同步。
 
+pub mod claude_md;
 pub mod engine;
 pub mod merger;
 pub mod vector_clock;

@@ -6,6 +6,7 @@
 //! Code Logic: 每个 handler 通过 axum `State<AppState>` 取共享依赖，返回 `axum::Json`。
 //!     字段命名与 Python handler 返回结构一致，确保 Rust 版与旧 Python 版对端可互解析。
 
+pub mod claude_md_sync;
 pub mod health;
 pub mod sync;
 pub mod transfer;

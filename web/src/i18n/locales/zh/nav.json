@@ -3,6 +3,7 @@
   "transfer": "文件传输",
   "prompts": "Prompt 库",
   "scratchpad": "速记本",
+  "claudeMd": "CLAUDE.md",
   "devices": "设备",
   "settings": "设置"
 }

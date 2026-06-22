@@ -22,6 +22,7 @@ import {
   TransferIcon,
   PromptsIcon,
   ScratchpadIcon,
+  ClaudeMdIcon,
   DevicesIcon,
   SettingsIcon,
 } from '../../../lib/icons';
@@ -70,6 +71,7 @@ export function AppShell({ children }: AppShellProps) {
           <NavItem to="/transfer" label={t('nav:transfer')} icon={<TransferIcon />} />
           <NavItem to="/prompts" label={t('nav:prompts')} icon={<PromptsIcon />} />
           <NavItem to="/scratchpad" label={t('nav:scratchpad')} icon={<ScratchpadIcon />} />
+          <NavItem to="/claude-md" label={t('nav:claudeMd')} icon={<ClaudeMdIcon />} />
           <NavItem to="/devices" label={t('nav:devices')} icon={<DevicesIcon />} />
           <NavItem to="/settings" label={t('nav:settings')} icon={<SettingsIcon />} />
         </nav>

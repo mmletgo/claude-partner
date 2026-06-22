@@ -6,8 +6,10 @@
 //! Code Logic: 用 sqlx 0.8 的 SqlitePool（max_connections(1)），
 //!     运行期 `sqlx::query`（非宏）规避编译期 DATABASE_URL 要求。
 
+pub mod claude_md_repo;
 pub mod prompt_repo;
 pub mod transfer_repo;
 
+pub use claude_md_repo::ClaudeMdRepo;
 pub use prompt_repo::PromptRepo;
 pub use transfer_repo::TransferRepo;

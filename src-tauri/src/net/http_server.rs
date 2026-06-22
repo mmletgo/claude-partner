@@ -11,7 +11,7 @@
 //!       AppState.actual_http_port（AtomicU16），tokio::spawn(axum::serve)。
 //!     - body limit 暂设 2MB（M5 chunk 会调整）。
 
-use crate::net::routes::{health, sync, transfer};
+use crate::net::routes::{claude_md_sync, health, sync, transfer};
 use crate::state::AppState;
 use axum::extract::DefaultBodyLimit;
 use axum::routing::{get, post};
@@ -41,6 +41,15 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
         // P2P 同步协议（M4）：对端调 pull/push，字段对照 Python protocol.py
         .route("/api/sync/pull", post(sync::sync_pull))
         .route("/api/sync/push", post(sync::sync_push))
+        // P2P CLAUDE.md 同步协议（user 级 CLAUDE.md 跨设备同步，单例 0/1 条）
+        .route(
+            "/api/sync/claude_md/pull",
+            post(claude_md_sync::claude_md_pull),
+        )
+        .route(
+            "/api/sync/claude_md/push",
+            post(claude_md_sync::claude_md_push),
+        )
         // P2P 文件传输协议（M5）：init/chunk/status，字段 + X-Chunk-Offset header 对照 Python
         .route("/api/transfer/init", post(transfer::transfer_init))
         .route("/api/transfer/chunk/:id", post(transfer::transfer_chunk))

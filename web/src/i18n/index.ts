@@ -21,6 +21,7 @@ import enPrompts from './locales/en/prompts.json';
 import enTransfer from './locales/en/transfer.json';
 import enDevices from './locales/en/devices.json';
 import enScratchpad from './locales/en/scratchpad.json';
+import enClaudeMd from './locales/en/claudeMd.json';
 import enWelcome from './locales/en/welcome.json';
 import enSettings from './locales/en/settings.json';
 
@@ -31,6 +32,7 @@ import zhPrompts from './locales/zh/prompts.json';
 import zhTransfer from './locales/zh/transfer.json';
 import zhDevices from './locales/zh/devices.json';
 import zhScratchpad from './locales/zh/scratchpad.json';
+import zhClaudeMd from './locales/zh/claudeMd.json';
 import zhWelcome from './locales/zh/welcome.json';
 import zhSettings from './locales/zh/settings.json';
 
@@ -65,6 +67,7 @@ export const resources = {
     transfer: enTransfer,
     devices: enDevices,
     scratchpad: enScratchpad,
+    claudeMd: enClaudeMd,
     welcome: enWelcome,
     settings: enSettings,
   },
@@ -76,6 +79,7 @@ export const resources = {
     transfer: zhTransfer,
     devices: zhDevices,
     scratchpad: zhScratchpad,
+    claudeMd: zhClaudeMd,
     welcome: zhWelcome,
     settings: zhSettings,
   },
