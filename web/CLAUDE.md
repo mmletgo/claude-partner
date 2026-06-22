@@ -14,8 +14,8 @@
 ## 架构
 
 - **API 客户端**: `src/api/client.ts` — 基于 `@tauri-apps/api/core` 的 `invoke` 薄封装；Rust 后端 reject 的错误（`{error:"消息"}`）经 `normalizeError` 规整为带 `message` 的 `Error`，无 HTTP status 概念
-- **API 模块**: `src/api/prompts.ts`、`ccHistory.ts`、`claudeMd.ts`、`config.ts`、`devices.ts`、`transfer.ts` — 各资源方法调 `invoke('命令名', args)`，命令名对应 Rust `#[tauri::command]`，参数 camelCase。后端命令随 M1–M8 里程碑逐步落地，详见 `src-tauri/CLAUDE.md`
-- **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理，自定义多标签 + 动态标签筛选）/ CcHistory（从本地 Claude Code session 采集的用户输入 prompt，按项目分组的时间线，可搜索/复制/转存为 Prompt/删除；后端采集与同步见 `src-tauri/CLAUDE.md`「Claude Code 历史采集与同步」节）/ Scratchpad（速记本，纯内存临时记事）/ ClaudeMd（应用内编辑 user 级 `~/.claude/CLAUDE.md`，手动同步到局域网设备）/ Settings / Transfer / Devices
+- **API 模块**: `src/api/prompts.ts`、`ccHistory.ts`、`claudeMd.ts`、`config.ts`、`devices.ts`、`transfer.ts`、`ssh.ts` — 各资源方法调 `invoke('命令名', args)`，命令名对应 Rust `#[tauri::command]`，参数 camelCase。后端命令随 M1–M8 里程碑逐步落地，详见 `src-tauri/CLAUDE.md`
+- **页面**: `src/pages/` — Home（最近 Prompts）/ Prompts（列表管理，自定义多标签 + 动态标签筛选）/ CcHistory（从本地 Claude Code session 采集的用户输入 prompt，按项目分组的时间线，可搜索/复制/转存为 Prompt/删除；后端采集与同步见 `src-tauri/CLAUDE.md`「Claude Code 历史采集与同步」节）/ Scratchpad（速记本，纯内存临时记事）/ ClaudeMd（应用内编辑 user 级 `~/.claude/CLAUDE.md`，手动同步到局域网设备）/ Settings / Transfer / Devices / SSH（局域网设备 SSH 目标管理 + 用户名/端口配置 + 一键复制 ssh 命令 + 三端配置指南，配置跨设备同步）
 - **路由**: `src/App.tsx` — React Router，`/` → Home，`/prompts` → Prompts，`/cc-history` → CcHistory，`/scratchpad` → Scratchpad，`/claude-md` → ClaudeMd 等
 - **区域截图选区页**: `src/pages/Screenshot/Overlay.tsx` — 独立于 AppShell/OnboardingGuard，路由 `/screenshot-overlay?display={i}`，由 Tauri 选区窗口（每屏一个透明置顶窗口）直接加载。**微信截图风格 + 三态状态机**（`mode: idle | selecting | editing`）：
   - **idle**：整屏半透明黑色遮罩；mousedown（左键）进 selecting 开始框选。
@@ -36,7 +36,7 @@
 ## i18n 国际化
 
 - **库**: react-i18next + i18next，初始化在 `src/i18n/index.ts`（`declare module` 类型扩展，`t()` 的 key 编译期校验，拼错即 tsc 报错）
-- **命名空间**: `common`（动作/状态枚举/方向，跨页共享）、`nav`、各页面一个（home/prompts/ccHistory/transfer/devices/scratchpad/claudeMd/welcome/settings）
+- **命名空间**: `common`（动作/状态枚举/方向，跨页共享）、`nav`、各页面一个（home/prompts/ccHistory/transfer/devices/scratchpad/claudeMd/welcome/settings/ssh）
 - **写法约定**（i18next v26 类型硬要求）:
   - 组件内 `const { t } = useTranslation([用到的所有ns数组]);`，所有 `t('ns:key')` **带 ns 前缀**
   - 模块级 helper 接收 `t: TFunction<'ns'>`，内部调用**省略 ns 前缀**

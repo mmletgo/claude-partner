@@ -217,6 +217,17 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **命令层（`commands/claude_md.rs`，lib.rs invoke_handler 注册 2 个）**：`get_claude_md`（reconcile + 读 DB，None 返回空 dto）、`update_claude_md`（写文件 + `increment` vc + upsert）。同步复用 `trigger_sync`（前端 CLAUDE.md 页与 Prompts 页同步按钮都调它，一次同步全部可同步数据）。
 - **建表（lib.rs）**：常量 `CLAUDE_MD_SCHEMA`，`init_db` 内 `TRANSFER_SCHEMA` 后执行。AppState 扩展 `claude_md_repo: Arc<ClaudeMdRepo>`。
 
+## SSH 目标同步已落地行为约定（models/ssh_target.rs + storage/ssh_target_repo.rs + sync/ssh_target.rs + commands/ssh_target.rs + net/routes/ssh_target_sync.rs）
+
+- **功能定位**：SSH 页为每个连接目标（局域网 mDNS 设备 IP + 手填 IP）保存用户名/端口，跨设备同步。复用向量时钟基础设施（直接 use `sync::vector_clock::{compare,merge}`），走独立同步链路（多行，与 cc_history 同构）。前端入口「SSH」页（`/ssh`）。
+- **数据模型（多行，host 主键）**：`ssh_targets` 表 host 作主键（IP/hostname），字段 port（默认 22）/username（空串=用本机默认用户名）/label（可选备注）/device_id/vector_clock（JSON `{device_id:counter}`）/created_at/updated_at/deleted（软删除）。`SshTargetRow`（snake_case，DB/同步）+ `SshTargetDto`（camelCase，前端，仅 host/port/username/label/updatedAt）+ `to_dto`。
+- **同步模式对齐 cc_history**：DB 为唯一数据源（**无文件对账**，与 claude_md 不同）；`should_update_ssh_target`/`wins_concurrent_ssh`/`merge_ssh_target` 策略与 `sync/merger.rs` 逐字一致（严格领先覆盖、并发 LWW、时间戳相等 device_id 字典序 tie-break、向量时钟始终合并、deleted 参与传播）。配 7 单测。
+- **P2P 端点（`net/routes/ssh_target_sync.rs`，snake_case 互通）**：`POST /api/ssh-target/sync/pull`（body `{summaries:[{host,vector_clock}]}` 返回 `{targets:[SshTargetRow]}`，本端有而对端没有 / 本端领先 / 并发的）+ `POST /api/ssh-target/sync/push`（body `{targets:[...]}`，逐条 merge 后 bulk_upsert，返回 `{accepted}`）。`http_server.rs` Router 已注册。`peer_client` 加 `ssh_target_pull`/`ssh_target_push`（失败返回空 Vec/false 不阻断，兼容旧版本无此路由的对端）。
+- **同步挂载（`sync/engine.rs::sync_with_peer`）**：末尾追加 `ssh_target_sync_with_peer`（与 `cc_sync_with_peer` 并列调用），失败 warn 不阻断，**不计入 synced 计数**（计数语义保持「prompts 同步成功」）。单对端流程：health → summaries（含 deleted）→ pull 逐条 merge（仅变化才收集）→ bulk_upsert → 重读全量算补集 push。
+- **命令层（`commands/ssh_target.rs`，lib.rs invoke_handler 注册 4 个）**：`list_ssh_targets`（list → DTO）、`upsert_ssh_target(host,username,port?,label?)`（读旧记录推进 vc：新建 `{device_id:1}`/更新 increment；port 缺省 22；保留 created_at；upsert 落库）、`delete_ssh_target(host)`（软删除 + increment vc）、`get_os_info`（`std::env::consts::OS` 归一化 macos→mac / windows→windows / linux→ubuntu，返回 `{platform, raw}`，供前端按系统渲染配置指南）。
+- **建表（lib.rs）**：常量 `SSH_TARGET_SCHEMA`（host PK + port + username + label + device_id + vector_clock + created_at + updated_at + deleted），`init_db` 内 `CLAUDE_MD_SCHEMA` 之后执行。AppState 扩展 `ssh_target_repo: Arc<SshTargetRepo>`。
+- **仓库（storage/ssh_target_repo.rs）**：`list`（deleted=0）/`get(host)`/`get_all_for_sync`（含 deleted）/`bulk_upsert`（INSERT OR REPLACE）/`upsert`（单条）/`soft_delete`。配 4 单测。运行期 sqlx::query（非宏），vector_clock serde_json 紧凑 JSON，datetime String 透传。
+
 ## 关键约定
 
 - **数据兼容**：直接读写旧 `~/.claude-partner/data.db`，迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。

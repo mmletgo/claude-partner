@@ -77,6 +77,18 @@ Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计
 - 并发冲突采用 Last-Writer-Wins 策略
 - 仅同步 Prompt 数据，不同步文件
 
+### 2.6 SSH 连接目标管理
+
+**描述**：列出局域网设备并提供 SSH 连接配置管理，配置跨设备同步。
+
+**功能点**：
+- 列出局域网 mDNS 自动发现的设备（IP），并支持手动添加任意 IP
+- 为每个连接目标配置用户名与端口（默认 22）
+- 一键复制 ssh 连接命令（端口非 22 自动加 -p，用户名为空时省略）
+- 连接目标配置（host/username/port/label）基于向量时钟跨设备同步
+- 提供 mac/ubuntu/windows 三端开启 SSH 服务的配置指南
+- 按本机操作系统展示对应的连接端（ssh 客户端）用法
+
 ## 3. 非功能需求
 
 ### 3.1 跨平台
@@ -130,6 +142,19 @@ Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计
 | last_seen | datetime | 最后在线时间 |
 | online | bool | 是否在线 |
 
+#### SshTarget
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| host | str | 主键（IP/hostname） |
+| port | int | 端口，默认 22 |
+| username | str | 用户名（空串=用本机默认用户名） |
+| label | str | 备注（可选） |
+| device_id | str | 最后修改设备 ID |
+| vector_clock | dict[str, int] | 向量时钟 |
+| created_at | datetime | 创建时间 |
+| updated_at | datetime | 更新时间 |
+| deleted | bool | 软删除标记 |
+
 ### 4.3 网络协议
 
 #### mDNS 服务
@@ -145,3 +170,5 @@ Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计
 | POST | /api/transfer/init | 发起文件传输 |
 | POST | /api/transfer/chunk/{id} | 发送文件块 |
 | GET | /api/transfer/status/{id} | 查询传输状态 |
+| POST | /api/ssh-target/sync/pull | 拉取 SSH 目标（含向量时钟摘要） |
+| POST | /api/ssh-target/sync/push | 推送 SSH 目标 |
