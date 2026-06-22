@@ -50,6 +50,10 @@
     "checkingHint": "正在检查更新…",
     "cancel": "取消"
   },
+  "permission": {
+    "title": "权限管理",
+    "checking": "正在检查权限状态…"
+  },
   "action": {
     "save": "保存",
     "saving": "保存中…",

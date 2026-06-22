@@ -192,17 +192,28 @@ pub fn open_permission_settings(perm_type: &str) -> bool {
 /// 请求权限（对照 Python `request_screen_capture_access` + `open_permission_settings`）。
 ///
 /// Business Logic:
-///     - screenCapture：先调 CGRequestScreenCaptureAccess（仅「未决定」弹框），再打开设置面板兜底。
-///     - inputMonitoring：无系统 request API，直接打开设置面板。
+///     - screenCapture：先调 CGRequestScreenCaptureAccess（仅「未决定」弹框）；
+///       `open_settings=true`（默认）时再打开设置面板兜底。
+///     - inputMonitoring：无系统 request API；仅 `open_settings=true`（默认）时打开设置面板。
+///     - 启动主动引导按权限类型差异化传参：screenCapture 弹框即可（open_settings=false），
+///       inputMonitoring 只能靠开面板引导（open_settings=true）。
 ///     - 非 macOS：返回 `{ok:true, requested:false, opened:false}`。
-pub fn request_permission(perm_type: &str) -> RequestPermissionResult {
+pub fn request_permission(
+    perm_type: &str,
+    open_settings: Option<bool>,
+) -> RequestPermissionResult {
+    let open_settings = open_settings.unwrap_or(true);
     #[cfg(target_os = "macos")]
     {
         match perm_type {
             "screenCapture" => {
                 // requested=true 仅当系统弹了授权对话框（CGRequest 返回值不代表最终授权）
                 let requested = unsafe { CGRequestScreenCaptureAccess() };
-                let opened = open_permission_settings(perm_type);
+                let opened = if open_settings {
+                    open_permission_settings(perm_type)
+                } else {
+                    false
+                };
                 RequestPermissionResult {
                     ok: check_screen_capture_access(),
                     requested,
@@ -210,7 +221,11 @@ pub fn request_permission(perm_type: &str) -> RequestPermissionResult {
                 }
             }
             "inputMonitoring" => {
-                let opened = open_permission_settings(perm_type);
+                let opened = if open_settings {
+                    open_permission_settings(perm_type)
+                } else {
+                    false
+                };
                 RequestPermissionResult {
                     ok: check_input_monitoring_access(),
                     requested: false,
@@ -226,7 +241,7 @@ pub fn request_permission(perm_type: &str) -> RequestPermissionResult {
     }
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = perm_type;
+        let _ = (perm_type, open_settings);
         RequestPermissionResult {
             ok: true,
             requested: false,

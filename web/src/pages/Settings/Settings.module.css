@@ -108,6 +108,13 @@
   gap: var(--space-4);
 }
 
+/* ── 权限管理 ── */
+.permissionList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
 .shortcutRow {
   display: grid;
   grid-template-columns: 1fr 220px;

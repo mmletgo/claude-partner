@@ -20,9 +20,12 @@ import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Card, Button, Input, Pill } from '@/components/primitives';
+import { PermissionCard } from '@/components/domain';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
-import type { VersionInfo, UpdateCheckResult, UpdateDownloadStatus } from '@/lib/types';
+import { usePermissions } from '@/hooks/usePermissions';
+import { mapPermissions } from '@/lib/permissionEntries';
+import type { VersionInfo, UpdateCheckResult, UpdateDownloadStatus, PermissionType } from '@/lib/types';
 import styles from './Settings.module.css';
 
 /** 单个快捷键字段定义（label/helper 在渲染时按 i18n 解析，这里只存可本地化的 id） */
@@ -124,6 +127,27 @@ export function Settings() {
   const [installing, setInstalling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [choosingDir, setChoosingDir] = useState(false);
+
+  // macOS 权限状态（设置页手动授权入口，持续轮询以反映用户在系统设置的变更）
+  const [tWelcome] = useTranslation('welcome');
+  const { status: permStatus, loading: permLoading, refresh: refreshPermissions } = usePermissions();
+
+  /**
+   * 单项权限「去设置」：请求该项权限（默认弹框 + 开面板）后刷新状态
+   *
+   * @param type 权限类型 screenCapture / inputMonitoring
+   */
+  const handleRequestAccess = useCallback(
+    async (type: PermissionType) => {
+      try {
+        await configApi.requestPermission(type);
+        await refreshPermissions();
+      } catch {
+        // 请求失败静默，轮询会持续反映真实状态
+      }
+    },
+    [refreshPermissions],
+  );
 
   // 计算是否处于"未保存"状态：当前 state 与最近一次已保存/已加载的快照是否一致
   const isDirty = useMemo(() => {
@@ -457,6 +481,31 @@ export function Settings() {
               </div>
               <p className={styles.helper}>{t('settings:basic.receiveDirHelper')}</p>
             </div>
+          </Card.Body>
+        </Card>
+
+        {/* Card: 权限管理（macOS 手动授权入口） */}
+        <Card variant="flat" padding="md">
+          <Card.Header>
+            <h2 className={styles.sectionTitle}>{t('settings:permission.title')}</h2>
+          </Card.Header>
+          <Card.Body padding="md">
+            {permLoading || !permStatus ? (
+              <p className={styles.helper}>{t('settings:permission.checking')}</p>
+            ) : (
+              <div className={styles.permissionList}>
+                {mapPermissions(permStatus, tWelcome).map((p) => (
+                  <PermissionCard
+                    key={p.id}
+                    icon={p.icon}
+                    title={p.title}
+                    description={p.description}
+                    granted={p.granted}
+                    onRequestAccess={() => void handleRequestAccess(p.id as PermissionType)}
+                  />
+                ))}
+              </div>
+            )}
           </Card.Body>
         </Card>
 

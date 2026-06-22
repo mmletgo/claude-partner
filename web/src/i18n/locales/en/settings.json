@@ -50,6 +50,10 @@
     "checkingHint": "Checking for updates…",
     "cancel": "Cancel"
   },
+  "permission": {
+    "title": "Permissions",
+    "checking": "Checking permission status…"
+  },
   "action": {
     "save": "Save",
     "saving": "Saving…",

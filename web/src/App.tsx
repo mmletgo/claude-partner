@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Routes, Route, Navigate, Outlet } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet, useNavigate } from 'react-router-dom';
+import { listen } from '@tauri-apps/api/event';
 import { AppShell } from './components/layout/AppShell';
 import { Home } from './pages/Home';
 import { Transfer } from './pages/Transfer';
@@ -48,7 +49,17 @@ function OnboardingGuard() {
           localStorage.setItem(PERMISSION_ONBOARDED_KEY, '1');
           setState('pass');
         } else {
-          setState('redirect');
+          // 启动主动引导：screenCapture 弹系统框（openSettings=false），
+          // inputMonitoring 只能靠开设置面板引导（openSettings=true）。
+          const reqs: Promise<unknown>[] = [];
+          if (!s.screenCapture.granted) {
+            reqs.push(configApi.requestPermission('screenCapture', false));
+          }
+          if (!s.inputMonitoring.granted) {
+            reqs.push(configApi.requestPermission('inputMonitoring', true));
+          }
+          await Promise.all(reqs);
+          if (!cancelled) setState('redirect');
         }
       } catch {
         if (!cancelled) setState('pass');
@@ -64,24 +75,47 @@ function OnboardingGuard() {
   return <Outlet />;
 }
 
+/**
+ * PermissionNeededListener - 监听后端「截图需要屏幕录制权限」事件,导航到引导页。
+ *
+ * Business Logic: 用户按截图快捷键 / 托盘截图但屏幕录制未授权时,后端已显示主窗口并 emit
+ *   `screenshot:permission-needed`;本组件监听后跳 /welcome 引导授权,避免抓到空白图。
+ *   挂在 <Routes> 同级(BrowserRouter 内),不影响路由渲染,仅副作用监听。
+ */
+function PermissionNeededListener() {
+  const navigate = useNavigate();
+  useEffect(() => {
+    const unlisten = listen('screenshot:permission-needed', () => {
+      navigate('/welcome', { replace: true });
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [navigate]);
+  return null;
+}
+
 export default function App() {
   return (
-    <Routes>
-      {/* 区域截图选区页：独立于 AppShell/OnboardingGuard，由 Tauri 选区窗口直接加载 */}
-      <Route path="/screenshot-overlay" element={<Overlay />} />
-      <Route path="/welcome" element={<Welcome />} />
-      <Route element={<OnboardingGuard />}>
-        <Route element={<AppShell />}>
-          <Route path="/" element={<Home />} />
-          <Route path="/transfer" element={<Transfer />} />
-          <Route path="/prompts" element={<Prompts />} />
-          <Route path="/scratchpad" element={<Scratchpad />} />
-          <Route path="/devices" element={<Devices />} />
-          <Route path="/settings" element={<Settings />} />
-          {isDev && <Route path="/design-system" element={<DesignSystem />} />}
-          <Route path="*" element={<Navigate to="/" replace />} />
+    <>
+      <PermissionNeededListener />
+      <Routes>
+        {/* 区域截图选区页：独立于 AppShell/OnboardingGuard，由 Tauri 选区窗口直接加载 */}
+        <Route path="/screenshot-overlay" element={<Overlay />} />
+        <Route path="/welcome" element={<Welcome />} />
+        <Route element={<OnboardingGuard />}>
+          <Route element={<AppShell />}>
+            <Route path="/" element={<Home />} />
+            <Route path="/transfer" element={<Transfer />} />
+            <Route path="/prompts" element={<Prompts />} />
+            <Route path="/scratchpad" element={<Scratchpad />} />
+            <Route path="/devices" element={<Devices />} />
+            <Route path="/settings" element={<Settings />} />
+            {isDev && <Route path="/design-system" element={<DesignSystem />} />}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
         </Route>
-      </Route>
-    </Routes>
+      </Routes>
+    </>
   );
 }

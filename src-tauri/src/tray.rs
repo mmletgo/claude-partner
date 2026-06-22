@@ -25,8 +25,9 @@ const MENU_QUIT: &str = "tray_quit";
 
 /// 显示主窗口（若已隐藏则 show + set_focus）。
 ///
-/// Business Logic: 托盘「显示主窗口」/ 双击托盘时调用。
-fn show_main_window(app: &AppHandle) {
+/// Business Logic: 托盘「显示主窗口」/ 双击托盘时调用；截图预检发现屏幕录制未授权时复用
+///     本函数唤起主窗口跳转引导页（规则 9 复用，避免 overlay 重复实现显窗逻辑）。
+pub(crate) fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();

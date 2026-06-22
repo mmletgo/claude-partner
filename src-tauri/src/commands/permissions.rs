@@ -20,13 +20,19 @@ pub fn check_permissions() -> Result<permissions::PermissionsStatus, AppError> {
     Ok(permissions::check_permissions())
 }
 
-/// 请求指定类型权限（触发系统弹框 + 打开设置面板）。
+/// 请求指定类型权限（触发系统弹框 / 打开设置面板）。
 ///
-/// Business Logic: 用户在 onboarding/设置页点「去授权」时调用。
-/// Code Logic: type ∈ {"screenCapture","inputMonitoring"}，转发给 `permissions::request_permission`。
+/// Business Logic: 用户在 onboarding/设置页点「去授权」时调用（open_settings 缺省=开面板兜底）；
+///     启动 OnboardingGuard 主动引导时按类型差异化传 open_settings（screenCapture=false 仅弹框、
+///     inputMonitoring=true 开面板）。
+/// Code Logic: type ∈ {"screenCapture","inputMonitoring"}，open_settings 缺省视为 true，
+///     转发给 `permissions::request_permission`。
 #[tauri::command]
-pub fn request_permission(r#type: String) -> Result<serde_json::Value, AppError> {
-    let r = permissions::request_permission(&r#type);
+pub fn request_permission(
+    r#type: String,
+    open_settings: Option<bool>,
+) -> Result<serde_json::Value, AppError> {
+    let r = permissions::request_permission(&r#type, open_settings);
     Ok(serde_json::json!({
         "ok": r.ok,
         "requested": r.requested,

@@ -13,7 +13,7 @@
 //!       位置尺寸用该显示器物理几何（×dpr 后用于 set_position/set_size 的逻辑像素）。
 //!     - `close_all_overlays(app)`：关闭所有 label 前缀 `screenshot-overlay-` 的窗口。
 
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 use crate::error::AppError;
 use crate::screenshot::OVERLAY_LABEL_PREFIX;
@@ -22,10 +22,19 @@ use crate::screenshot::OVERLAY_LABEL_PREFIX;
 ///
 /// Business Logic: 用户触发截图时需在每块屏幕上覆盖一个选区层。窗口透明、置顶、无边框，
 ///     载入 `/screenshot-overlay?display={i}` 页（React 渲染选区框）。
-/// Code Logic: 枚举 `Monitor::all()`，逐个用 `WebviewWindowBuilder` 建窗口；xcap 的 x/y/width/height
-///     是物理像素，需除以该显示器 scale_factor 得逻辑像素后 set_position/set_size
-///     （Tauri 窗口几何按逻辑像素）。url 走 WebviewUrl::App 路径。
+/// Code Logic: 先预检屏幕录制权限，未授权则显示主窗口 + emit `screenshot:permission-needed`
+///     引导授权（不抓空白图）；已授权则枚举 `Monitor::all()`，逐个用 `WebviewWindowBuilder`
+///     建窗口；xcap 的 x/y/width/height 是物理像素，需除以该显示器 scale_factor 得逻辑像素后
+///     set_position/set_size（Tauri 窗口几何按逻辑像素）。url 走 WebviewUrl::App 路径。
 pub fn start_region_capture(app: &AppHandle) -> Result<(), AppError> {
+    // 屏幕录制权限预检：未授权时 xcap 抓到空白图，改为显示主窗口 + emit 引导事件，不抓屏。
+    // （此函数是命令层与 hotkey::screenshot_handler 的唯一入口，一处覆盖两条触发路径。）
+    if !crate::permissions::check_screen_capture_access() {
+        crate::tray::show_main_window(app);
+        let _ = app.emit("screenshot:permission-needed", ());
+        return Ok(());
+    }
+
     let monitors = xcap::Monitor::all()
         .map_err(|e| AppError::Bad(format!("枚举显示器失败: {e}")))?;
 

@@ -16,55 +16,15 @@
  *   - 所有 hooks 集中在组件顶部，early return 之前
  */
 
-import { useCallback, type ReactElement } from 'react';
+import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { Button } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
 import { usePermissions, PERMISSION_ONBOARDED_KEY } from '@/hooks/usePermissions';
-import type { PermissionsStatus } from '@/lib/types';
-import {
-  InfoIcon,
-  KeyboardIcon,
-  ArrowRightIcon,
-} from '@/lib/icons';
+import { ArrowRightIcon } from '@/lib/icons';
+import { mapPermissions } from '@/lib/permissionEntries';
 import styles from './Welcome.module.css';
-
-/** 单条权限条目的展示格式 */
-interface PermissionEntry {
-  id: string;
-  icon: ReactElement;
-  title: string;
-  description: string;
-  granted: boolean;
-}
-
-/**
- * 将后端 PermissionsStatus 转换为 PermissionEntry 列表（屏幕录制 + 输入监控）
- *
- * @param status - 后端返回的权限状态
- * @param t - i18next 翻译函数（welcome ns）
- * @returns 用于渲染的权限条目数组
- */
-function mapPermissions(status: PermissionsStatus, t: TFunction<'welcome'>): PermissionEntry[] {
-  return [
-    {
-      id: 'screenCapture',
-      icon: <InfoIcon />,
-      title: t('permission.screenRecording.title'),
-      description: t('permission.screenRecording.description'),
-      granted: status.screenCapture.granted,
-    },
-    {
-      id: 'inputMonitoring',
-      icon: <KeyboardIcon />,
-      title: t('permission.inputMonitoring.title'),
-      description: t('permission.inputMonitoring.description'),
-      granted: status.inputMonitoring.granted,
-    },
-  ];
-}
 
 /**
  * Welcome 页面根组件

@@ -71,14 +71,14 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## M6 已落地行为约定（移植自 Python screenshot/，对照 overlay.py + capture.py）
 
-- **抓屏本体**：`xcap = "0.4"` 跨平台抓屏。`Monitor::all()` 枚举显示器，顺序单进程内稳定；`monitor.capture_image()` 返回 `image::RgbaImage`（**物理像素**，Retina 即逻辑 ×scale_factor）。`monitor.x()/y()/width()/height()` 均为物理像素、`scale_factor()` 返回 `f32`。抓屏前不做权限预检（M7 实现 check_permissions），macOS 未授权屏幕录制返回空白图——由 M7 兜底。
+- **抓屏本体**：`xcap = "0.4"` 跨平台抓屏。`Monitor::all()` 枚举显示器，顺序单进程内稳定；`monitor.capture_image()` 返回 `image::RgbaImage`（**物理像素**，Retina 即逻辑 ×scale_factor）。`monitor.x()/y()/width()/height()` 均为物理像素、`scale_factor()` 返回 `f32`。抓屏入口（`overlay::start_region_capture`）已做屏幕录制权限预检：未授权则显示主窗口 + emit `screenshot:permission-needed` 引导授权，不抓空白图（见 M7 权限节 + 前端 `PermissionNeededListener`）。
 - **选区覆盖窗口（每屏一个）**：macOS 不允许单窗口跨屏（与 Python 一致），`overlay::start_region_capture` 枚举 `Monitor::all()`，**每个显示器建一个** `WebviewWindowBuilder` 窗口，`decorations(false).transparent(true).always_on_top(true).focused(true).skip_taskbar(true).resizable(false).accept_first_mouse(true)`，label = `screenshot-overlay-{i}`，url = `/screenshot-overlay?display={i}`。窗口几何对齐该显示器：xcap 物理几何 ÷ scale_factor → 逻辑像素喂 `set_position/set_size`（Tauri 窗口几何按逻辑像素）。`close_all_overlays` 按前缀 `screenshot-overlay-` 关闭全部。
 - **透明窗口前置条件**：`transparent(true)` 需 `tauri` crate 开 `macos-private-api` feature + `tauri.conf.json` 设 `app.macOSPrivateApi: true`（两者必须匹配，否则 build.rs 报 allowlist 错误）。
 - **DPR 坐标转换**：前端 React Overlay 把逻辑像素坐标 + `window.devicePixelRatio` 传给 Rust；`capture::crop_and_copy` 用 `(v as f64 * dpr).round()` 换算物理像素 rect 后 `image::imageops::crop_imm` 裁剪（image 0.25 的 crop_imm 直接返回 `SubImage`，非 Result，`.to_image()` 拷出独立 RgbaImage）。裁剪前 clamp 到帧边界防越界。与 Python `int(selection.x() * dpr)` 语义一致。
 - **剪贴板写入**：`arboard = "3"`（features=image-data）直接写图片，比 tauri-plugin-clipboard-manager 更直接。`ImageData{width,height,bytes: RGBA 连续缓冲.into()}` → `Clipboard::new()?.set_image()`。RGBA bytes 由 `RgbaImage::into_raw()` 提供（已连续）。对照 Python `clipboard.setPixmap`。
 - **背景图**：`capture::snapshot_to_png_base64` 把整屏帧 PNG 编码 + base64（`data:image/png;base64,...`）返回前端 Overlay 作全屏 `<img>` 背景，让用户"像在直接框选屏幕"（overlay 本身透明）。前端 Overlay onMount（窗口已显示后）调 `get_display_snapshot`。
 - **命令层**（`commands/screenshot.rs`，lib.rs invoke_handler 注册 4 个）：
-  - `start_region_capture(app)` → 每屏建 overlay 窗口
+  - `start_region_capture(app)` → 先预检屏幕录制权限，未授权则显示主窗口 + emit `screenshot:permission-needed` 引导（不抓屏）；已授权则每屏建 overlay 窗口
   - `get_display_snapshot(display) -> String` → 该屏 PNG base64 背景
   - `crop_and_copy(app, display, x, y, w, h, dpr)` → 裁剪写剪贴板 + emit `region-capture:result` {ok:true} + 关全部 overlay
   - `cancel_region_capture(app)` → emit `region-capture:result` {cancelled:true} + 关全部 overlay
@@ -90,7 +90,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **macOS 权限 FFI（permissions/mod.rs，对照 Python permissions.py 四函数）**：
   - `check_screen_capture_access`：FFI 调 `CGPreflightScreenCaptureAccess`（10.15+ 符号）。
   - `check_input_monitoring_access`：用 `CGEventTapCreate(kCGHIDEventTap + kCGHeadInsertEventTap + kCGEventTapOptionListenOnly + kCGEventMaskBit(kCGEventKeyDown))` 探测，返回 NULL 即无权限；探测成功立即 `CFMachPortInvalidate` 释放。
-  - `request_permission(type)`：screenCapture 调 `CGRequestScreenCaptureAccess`（仅「未决定」弹框，requested=true）+ `open` 打开 Privacy_ScreenCapture 面板；inputMonitoring 无系统 request API，直接打开 Privacy_ListenEvent 面板。
+  - `request_permission(type, open_settings?)`：screenCapture 调 `CGRequestScreenCaptureAccess`（仅「未决定」弹框，requested=true），`open_settings`=true（默认）才 `open` Privacy_ScreenCapture 面板；inputMonitoring 无系统 request API，`open_settings`=true 才 open Privacy_ListenEvent 面板。启动主动引导差异化传参：screenCapture 弹框即可（open_settings=false）、inputMonitoring 只能靠开面板（true）。
   - **不显式 `#[link]`**：CoreGraphics 作为 macOS framework 已被 Tauri 依赖链（core-graphics/xcap）通过 `-framework CoreGraphics` 链接，符号在链接期已可见；写 `#[link(name="CoreGraphics",kind="dylib")]` 反而会找 `libCoreGraphics.dylib` 报 `library not found`。
   - **非 macOS 一律 granted=true**（对照 Python 非打包行为；Tauri 不区分打包/开发，故开发态 macOS 也真实检测，与 Python 仅打包检测略有差异——开发期需先授权截图/输入监控才能用）。
   - `check_permissions() -> {screenCapture:{granted}, inputMonitoring:{granted}}`；`request_permission` 返回 `{ok, requested, opened}`，与前端 `PermissionsStatus`/`PermissionType` 约定一致。

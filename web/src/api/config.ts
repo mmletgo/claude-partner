@@ -59,7 +59,11 @@ export const configApi = {
   /** 检查 macOS 权限状态（屏幕录制、输入监控）（M7 实现） */
   permissions: () => invoke<PermissionsStatus>('check_permissions'),
 
-  /** 触发权限请求（弹系统授权框 + 打开设置面板）（M7 实现） */
-  requestPermission: (type: PermissionType) =>
-    invoke<PermissionRequestResult>('request_permission', { type }),
+  /**
+   * 触发权限请求（M7 实现）。
+   * @param openSettings 是否打开系统设置面板兜底；缺省 true。启动主动引导时按类型差异化传：
+   *   screenCapture 传 false（仅弹系统框）、inputMonitoring 传 true（它只能靠开面板引导）。
+   */
+  requestPermission: (type: PermissionType, openSettings?: boolean) =>
+    invoke<PermissionRequestResult>('request_permission', { type, openSettings }),
 };
