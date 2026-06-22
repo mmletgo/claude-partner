@@ -66,7 +66,7 @@ function redraw(
 
 /**
  * 监听 snapshot/annotations 变化重绘 canvas。
- * canvas 物理缓冲由调用方设置（canvas.width = logicalW*dpr），本 hook 只负责绘制内容。
+ * hook 内部按 logicalW*dpr 设置 canvas 物理缓冲（canvas.width/height）并 ctx.scale(dpr)，调用方只传逻辑宽高 + dpr。
  */
 export function useAnnotationCanvas(
   canvasRef: RefObject<HTMLCanvasElement | null>,

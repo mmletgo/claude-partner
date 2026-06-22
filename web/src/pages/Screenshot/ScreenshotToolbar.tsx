@@ -12,7 +12,12 @@ import styles from './ScreenshotToolbar.module.css';
 export type ToolKind = 'rect' | 'arrow';
 
 /** 预设 6 色板（红/黄/绿/蓝/白/黑），固定线宽由 canvas 绘制层控制 */
+// COLORS 与 COLOR_NAMES 索引对齐，供颜色按钮 title 显示中文名。允许从组件文件导出常量（与 Toolbar 内聚），抑制 react-refresh only-export-components。
+// eslint-disable-next-line react-refresh/only-export-components
 export const COLORS = ['#FF3B30', '#FFCC00', '#34C759', '#007AFF', '#FFFFFF', '#000000'];
+/** 颜色中文名（与 COLORS 同序），供按钮 title 显示 */
+// eslint-disable-next-line react-refresh/only-export-components
+export const COLOR_NAMES = ['红', '黄', '绿', '蓝', '白', '黑'];
 
 interface ScreenshotToolbarProps {
   tool: ToolKind;
@@ -53,14 +58,14 @@ export function ScreenshotToolbar({
       </button>
       <span className={styles.divider} />
       <div className={styles.colors}>
-        {COLORS.map((c) => (
+        {COLORS.map((c, i) => (
           <button
             key={c}
             type="button"
             className={color === c ? styles.colorBtnActive : styles.colorBtn}
             style={{ backgroundColor: c }}
             onClick={() => onColorChange(c)}
-            title={c}
+            title={COLOR_NAMES[i]}
           />
         ))}
       </div>

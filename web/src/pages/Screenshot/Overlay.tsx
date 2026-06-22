@@ -51,7 +51,8 @@ export function Overlay() {
   const draggingRef = useRef<boolean>(false);
   const selectionRef = useRef<Selection | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const dprRef = useRef<number>(window.devicePixelRatio || 1);
+  // DPR 在 overlay 窗口生命周期内为常量，用 lazy-init state 取代 ref（避免 render 阶段读 ref.current 触发 react-hooks/refs）
+  const [dpr] = useState<number>(() => window.devicePixelRatio || 1);
 
   // 强制 html/body 透明（覆盖全局 reset.css 的 var(--bg)，防 transparent 窗口白屏）
   useEffect(() => {
@@ -91,7 +92,7 @@ export function Overlay() {
     draft ? [...annotations, draft] : annotations,
     selection?.w ?? 0,
     selection?.h ?? 0,
-    dprRef.current,
+    dpr,
   );
 
   // === selecting 阶段：框选 ===
@@ -143,7 +144,7 @@ export function Overlay() {
         y: Math.round(sel.y),
         w: Math.round(sel.w),
         h: Math.round(sel.h),
-        dpr: dprRef.current,
+        dpr,
       });
       const img = new Image();
       await new Promise<void>((resolve, reject) => {
@@ -160,7 +161,7 @@ export function Overlay() {
     } finally {
       setBusy(false);
     }
-  }, [cancel]);
+  }, [cancel, dpr]);
 
   const onMouseUpSelect = useCallback(() => {
     if (!draggingRef.current) return;
@@ -246,41 +247,57 @@ export function Overlay() {
       {!hiding &&
         (mode === 'editing' && snapshot ? (
           <>
-            {/* 选区外四块遮罩 */}
-            <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${selection!.y}px)` }} />
-            <div className={styles.mask} style={{ left: 0, top: `${selection!.y + selection!.h}px`, right: 0, bottom: 0 }} />
-            <div className={styles.mask} style={{ left: 0, top: `${selection!.y}px`, width: `${selection!.x}px`, height: `${selection!.h}px` }} />
-            <div className={styles.mask} style={{ left: `${selection!.x + selection!.w}px`, top: `${selection!.y}px`, right: 0, height: `${selection!.h}px` }} />
-            {/* canvas：选区内，画快照 + 标注 */}
-            <canvas
-              ref={canvasRef}
-              className={styles.canvas}
-              style={{ left: selection!.x, top: selection!.y, width: selection!.w, height: selection!.h }}
-              onMouseDown={onCanvasMouseDown}
-              onMouseMove={onCanvasMouseMove}
-              onMouseUp={onCanvasMouseUp}
-            />
-            {/* 工具条 */}
-            <div className={styles.toolbarWrap} style={toolbarStyle}>
-              <ScreenshotToolbar
-                tool={tool}
-                onToolChange={setTool}
-                color={color}
-                onColorChange={setColor}
-                onUndo={undo}
-                onConfirm={confirm}
-                onCancel={() => void cancel()}
-              />
-            </div>
+            {/* 此分支仅在 editing 且有快照时进入（用户已 enterEditing，selection 必非空），取一次收敛非空断言 */}
+            {(() => {
+              const sel = selection!;
+              return (
+                <>
+                  {/* 选区外四块遮罩 */}
+                  <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${sel.y}px)` }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y + sel.h}px`, right: 0, bottom: 0 }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y}px`, width: `${sel.x}px`, height: `${sel.h}px` }} />
+                  <div className={styles.mask} style={{ left: `${sel.x + sel.w}px`, top: `${sel.y}px`, right: 0, height: `${sel.h}px` }} />
+                  {/* canvas：选区内，画快照 + 标注 */}
+                  <canvas
+                    ref={canvasRef}
+                    className={styles.canvas}
+                    style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }}
+                    onMouseDown={onCanvasMouseDown}
+                    onMouseMove={onCanvasMouseMove}
+                    onMouseUp={onCanvasMouseUp}
+                  />
+                  {/* 工具条 */}
+                  <div className={styles.toolbarWrap} style={toolbarStyle}>
+                    <ScreenshotToolbar
+                      tool={tool}
+                      onToolChange={setTool}
+                      color={color}
+                      onColorChange={setColor}
+                      onUndo={undo}
+                      onConfirm={confirm}
+                      onCancel={() => void cancel()}
+                    />
+                  </div>
+                </>
+              );
+            })()}
           </>
         ) : showSelection ? (
           <>
-            {/* selecting：四块遮罩 + 蓝虚线边框 */}
-            <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${selection!.y}px)` }} />
-            <div className={styles.mask} style={{ left: 0, top: `${selection!.y + selection!.h}px`, right: 0, bottom: 0 }} />
-            <div className={styles.mask} style={{ left: 0, top: `${selection!.y}px`, width: `${selection!.x}px`, height: `${selection!.h}px` }} />
-            <div className={styles.mask} style={{ left: `${selection!.x + selection!.w}px`, top: `${selection!.y}px`, right: 0, height: `${selection!.h}px` }} />
-            <div className={styles.selection} style={{ left: selection!.x, top: selection!.y, width: selection!.w, height: selection!.h }} />
+            {/* showSelection 已保证 selection 非空（w>0 && h>0），取一次收敛非空断言 */}
+            {(() => {
+              const sel = selection!;
+              return (
+                <>
+                  {/* selecting：四块遮罩 + 蓝虚线边框 */}
+                  <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${sel.y}px)` }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y + sel.h}px`, right: 0, bottom: 0 }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y}px`, width: `${sel.x}px`, height: `${sel.h}px` }} />
+                  <div className={styles.mask} style={{ left: `${sel.x + sel.w}px`, top: `${sel.y}px`, right: 0, height: `${sel.h}px` }} />
+                  <div className={styles.selection} style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }} />
+                </>
+              );
+            })()}
           </>
         ) : (
           /* idle：整屏遮罩 */

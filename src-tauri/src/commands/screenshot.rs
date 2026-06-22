@@ -16,6 +16,10 @@ use crate::error::AppError;
 use crate::screenshot::{capture, overlay};
 
 /// 启动区域截图：为每个显示器创建选区窗口。
+///
+/// Business Logic: 用户按截图快捷键 / 点托盘「截图」/ 点前端按钮，要在每块屏上拉起透明置顶的选区窗口让用户框选。
+///     若屏幕录制权限未授权，不抓空白图，而是显示主窗口 + emit `screenshot:permission-needed` 引导用户授权。
+/// Code Logic: 委托 `overlay::start_region_capture(&app)`（内部先预检权限，未授权引导；已授权则枚举 Monitor::all 每屏建 overlay 窗口）。
 #[tauri::command]
 pub async fn start_region_capture(app: AppHandle) -> Result<(), AppError> {
     overlay::start_region_capture(&app)
@@ -52,6 +56,9 @@ pub async fn save_clipboard_image(app: AppHandle, data_url: String) -> Result<()
 }
 
 /// 取消区域截图。
+///
+/// Business Logic: 用户在选区窗口按 ESC / 右键 / 点工具条「取消」，或框选选区过小，要中止本次截图流程并关闭全部 overlay。
+/// Code Logic: emit `region-capture:result` {cancelled:true}（前端据此清状态）→ `overlay::close_all_overlays`（按 label 前缀 `screenshot-overlay-` 关闭所有选区窗口）。
 #[tauri::command]
 pub async fn cancel_region_capture(app: AppHandle) -> Result<(), AppError> {
     let _ = app.emit("region-capture:result", json!({ "cancelled": true }));
