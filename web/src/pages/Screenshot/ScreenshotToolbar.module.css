@@ -1,0 +1,81 @@
+/* 工具条容器：水平排列、圆角、半透明深色底（保证任意桌面背景下可见） */
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  background-color: rgba(30, 30, 30, 0.92);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  user-select: none;
+}
+
+.toolBtn,
+.toolBtnActive,
+.confirmBtn,
+.cancelBtn {
+  min-width: 30px;
+  height: 30px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background-color: transparent;
+  color: #fff;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.toolBtn:hover,
+.toolBtnActive {
+  background-color: rgba(255, 255, 255, 0.12);
+}
+
+.toolBtnActive {
+  background-color: rgba(0, 122, 255, 0.6);
+}
+
+.divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.colors {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.colorBtn,
+.colorBtnActive {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.colorBtnActive {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(0, 122, 255, 0.8);
+}
+
+.confirmBtn {
+  color: #34c759;
+  font-size: 18px;
+}
+
+.confirmBtn:hover {
+  background-color: rgba(52, 199, 89, 0.2);
+}
+
+.cancelBtn {
+  color: #ff3b30;
+  font-size: 16px;
+}
+
+.cancelBtn:hover {
+  background-color: rgba(255, 59, 48, 0.2);
+}
