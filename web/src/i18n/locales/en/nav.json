@@ -4,6 +4,7 @@
   "prompts": "Prompts",
   "ccHistory": "Claude History",
   "scratchpad": "Scratchpad",
+  "claudeMd": "CLAUDE.md",
   "devices": "Devices",
   "settings": "Settings"
 }

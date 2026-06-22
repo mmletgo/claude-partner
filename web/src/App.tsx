@@ -7,6 +7,7 @@ import { Transfer } from './pages/Transfer';
 import { Prompts } from './pages/Prompts';
 import { CcHistory } from './pages/CcHistory';
 import { Scratchpad } from './pages/Scratchpad';
+import { ClaudeMd } from './pages/ClaudeMd';
 import { Devices } from './pages/Devices';
 import { Settings } from './pages/Settings';
 import { Welcome } from './pages/Welcome';
@@ -111,6 +112,7 @@ export default function App() {
             <Route path="/prompts" element={<Prompts />} />
             <Route path="/cc-history" element={<CcHistory />} />
             <Route path="/scratchpad" element={<Scratchpad />} />
+            <Route path="/claude-md" element={<ClaudeMd />} />
             <Route path="/devices" element={<Devices />} />
             <Route path="/settings" element={<Settings />} />
             {isDev && <Route path="/design-system" element={<DesignSystem />} />}

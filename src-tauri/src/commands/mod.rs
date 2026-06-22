@@ -7,6 +7,7 @@
 //!     所有命令返回 `Result<T, AppError>`，错误序列化为 `{"error": "..."}` 给前端。
 
 pub mod cc_history;
+pub mod claude_md;
 pub mod config;
 pub mod devices;
 pub mod permissions;

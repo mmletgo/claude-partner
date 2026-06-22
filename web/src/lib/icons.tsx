@@ -213,3 +213,11 @@ export const HistoryIcon = ({ size, ...rest }: IconProps) => (
     <path d="M8 5v3.2l2 1.3" />
   </svg>
 );
+
+export const ClaudeMdIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M3.5 2h6L12.5 5v8.5a.5.5 0 0 1-.5.5h-8.5a.5.5 0 0 1-.5-.5v-11a.5.5 0 0 1 .5-.5Z" />
+    <path d="M9 2v3.5h3.5" />
+    <path d="M6 8h4M6 10h4M6 12h2" />
+  </svg>
+);

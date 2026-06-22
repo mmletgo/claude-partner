@@ -1,0 +1,14 @@
+{
+  "eyebrow": "设置",
+  "title": "CLAUDE.md 配置",
+  "desc": "编辑你的 user 级全局指令文件。保存后会写入 ~/.claude/CLAUDE.md，并可同步到局域网内的其他设备。",
+  "save": "保存",
+  "sync": "同步",
+  "saving": "保存中…",
+  "syncing": "同步中…",
+  "saved": "已保存。",
+  "synced": "已同步。",
+  "unsaved": "有未保存的修改",
+  "charCount": "{{n}} 字",
+  "placeholder": "在这里写下你的全局指令…"
+}

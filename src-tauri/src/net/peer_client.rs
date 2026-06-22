@@ -44,6 +44,20 @@ struct CcSyncPushResp {
     accepted: u64,
 }
 
+/// claude_md/pull 响应体（字段名对照 ClaudeMdPullResp 的 `{claude_md: Option<ClaudeMdRow>}`）。
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeMdPullResp {
+    #[serde(default)]
+    claude_md: Option<crate::models::claude_md::ClaudeMdRow>,
+}
+
+/// claude_md/push 响应体（字段名对照 ClaudeMdPushResp 的 `{accepted: bool}`）。
+#[derive(Debug, serde::Deserialize)]
+struct ClaudeMdPushResp {
+    #[serde(default)]
+    accepted: bool,
+}
+
 /// 对端 HTTP 客户端，封装 reqwest::Client。
 ///
 /// Business Logic: 所有对端调用复用同一 Client（内部连接池），提升效率。
@@ -153,6 +167,74 @@ impl PeerClient {
                 false
             }
         }
+    }
+
+    /// CLAUDE.md 同步 pull：向对端发送本端向量时钟，获取对端认为本端需要的 CLAUDE.md 版本。
+    ///
+    /// Business Logic: CLAUDE.md 同步第一步——把本端向量时钟发给对端，对端比对后返回本端需要的
+    ///     CLAUDE.md 完整数据（对端领先/并发时下发）。与 sync_pull 对称，只是单例退化为 0/1 条。
+    ///
+    /// Code Logic: POST `{base_url}/api/sync/claude_md/pull`，请求体 `{vector_clock: local_vc}`，
+    ///     期望响应 `{claude_md: Option<ClaudeMdRow>}`。HTTP 非 200 或网络/解析异常返回 Err
+    ///     （调用方据此记日志并视 remote=None，不阻断后续 push）。
+    pub async fn claude_md_pull(
+        &self,
+        base_url: &str,
+        local_vc: &std::collections::HashMap<String, u64>,
+    ) -> Result<Option<crate::models::claude_md::ClaudeMdRow>, crate::error::AppError> {
+        let url = format!("{base_url}/api/sync/claude_md/pull");
+        let body = serde_json::json!({ "vector_clock": local_vc });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::error::AppError::generic(format!("claude_md_pull 请求失败: {e}")))?;
+        if resp.status().as_u16() != 200 {
+            return Err(crate::error::AppError::generic(format!(
+                "claude_md_pull 失败: HTTP {}",
+                resp.status()
+            )));
+        }
+        let data = resp.json::<ClaudeMdPullResp>().await.map_err(|e| {
+            crate::error::AppError::generic(format!("claude_md_pull 响应解析失败: {e}"))
+        })?;
+        Ok(data.claude_md)
+    }
+
+    /// CLAUDE.md 同步 push：将本端的 CLAUDE.md 版本推送给对端。
+    ///
+    /// Business Logic: CLAUDE.md 同步第二步——把本端独有或领先的版本推过去，对端 merge 后落库。
+    ///     与 sync_push 对称。
+    ///
+    /// Code Logic: POST `{base_url}/api/sync/claude_md/push`，请求体 `{claude_md: row}`，
+    ///     期望响应 `{accepted: bool}`（对端实际落库为 true）。返回 accepted。
+    ///     HTTP 非 200 或网络/解析异常返回 Err（调用方记日志，不阻断）。
+    pub async fn claude_md_push(
+        &self,
+        base_url: &str,
+        row: &crate::models::claude_md::ClaudeMdRow,
+    ) -> Result<bool, crate::error::AppError> {
+        let url = format!("{base_url}/api/sync/claude_md/push");
+        let body = serde_json::json!({ "claude_md": row });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::error::AppError::generic(format!("claude_md_push 请求失败: {e}")))?;
+        if resp.status().as_u16() != 200 {
+            return Err(crate::error::AppError::generic(format!(
+                "claude_md_push 失败: HTTP {}",
+                resp.status()
+            )));
+        }
+        let data = resp.json::<ClaudeMdPushResp>().await.map_err(|e| {
+            crate::error::AppError::generic(format!("claude_md_push 响应解析失败: {e}"))
+        })?;
+        Ok(data.accepted)
     }
 
     /// 文件传输初始化：向对端发送文件元数据，获取 accepted 与 resume_offset。

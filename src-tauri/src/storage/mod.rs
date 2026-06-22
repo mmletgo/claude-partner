@@ -7,9 +7,11 @@
 //!     运行期 `sqlx::query`（非宏）规避编译期 DATABASE_URL 要求。
 
 pub mod cc_history_repo;
+pub mod claude_md_repo;
 pub mod prompt_repo;
 pub mod transfer_repo;
 
 pub use cc_history_repo::ClaudeHistoryRepo;
+pub use claude_md_repo::ClaudeMdRepo;
 pub use prompt_repo::PromptRepo;
 pub use transfer_repo::TransferRepo;

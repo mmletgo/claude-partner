@@ -18,10 +18,11 @@
 //! 3. Pull：发 summaries 给对端，拿回对端认为本端需要的 prompts，逐条 merge_prompt 后落库；
 //! 4. Push：重新取本端 summary，找出本端有而对端 pull 未返回的（即对端可能没有的），推送过去。
 
+use crate::models::claude_md::{ClaudeMdRow, CLAUDE_MD_ID};
 use crate::models::prompt::PromptRow;
 use crate::state::AppState;
 use crate::sync::merger::merge_prompt;
-use crate::sync::vector_clock::compare;
+use crate::sync::vector_clock::{compare, ClockOrder};
 use std::collections::HashMap;
 
 /// 触发全局同步的返回结构（字段对照 Python `/api/sync` 的 `{accepted, synced, note}`）。
@@ -60,6 +61,12 @@ pub async fn trigger_sync(state: &AppState) -> SyncResult {
 
     tracing::info!("开始与 {} 个设备同步", devices.len());
 
+    // 同步前先把应用外编辑（用户可能在 Claude Code/编辑器里直接改了 ~/.claude/CLAUDE.md）
+    // 纳入向量时钟，避免用过期 DB 版本覆盖用户最新改动。失败仅告警，不阻断同步。
+    if let Err(e) = crate::sync::claude_md::reconcile_from_file(state).await {
+        tracing::warn!("CLAUDE.md 文件对账失败，跳过本次文件纳入: {e}");
+    }
+
     let mut synced_count: u64 = 0;
     for device in devices {
         // 逐对端同步，失败不阻断其他对端（对照 Python sync_all 的 try/except）
@@ -70,6 +77,11 @@ pub async fn trigger_sync(state: &AppState) -> SyncResult {
             Err(e) => {
                 tracing::error!("与设备 {} 同步异常: {}", device.name, e);
             }
+        }
+        // CLAUDE.md 同步挂在与 prompts 同步同一循环里：prompts 同步之后追加，
+        // 失败仅告警不阻断其他对端，也不影响 synced 计数（计数语义保持"prompts 同步成功"不变）。
+        if let Err(e) = sync_claude_md_with_peer(state, &device).await {
+            tracing::warn!("与设备 {} CLAUDE.md 同步异常: {e}", device.name);
         }
     }
 
@@ -213,6 +225,104 @@ async fn sync_with_peer(
 
     // 同步链路末尾追加 Claude Code 历史同步（独立链路，失败仅 warn 不影响 prompts 同步计数）
     let _ = crate::cc::engine::cc_sync_with_peer(state, device).await;
+
+    Ok(())
+}
+
+/// 与单个对端执行 CLAUDE.md 双向同步。
+///
+/// Business Logic: 确保 user 级 CLAUDE.md 双方一致。先 pull 拉回对端版本合并落库，
+///     再据比较结果决定是否把本地版本 push 过去。对照 sync_with_peer 的结构，只是单例退化为 0/1 条。
+///
+/// Code Logic:
+///     1. 构造 base_url（与 sync_with_peer 一致：`http://{host}:{port}`）；
+///     2. health 检查，不可达记日志后 return Ok(())；
+///     3. 读本地 claude_md，None 视为空行（content/updated_at 空串、空向量时钟）；
+///     4. pull：拉回对端版本，错误（含 404 旧版本对端无此路由）记 warn 并视 remote=None 继续；
+///     5. 若 remote 存在：merge_claude_md 合并，与本地有差异则落库 + 写文件（错误记日志）；
+///     6. 重读本地（pull 合并可能已改 DB），None 视空行；
+///     7. 决策是否 push：对端无数据且本地非空，或本地相对对端领先/并发 → push（错误记日志）。
+async fn sync_claude_md_with_peer(
+    state: &AppState,
+    device: &crate::models::device::Device,
+) -> Result<(), String> {
+    let base_url = device.base_url();
+
+    // 1/2. 健康检查（与 sync_with_peer 一致：不可达直接返回，不算同步成功也不算失败）
+    if !state.peer_client.health(&device.host, device.port).await {
+        tracing::debug!("设备 {} 不可达，跳过 CLAUDE.md 同步", device.name);
+        return Ok(());
+    }
+
+    // 3. 读本地 CLAUDE.md（None 视为空行）
+    let local = state
+        .claude_md_repo
+        .get()
+        .await
+        .map_err(|e| format!("读取本地 CLAUDE.md 失败: {e}"))?;
+    let local_row = local.unwrap_or_else(|| ClaudeMdRow {
+        id: CLAUDE_MD_ID.to_string(),
+        content: String::new(),
+        updated_at: String::new(),
+        device_id: state.device_id.as_str().to_string(),
+        vector_clock: HashMap::new(),
+    });
+
+    // 4. Pull：拉回对端版本。错误（含 404 旧版本对端未实现此路由）→ warn + 视 None 继续。
+    let remote = match state.peer_client.claude_md_pull(&base_url, &local_row.vector_clock).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("从 {} claude_md_pull 失败（可能是旧版本对端）: {e}", device.name);
+            None
+        }
+    };
+
+    // 5. 若对端有版本：合并落库 + 写文件（错误记日志不阻断）
+    if let Some(remote_row) = &remote {
+        let merged = crate::sync::claude_md::merge_claude_md(&local_row, remote_row);
+        if merged.content != local_row.content || merged.vector_clock != local_row.vector_clock {
+            if let Err(e) = state.claude_md_repo.upsert(&merged).await {
+                tracing::warn!("向本地落库合并后的 CLAUDE.md 失败: {e}");
+            } else if let Err(e) =
+                crate::sync::claude_md::write_file_if_changed(&merged.content).await
+            {
+                tracing::warn!("写回 CLAUDE.md 文件失败: {e}");
+            }
+        }
+    }
+
+    // 6. 重读本地（pull 合并可能已改 DB）
+    let local_after = state
+        .claude_md_repo
+        .get()
+        .await
+        .map_err(|e| format!("重读本地 CLAUDE.md 失败: {e}"))?;
+    let local_after_row = local_after.unwrap_or_else(|| ClaudeMdRow {
+        id: CLAUDE_MD_ID.to_string(),
+        content: String::new(),
+        updated_at: String::new(),
+        device_id: state.device_id.as_str().to_string(),
+        vector_clock: HashMap::new(),
+    });
+
+    // 7. 决策是否 push：对端无数据且本地非空；或本地相对对端领先/并发。
+    let remote_vc = remote
+        .as_ref()
+        .map(|r| r.vector_clock.clone())
+        .unwrap_or_default();
+    let relation = compare(&local_after_row.vector_clock, &remote_vc);
+    let need_push = (remote.is_none() && !local_after_row.content.is_empty())
+        || matches!(relation, ClockOrder::After | ClockOrder::Concurrent);
+
+    if need_push {
+        if let Err(e) = state
+            .peer_client
+            .claude_md_push(&base_url, &local_after_row)
+            .await
+        {
+            tracing::warn!("向 {} claude_md_push 失败: {e}", device.name);
+        }
+    }
 
     Ok(())
 }

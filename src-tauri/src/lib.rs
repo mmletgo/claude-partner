@@ -32,13 +32,14 @@ use std::sync::atomic::AtomicU16;
 use std::sync::{Arc, Mutex, RwLock};
 
 use crate::commands::{
-    cc_history as cc_history_cmd, config as config_cmd, devices as device_cmd,
+    cc_history as cc_history_cmd, claude_md as claude_md_cmd, config as config_cmd,
+    devices as device_cmd,
     permissions as permissions_cmd, prompts as prompt_cmd, screenshot as screenshot_cmd,
     sync as sync_cmd, transfer as transfer_cmd, updater as updater_cmd,
 };
 use crate::net::{discovery, http_server, peer_client::PeerClient};
 use crate::state::AppState;
-use crate::storage::{ClaudeHistoryRepo, PromptRepo, TransferRepo};
+use crate::storage::{ClaudeHistoryRepo, ClaudeMdRepo, PromptRepo, TransferRepo};
 use crate::transfer::registry::TransferRegistry;
 use tauri::Manager;
 
@@ -110,6 +111,14 @@ const CC_SCAN_STATE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS claude_history_sc
 const CC_INDEXES: &str = "CREATE INDEX IF NOT EXISTS idx_ch_proj ON claude_history(project_path, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ch_dev ON claude_history(device_id)";
 
+/// user 级 CLAUDE.md 单例表（全表仅一行，id 恒为 "claude_md"）。
+const CLAUDE_MD_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS claude_md (
+    id TEXT PRIMARY KEY,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    vector_clock TEXT NOT NULL
+)";
 /// 初始化数据库连接池：开启 WAL，手动建表，返回 SqlitePool。
 ///
 /// Business Logic: 单连接语义与 Python aiosqlite 一致（max_connections(1)）。
@@ -137,6 +146,8 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
         }
         sqlx::query(s).execute(&pool).await?;
     }
+    // user 级 CLAUDE.md 单例表
+    sqlx::query(CLAUDE_MD_SCHEMA).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -180,11 +191,13 @@ pub fn run() {
                 let prompt_repo = Arc::new(PromptRepo::new(pool.clone()));
                 let transfer_repo = Arc::new(TransferRepo::new(pool.clone()));
                 let cc_history_repo = Arc::new(ClaudeHistoryRepo::new(pool.clone()));
+                let claude_md_repo = Arc::new(ClaudeMdRepo::new(pool.clone()));
                 let state = AppState {
                     config: Arc::new(RwLock::new(config)),
                     db: pool,
                     prompt_repo,
                     transfer_repo,
+                    claude_md_repo,
                     device_id: Arc::new(device_id),
                     devices: Arc::new(RwLock::new(std::collections::HashMap::new())),
                     actual_http_port: Arc::new(AtomicU16::new(0)),
@@ -266,6 +279,8 @@ pub fn run() {
             device_cmd::list_devices,
             device_cmd::get_local_device,
             sync_cmd::trigger_sync,
+            claude_md_cmd::get_claude_md,
+            claude_md_cmd::update_claude_md,
             transfer_cmd::list_transfers,
             transfer_cmd::send_transfer,
             transfer_cmd::cancel_transfer,

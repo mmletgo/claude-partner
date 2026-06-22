@@ -4,6 +4,7 @@
   "prompts": "Prompt 库",
   "ccHistory": "Claude 历史",
   "scratchpad": "速记本",
+  "claudeMd": "CLAUDE.md",
   "devices": "设备",
   "settings": "设置"
 }

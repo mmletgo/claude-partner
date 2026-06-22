@@ -1,0 +1,14 @@
+{
+  "eyebrow": "SETTINGS",
+  "title": "CLAUDE.md",
+  "desc": "Edit your user-level global instructions. Saving writes to ~/.claude/CLAUDE.md and can be synced to other devices on your local network.",
+  "save": "Save",
+  "sync": "Sync",
+  "saving": "Saving…",
+  "syncing": "Syncing…",
+  "saved": "Saved.",
+  "synced": "Synced.",
+  "unsaved": "Unsaved changes",
+  "charCount": "{{n}} chars",
+  "placeholder": "Write your global instructions here…"
+}

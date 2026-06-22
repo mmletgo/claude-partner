@@ -195,6 +195,18 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **建表（lib.rs）**：常量 `CC_HISTORY_SCHEMA`/`CC_SCAN_STATE_SCHEMA`/`CC_INDEXES`（idx_ch_proj=project_path+occurred_at DESC、idx_ch_dev=device_id），在 init_db 内 TRANSFER_SCHEMA 之后执行。CC_INDEXES 含多条语句，sqlx 默认不开多语句，按 `;` split 逐条 execute。
 - **AppState 扩展**：`cc_history_repo: Arc<ClaudeHistoryRepo>`、`cc_collector_cancel: Arc<Mutex<Option<CancellationToken>>>`。
 
+## user 级 CLAUDE.md 编辑与同步已落地行为约定（models/claude_md.rs + storage/claude_md_repo.rs + sync/claude_md.rs + commands/claude_md.rs + net/routes/claude_md_sync.rs）
+
+- **功能定位**：应用内编辑 user 级 `~/.claude/CLAUDE.md`（全局指令文件），并跨设备同步。复用向量时钟基础设施（直接 use `sync::vector_clock::{compare,merge,increment}`），走独立同步链路（单例退化为 0/1 条）。前端入口「CLAUDE.md」页面（`/claude-md`）。
+- **数据模型（单例）**：`claude_md` 表全表仅一行，id 恒为 `"claude_md"`（`CLAUDE_MD_ID` 常量）。字段 `content`/`updated_at`/`device_id`/`vector_clock`（JSON `{device_id:counter}`），**无 deleted**（单例无删除语义，只有空/非空）。`ClaudeMdRow`（snake_case，DB/同步）+ `ClaudeMdDto`（camelCase，前端）+ `to_dto`。
+- **文件 = source of truth，DB = 同步元数据镜像**：DB 存 `content + vector_clock + updated_at + device_id`，`~/.claude/CLAUDE.md` 是 content 的文件镜像，通过对账保证一致。
+- **文件↔DB 对账（`sync/claude_md.rs::reconcile_from_file`）**：触发时机——`get_claude_md` 开头（进页面/刷新）、`trigger_sync` 对端遍历前（一次）。三分支：DB 无行→用文件内容初始化（空文件→空 vc；非空→`{device_id:1}`）；内容一致→no-op；不一致（应用外编辑）→以文件为准 + `increment` 本设备 vc（使对端感知）。`update_claude_md` **不对账**（刚写过文件）。
+- **合并（`sync/claude_md.rs::merge_claude_md`）**：策略与 `merger.rs` 一致——`compare(remote,local)` 为 `After`→remote 胜，`Before`/`Equal`→local 胜，`Concurrent`→LWW（`updated_at` 更晚胜，相等用 device_id 字典序 tie-break）。胜出方内容 + 合并后的 vc。配 6 单测。
+- **P2P 端点（`net/routes/claude_md_sync.rs`，snake_case 互通）**：`POST /api/sync/claude_md/pull`（body `{vector_clock}`，返回 `{claude_md: Option<ClaudeMdRow>}`，本地领先/并发时下发）；`POST /api/sync/claude_md/push`（body `{claude_md}`，merge 后落库+写文件，返回 `{accepted}`）。`http_server.rs` 已注册。`peer_client` 加 `claude_md_pull`/`claude_md_push`（失败返回 `Err`，调用方 `tracing::warn` 视 `None` 继续，兼容旧版本无此路由的对端）。
+- **同步挂载（`sync/engine.rs::trigger_sync`）**：对端遍历前 `reconcile_from_file` 一次；每个对端 `sync_with_peer`（prompts）后追加 `sync_claude_md_with_peer`（失败 warn 不阻断，**不影响 synced 计数**，计数语义保持"prompts 同步成功"）。单对端流程：health → pull → merge 落库+写文件 → 重读本地 → `compare` 决策 push（对端无数据且本地非空，或本地领先/并发）。
+- **命令层（`commands/claude_md.rs`，lib.rs invoke_handler 注册 2 个）**：`get_claude_md`（reconcile + 读 DB，None 返回空 dto）、`update_claude_md`（写文件 + `increment` vc + upsert）。同步复用 `trigger_sync`（前端 CLAUDE.md 页与 Prompts 页同步按钮都调它，一次同步全部可同步数据）。
+- **建表（lib.rs）**：常量 `CLAUDE_MD_SCHEMA`，`init_db` 内 `TRANSFER_SCHEMA` 后执行。AppState 扩展 `claude_md_repo: Arc<ClaudeMdRepo>`。
+
 ## 关键约定
 
 - **数据兼容**：直接读写旧 `~/.claude-partner/data.db`，迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
