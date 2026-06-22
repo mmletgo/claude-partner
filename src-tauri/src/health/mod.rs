@@ -7,4 +7,5 @@
 //! - daemon 入口 `start_health_daemon`(Task 6 实现)
 
 pub mod monitor;
+pub mod reminder;
 pub mod state;
