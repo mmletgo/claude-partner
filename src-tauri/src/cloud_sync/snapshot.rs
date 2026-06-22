@@ -7,24 +7,27 @@
 //!       - prompts/<id>.json        → PromptRow（含 deleted，照写以传播软删除）
 //!       - claude_md/claude_md.json → ClaudeMdRow（单例）
 //!       - claude_history/<id>.json → ClaudeHistoryRow（含 deleted）
+//!       - ssh_targets/<host>.json → SshTargetRow（含 deleted）
 //!
 //! Code Logic（这个模块做什么）:
 //!     - `id_to_filename` / `filename_to_id`：id → 安全文件名的可逆映射（hex 编码，
 //!       对任意 id round-trip 一致，规避 Windows 非法字符 / 路径分隔符问题）。
 //!     - `import_to_db`：扫描工作区 JSON → merge_* 进本地（仅变化才落库）→ 返回统计。
-//!     - `export_from_db`：清空 prompts/ 与 claude_history/ → 本地全量写回 → 返回统计。
+//!     - `export_from_db`：清空 prompts/ 与 claude_history/ 与 ssh_targets/ → 本地全量写回 → 返回统计。
 //!
-//! 复用既有 merge_prompt / merge_claude_md / merge_cc_history，冲突解决与局域网同步完全一致。
+//! 复用既有 merge_prompt / merge_claude_md / merge_cc_history / merge_ssh_target，冲突解决与局域网同步完全一致。
 
 use crate::cc::merger::merge_cc_history;
 use crate::cc::models::ClaudeHistoryRow;
 use crate::error::AppError;
 use crate::models::claude_md::ClaudeMdRow;
 use crate::models::prompt::PromptRow;
+use crate::models::ssh_target::SshTargetRow;
 use crate::state::AppState;
 use crate::sync::claude_md::merge_claude_md;
 use crate::sync::claude_md::{reconcile_from_file, write_file_if_changed};
 use crate::sync::merger::merge_prompt;
+use crate::sync::ssh_target::merge_ssh_target;
 use std::fs;
 use std::path::Path;
 
@@ -34,6 +37,8 @@ const PROMPTS_DIR: &str = "prompts";
 const CLAUDE_MD_DIR: &str = "claude_md";
 /// 工作区下 CC 历史目录名。
 const CC_HISTORY_DIR: &str = "claude_history";
+/// 工作区下 SSH 目标目录名。
+const SSH_TARGETS_DIR: &str = "ssh_targets";
 /// CLAUDE.md 单例文件名（id_to_filename 不适用，固定名）。
 const CLAUDE_MD_FILE: &str = "claude_md.json";
 
@@ -46,6 +51,8 @@ pub struct ImportStats {
     pub claude_md_updated: bool,
     /// CC 历史实际合并产生变化的条数。
     pub cc_history: u64,
+    /// SSH 目标实际合并产生变化的条数。
+    pub ssh_targets: u64,
 }
 
 /// export 统计：各类型写出文件数。
@@ -57,6 +64,19 @@ pub struct ExportStats {
     pub claude_md: bool,
     /// CC 历史写出文件数（含 deleted）。
     pub cc_history: u64,
+    /// SSH 目标写出文件数（含 deleted）。
+    pub ssh_targets: u64,
+}
+
+impl ExportStats {
+    /// prompts + cc_history + ssh_targets 的总写出数（不含 claude_md 单例）。
+    ///
+    /// Business Logic: engine 统计 pushed 条数时需对多类型条目求和，集中在此避免散落的
+    ///     `last_export.prompts + last_export.cc_history` 漏加新类型。
+    /// Code Logic: 三字段相加（claude_md 是 bool 单例，单独由调用方判断）。
+    pub fn total(&self) -> u64 {
+        self.prompts + self.cc_history + self.ssh_targets
+    }
 }
 
 /// 把任意 id 编码为文件系统安全的文件名（不含扩展名）。
@@ -119,6 +139,20 @@ fn cc_history_changed(merged: &ClaudeHistoryRow, local: &ClaudeHistoryRow) -> bo
         || merged.deleted != local.deleted
 }
 
+/// 判断两条 SshTargetRow 是否在同步相关字段上有差异。
+///
+/// Business Logic: import 合并后只有当结果在同步相关字段（向量时钟/时间戳/可编辑内容/软删除）
+///     上与本地不同才需落库，省 IO。字段集与局域网 ssh_target_sync_with_peer 的差异判定一致。
+/// Code Logic: 逐字段 != 比对（含 port/label 等 SSH 特有可编辑字段）。
+fn ssh_target_changed(merged: &SshTargetRow, local: &SshTargetRow) -> bool {
+    merged.vector_clock != local.vector_clock
+        || merged.updated_at != local.updated_at
+        || merged.username != local.username
+        || merged.port != local.port
+        || merged.label != local.label
+        || merged.deleted != local.deleted
+}
+
 /// 把工作区 JSON 文件 import 进本地 DB（与本地合并，仅变化落库）。
 ///
 /// Business Logic: pull 后工作区有远端版本，需逐条与本地合并，使本地吸收远端变化，
@@ -131,7 +165,8 @@ fn cc_history_changed(merged: &ClaudeHistoryRow, local: &ClaudeHistoryRow) -> bo
 ///    仅 prompt_changed 才收集；批量 bulk_upsert；
 /// 3. claude_md/claude_md.json 若存在：merge_claude_md，变化则 upsert + write_file_if_changed；
 /// 4. claude_history/*.json：merge_cc_history，变化才 bulk_upsert；
-/// 5. 返回 ImportStats。
+/// 5. ssh_targets/*.json：merge_ssh_target，变化才 bulk_upsert（host 为主键，文件名 hex 还原）；
+/// 6. 返回 ImportStats。
 pub async fn import_to_db(
     state: &AppState,
     workdir: &Path,
@@ -277,21 +312,75 @@ pub async fn import_to_db(
         }
     }
 
+    // 5. SSH 目标 import（host 为主键，文件名 hex 还原）
+    let ssh_dir = workdir.join(SSH_TARGETS_DIR);
+    if ssh_dir.is_dir() {
+        let mut to_upsert: Vec<SshTargetRow> = Vec::new();
+        for entry in fs::read_dir(&ssh_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let stem = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s,
+                None => continue,
+            };
+            let host = filename_to_id(stem);
+            let text = match fs::read_to_string(&path) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("cloud_sync import: 读取 {} 失败（跳过）: {e}", path.display());
+                    continue;
+                }
+            };
+            let remote: SshTargetRow = match serde_json::from_str(&text) {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::warn!("cloud_sync import: 解析 {} 失败（跳过）: {e}", path.display());
+                    continue;
+                }
+            };
+            // 文件名还原的 host 与文件内容 host 应一致；以还原 host 为准做本地查找
+            let lookup_host = if remote.host == host { host.clone() } else { host };
+            match state.ssh_target_repo.get(&lookup_host).await? {
+                None => {
+                    // 本地没有 → 直接接收远端版本（确保 host 用还原值）
+                    let mut r = remote;
+                    r.host = lookup_host;
+                    to_upsert.push(r);
+                }
+                Some(local) => {
+                    let merged = merge_ssh_target(&local, &remote);
+                    if ssh_target_changed(&merged, &local) {
+                        to_upsert.push(merged);
+                    }
+                }
+            }
+        }
+        if !to_upsert.is_empty() {
+            let n = to_upsert.len() as u64;
+            state.ssh_target_repo.bulk_upsert(&to_upsert).await?;
+            stats.ssh_targets = n;
+        }
+    }
+
     Ok(stats)
 }
 
 /// 把本地权威数据 export 写回工作区（覆盖式，含软删除）。
 ///
 /// Business Logic: import 合并后本地是最新权威，需完整写回工作区供 commit/push。
-///     每次全量覆盖（先清空 prompts/ 与 claude_history/ 目录内容，保留目录本身），
+///     每次全量覆盖（先清空 prompts/ 与 claude_history/ 与 ssh_targets/ 目录内容，保留目录本身），
 ///     确保工作区与本地一一对应，不会残留本地已删除但远端曾有的文件。
 ///
 /// Code Logic:
-/// 1. 清空 prompts/ 与 claude_history/ 目录内容（保留目录）；
+/// 1. 清空 prompts/ 与 claude_history/ 与 ssh_targets/ 目录内容（保留目录）；
 /// 2. prompt_repo.get_all_for_sync() 全量（含 deleted）逐条写 prompts/<id_to_filename>.json；
 /// 3. claude_md_repo.get() 若 Some 写 claude_md/claude_md.json（无则不写）；
 /// 4. cc_history 全量写 claude_history/<id_to_filename>.json；
-/// 5. 返回 ExportStats。
+/// 5. ssh_targets 全量写 ssh_targets/<id_to_filename(host)>.json；
+/// 6. 返回 ExportStats。
 pub async fn export_from_db(
     state: &AppState,
     workdir: &Path,
@@ -301,13 +390,16 @@ pub async fn export_from_db(
     let prompts_dir = workdir.join(PROMPTS_DIR);
     let claude_md_dir = workdir.join(CLAUDE_MD_DIR);
     let cc_dir = workdir.join(CC_HISTORY_DIR);
+    let ssh_dir = workdir.join(SSH_TARGETS_DIR);
 
-    // 确保目录存在 + 清空 prompts 与 cc 历史（保留目录）
+    // 确保目录存在 + 清空 prompts 与 cc 历史与 ssh_targets（保留目录）
     fs::create_dir_all(&prompts_dir)?;
     fs::create_dir_all(&claude_md_dir)?;
     fs::create_dir_all(&cc_dir)?;
+    fs::create_dir_all(&ssh_dir)?;
     clear_dir_contents(&prompts_dir)?;
     clear_dir_contents(&cc_dir)?;
+    clear_dir_contents(&ssh_dir)?;
 
     // prompts 全量写出（含 deleted）
     let all_prompts = state.prompt_repo.get_all_for_sync().await?;
@@ -340,6 +432,16 @@ pub async fn export_from_db(
         fs::write(&path, text)?;
     }
     stats.cc_history = all_cc.len() as u64;
+
+    // SSH 目标全量写出（含 deleted，host 为主键）
+    let all_ssh = state.ssh_target_repo.get_all_for_sync().await?;
+    for s in &all_ssh {
+        let fname = format!("{}.json", id_to_filename(&s.host));
+        let path = ssh_dir.join(&fname);
+        let text = serde_json::to_string_pretty(s)?;
+        fs::write(&path, text)?;
+    }
+    stats.ssh_targets = all_ssh.len() as u64;
 
     Ok(stats)
 }

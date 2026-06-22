@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 pub struct CloudSyncResult {
     /// 整体是否成功。
     pub ok: bool,
-    /// 本次 import 实际落库的条数总和（prompts + cc 历史；CLAUDE.md 计 0 或 1）。
+    /// 本次 import 实际落库的条数总和（prompts + cc 历史 + ssh 目标；CLAUDE.md 计 0 或 1）。
     pub pulled: u64,
     /// 本次 export 写出的文件数总和。
     pub pushed: u64,
@@ -145,14 +145,15 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                 };
             }
         };
-        total_pulled += import_stats.prompts + import_stats.cc_history;
+        total_pulled += import_stats.prompts + import_stats.cc_history + import_stats.ssh_targets;
         if import_stats.claude_md_updated {
             total_pulled += 1;
         }
         tracing::info!(
-            "cloud_sync: import 完成 prompts={} cc={} claude_md_updated={}",
+            "cloud_sync: import 完成 prompts={} cc={} ssh={} claude_md_updated={}",
             import_stats.prompts,
             import_stats.cc_history,
+            import_stats.ssh_targets,
             import_stats.claude_md_updated
         );
 
@@ -170,9 +171,10 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
             }
         };
         tracing::info!(
-            "cloud_sync: export 完成 prompts={} cc={} claude_md={}",
+            "cloud_sync: export 完成 prompts={} cc={} ssh={} claude_md={}",
             last_export.prompts,
             last_export.cc_history,
+            last_export.ssh_targets,
             last_export.claude_md
         );
 
@@ -188,7 +190,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                 return CloudSyncResult {
                     ok: false,
                     pulled: total_pulled,
-                    pushed: last_export.prompts + last_export.cc_history,
+                    pushed: last_export.total(),
                     note: format!("提交工作区失败: {e}"),
                     synced_at: chrono::Utc::now().to_rfc3339(),
                 };
@@ -198,7 +200,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
         if !committed {
             // 无本地改动 → 无需 push，视为成功（pull 已吸收远端变化）
             tracing::info!("cloud_sync: 无本地改动，跳过 push");
-            let pushed = last_export.prompts + last_export.cc_history;
+            let pushed = last_export.total();
             return CloudSyncResult {
                 ok: true,
                 pulled: total_pulled,
@@ -212,7 +214,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
         match git_cli::push(&git, &workdir, &branch).await {
             Ok(()) => {
                 tracing::info!("cloud_sync: push 成功");
-                let pushed = last_export.prompts + last_export.cc_history;
+                let pushed = last_export.total();
                 return CloudSyncResult {
                     ok: true,
                     pulled: total_pulled,
@@ -229,7 +231,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                 return CloudSyncResult {
                     ok: false,
                     pulled: total_pulled,
-                    pushed: last_export.prompts + last_export.cc_history,
+                    pushed: last_export.total(),
                     note: "推送被远端拒绝（其他设备刚更新），重试后仍未成功，请稍后再试".to_string(),
                     synced_at: chrono::Utc::now().to_rfc3339(),
                 };
@@ -238,7 +240,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                 return CloudSyncResult {
                     ok: false,
                     pulled: total_pulled,
-                    pushed: last_export.prompts + last_export.cc_history,
+                    pushed: last_export.total(),
                     note: format!("推送失败: {e}"),
                     synced_at: chrono::Utc::now().to_rfc3339(),
                 };
