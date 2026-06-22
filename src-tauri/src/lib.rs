@@ -119,6 +119,19 @@ const CLAUDE_MD_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS claude_md (
     device_id TEXT NOT NULL,
     vector_clock TEXT NOT NULL
 )";
+
+/// 健康提醒 - 每分钟活动采样表（分钟级 unix 时间戳为主键，同分钟重采覆盖）。
+const HEALTH_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS activity_records (
+    ts INTEGER PRIMARY KEY,
+    is_active INTEGER NOT NULL,
+    process_name TEXT,
+    window_title TEXT
+)";
+
+/// 健康提醒 - 喝水打卡表（以时间戳为主键，INSERT OR REPLACE 幂等）。
+const WATER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS water_records (
+    ts INTEGER PRIMARY KEY
+)";
 /// 初始化数据库连接池：开启 WAL，手动建表，返回 SqlitePool。
 ///
 /// Business Logic: 单连接语义与 Python aiosqlite 一致（max_connections(1)）。
@@ -148,6 +161,9 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
     }
     // user 级 CLAUDE.md 单例表
     sqlx::query(CLAUDE_MD_SCHEMA).execute(&pool).await?;
+    // 健康提醒：活动采样表 + 喝水记录表（在 CLAUDE_MD_SCHEMA 之后执行）
+    sqlx::query(HEALTH_SCHEMA).execute(&pool).await?;
+    sqlx::query(WATER_SCHEMA).execute(&pool).await?;
     Ok(pool)
 }
 

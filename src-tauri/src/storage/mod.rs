@@ -8,10 +8,12 @@
 
 pub mod cc_history_repo;
 pub mod claude_md_repo;
+pub mod health_repo;
 pub mod prompt_repo;
 pub mod transfer_repo;
 
 pub use cc_history_repo::ClaudeHistoryRepo;
 pub use claude_md_repo::ClaudeMdRepo;
+pub use health_repo::{ActivityRecord, HealthRepo};
 pub use prompt_repo::PromptRepo;
 pub use transfer_repo::TransferRepo;
