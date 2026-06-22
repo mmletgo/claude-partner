@@ -11,7 +11,7 @@
  */
 import { useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { invoke } from '@tauri-apps/api/core';
+import { healthApi } from '@/api/health';
 
 export default function HealthOverlay() {
   const { t } = useTranslation(['health', 'common']);
@@ -28,15 +28,15 @@ export default function HealthOverlay() {
   const close = async (snoozeMin?: number) => {
     try {
       if (snoozeMin) {
-        await invoke('snooze_reminder', { minutes: snoozeMin });
+        await healthApi.snooze(snoozeMin);
       } else {
-        await invoke('skip_reminder');
+        await healthApi.skip();
       }
     } catch (e) {
       // 即使推迟/跳过失败也要关闭遮罩,避免困住用户。
       console.error('健康提醒操作失败', e);
     }
-    await invoke('close_health_overlay');
+    await healthApi.closeOverlay();
   };
 
   return (

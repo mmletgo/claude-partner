@@ -51,4 +51,7 @@ export const healthApi = {
   /** 读取自 sinceTs 以来的活动明细(app 排行 + 24 小时分布) */
   getDetail: (sinceTs: number) =>
     invoke<ActivityDetail>('get_activity_detail', { sinceTs }),
+
+  /** 关闭全部健康提醒全屏遮罩窗口(每屏一个透明置顶窗口) */
+  closeOverlay: () => invoke<void>('close_health_overlay'),
 };
