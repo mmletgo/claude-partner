@@ -28,3 +28,21 @@
   pointer-events: none;
   box-sizing: border-box;
 }
+
+/* editing：选区内的 canvas（画桌面快照 + 标注） */
+.canvas {
+  position: absolute;
+  cursor: crosshair;
+}
+
+/* 工具条外层定位容器（居中于选区宽度） */
+.toolbarWrap {
+  position: absolute;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.toolbarWrap > * {
+  pointer-events: auto;
+}

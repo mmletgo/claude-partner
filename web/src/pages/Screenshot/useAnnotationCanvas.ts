@@ -69,7 +69,7 @@ function redraw(
  * canvas 物理缓冲由调用方设置（canvas.width = logicalW*dpr），本 hook 只负责绘制内容。
  */
 export function useAnnotationCanvas(
-  canvasRef: RefObject<HTMLCanvasElement>,
+  canvasRef: RefObject<HTMLCanvasElement | null>,
   snapshot: HTMLImageElement | null,
   annotations: Annotation[],
   logicalW: number,
