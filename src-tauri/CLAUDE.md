@@ -75,14 +75,24 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   > **单位（已订正，实测）**：macOS 上 `monitor.x()/y()/width()/height()` **均为逻辑点**（实测 MBP Retina raw_w=1470、scale=2，非物理面板 3024）；只有 `capture_image()` 返回物理像素帧。窗口几何（位置+尺寸）直接用逻辑点，不除 scale。抓屏入口（`overlay::start_region_capture`）已做屏幕录制权限预检：未授权则显示主窗口 + emit `screenshot:permission-needed` 引导授权，不抓空白图（见 M7 权限节 + 前端 `PermissionNeededListener`）。
 - **选区覆盖窗口（每屏一个）**：macOS 不允许单窗口跨屏（与 Python 一致），`overlay::start_region_capture` 枚举 `Monitor::all()`，**每个显示器建一个** `WebviewWindowBuilder` 窗口，`decorations(false).transparent(true).always_on_top(true).focused(true).skip_taskbar(true).resizable(false).accept_first_mouse(true)`，label = `screenshot-overlay-{i}`，url = `/screenshot-overlay?display={i}`。窗口几何：位置/尺寸均直接用 `monitor.x()/y()/width()/height()`（均为逻辑点）喂 `set_position/set_size`（Tauri 窗口几何按逻辑像素），**不除 scale**。曾误把 x/y 和 w/h 当物理像素除 scale（位置错位、scale>1 屏尺寸减半→遮罩缩略，均已修）；建窗口时 `tracing::info!` 打印每屏 raw/logical 几何便于核对。`close_all_overlays` 按前缀 `screenshot-overlay-` 关闭全部。
 - **透明窗口前置条件**：`transparent(true)` 需 `tauri` crate 开 `macos-private-api` feature + `tauri.conf.json` 设 `app.macOSPrivateApi: true`（两者必须匹配，否则 build.rs 报 allowlist 错误）。
-- **DPR 坐标转换**：前端 React Overlay 把逻辑像素坐标 + `window.devicePixelRatio` 传给 Rust；`capture::crop_and_copy` 用 `(v as f64 * dpr).round()` 换算物理像素 rect 后 `image::imageops::crop_imm` 裁剪（image 0.25 的 crop_imm 直接返回 `SubImage`，非 Result，`.to_image()` 拷出独立 RgbaImage）。裁剪前 clamp 到帧边界防越界。与 Python `int(selection.x() * dpr)` 语义一致。
+- **DPR 坐标转换**：前端 React Overlay 把逻辑像素坐标 + `window.devicePixelRatio` 传给 Rust；`capture::clamp_crop_rect`（纯函数，单测覆盖）用 `(v as f64 * dpr).round()` 把逻辑坐标换算成物理像素 rect，逐边 clamp 到帧边界（`px>=img_w` 收到 `img_w-1`、`px+pw>img_w` 截断、宽/高为 0 返回 `Bad` 错误），防 `crop_imm` 越界 panic。与 Python `int(selection.x() * dpr)` 语义一致。
+- **capture.rs 函数职责（编辑工具条流程下抓屏与剪贴板写入解耦）**：
+  - `capture_monitor(display_index)`：抓整屏物理像素 RgbaImage。
+  - `clamp_crop_rect(...)`：逻辑坐标 ×dpr → 物理 rect，clamp 到帧边界（纯函数，配 3 个单测：正常 / 越界截断 / 空选区 Err）。
+  - `capture_region(...)`：`capture_monitor` + `clamp_crop_rect` + `crop_imm(...).to_image()`，返回选区 RgbaImage（供编辑模式 canvas 取该选区的纯桌面底图）。
+  - `region_to_png_base64(...)`：`capture_region` → PNG 编码到 `Cursor<Vec<u8>>` → base64 → 拼成 `data:image/png;base64,...`（前端编辑模式 canvas drawImage 背景）。
+  - `save_clipboard_from_png(data_url)`：剥 `data:image/png;base64,` 前缀 → base64 解码 → `image::load_from_memory` → `to_rgba8()` → `arboard::ImageData` → `Clipboard::new()?.set_image()`。写的是**前端 canvas 合成的「桌面选区 + 标注」PNG**，所见即所得（Rust 不画标注）。
 - **剪贴板写入**：`arboard = "3"`（features=image-data）直接写图片，比 tauri-plugin-clipboard-manager 更直接。`ImageData{width,height,bytes: RGBA 连续缓冲.into()}` → `Clipboard::new()?.set_image()`。RGBA bytes 由 `RgbaImage::into_raw()` 提供（已连续）。对照 Python `clipboard.setPixmap`。
 - **真透明架构（macOS 原生风格）**：选区窗口 `transparent(true)` 真透出真实桌面（**不用桌面截图背景**），故已移除 `snapshot_to_png_base64`/`get_display_snapshot`。前端 Overlay onMount 强制 html/body `background:transparent`，覆盖全局 `reset.css` 的 `body { background: var(--bg) }`（主题底色，浅色=#f5f4ed），否则 transparent 窗口会显示主题底色而非透出桌面（=白屏）。框选时四块半透明遮罩盖选区外挖洞，选区内透出桌面清晰。
-- **命令层**（`commands/screenshot.rs`，lib.rs invoke_handler 注册 3 个）：
+- **命令层**（`commands/screenshot.rs`，lib.rs invoke_handler 注册 4 个，**编辑工具条流程已替换旧的 crop_and_copy 单步流程**）：
   - `start_region_capture(app)` → 先预检屏幕录制权限，未授权则显示主窗口 + emit `screenshot:permission-needed` 引导（不抓屏）；已授权则每屏建 overlay 窗口
-  - `crop_and_copy(app, display, x, y, w, h, dpr)` → 裁剪写剪贴板 + emit `region-capture:result` {ok:true} + 关全部 overlay
+  - `get_region_snapshot(display, x, y, w, h, dpr) → PNG base64 data URL`：抓该屏**纯桌面选区**（前端在 invoke 前已 `hiding=true` 隐藏遮罩/边框，故抓到的是纯桌面），供编辑模式 canvas 作背景底图（调 `capture::region_to_png_base64`）
+  - `save_clipboard_image(app, dataUrl)` → 把前端 canvas 合成的「桌面选区 + 标注」PNG data URL 解码写剪贴板（`capture::save_clipboard_from_png`）+ emit `region-capture:result` {ok:true} + `close_all_overlays`
   - `cancel_region_capture(app)` → emit `region-capture:result` {cancelled:true} + 关全部 overlay
-- **前端选区页**：`web/src/pages/Screenshot/Overlay.tsx`，独立于 AppShell/OnboardingGuard，App.tsx 加路由 `/screenshot-overlay`（顶层，不在守卫内）。**微信截图风格**：进入即整屏半透明黑色遮罩（每屏 overlay 各盖一层），框选时退化为四块遮罩（选区外暗、选区内挖洞清晰）+ 蓝色虚线选区边框；窗口真透明（onMount 强制 html/body background:transparent 覆盖主题底色防白屏）；mouseup 有效选区（宽高≥10）先 `hiding=true` 隐藏遮罩/选区边框 + 双 rAF 等渲染透明，再调 crop_and_copy 抓纯桌面裁剪写剪贴板（避免把蓝色边框/遮罩裁入最终截图）；选区过小 cancel；ESC/右键 → cancel。hooks 在 early return 之前（项目规则 20）。
+- **前端选区页**：`web/src/pages/Screenshot/Overlay.tsx`，独立于 AppShell/OnboardingGuard，App.tsx 加路由 `/screenshot-overlay`（顶层，不在守卫内）。**微信截图风格 + 三态状态机**（`mode: idle | selecting | editing`）：
+  - **idle**：整屏半透明黑色遮罩；mousedown（左键）进 selecting 开始框选。
+  - **selecting**：拖拽框选，四块遮罩（选区外暗、选区内挖洞清晰）+ 蓝色虚线选区边框；mouseup 有效选区（宽高≥10）进 editing。
+  - **editing**：进编辑前先 `hiding=true` 隐藏遮罩/边框 + 双 rAF 等渲染透明，再调 `get_region_snapshot` 抓**纯桌面选区** PNG 作 canvas 背景底图（避免把蓝色边框/遮罩抓入快照）；canvas 上用 `useAnnotationCanvas` hook 重绘「快照底图 + 全部标注」+ `ScreenshotToolbar` 组件（矩形/箭头工具、6 色板、撤销/确认/取消）；确认时 canvas.toDataURL 合成「桌面选区 + 标注」→ `save_clipboard_image` 写剪贴板（**所见即所得，Rust 不画标注**）；选区过小 / ESC / 右键 → cancel。hooks 在所有 early return 之前（项目规则 20）。窗口真透明（onMount 强制 html/body background:transparent 覆盖主题底色防白屏）。
 - **权限（capabilities）**：选区窗口 label 前缀 `screenshot-overlay-*` 需在 `capabilities/default.json` 的 `windows` 列表加入通配，否则 overlay 页 invoke 被拒；同时加 `core:event:default`（供 emit/listen region-capture:result）。
 
 ## M7 已落地行为约定（移植自 Python `hotkey/listener.py` + `ui/tray.py` + `ui/permissions.py`）
