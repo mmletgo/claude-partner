@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# Claude Partner 一键启动脚本
+#
+# 用法:
+#   ./start.sh           开发模式(默认):Tauri + Vite + 热重载
+#   ./start.sh build     生产构建(产出 dmg/安装包)
+#   ./start.sh web       仅启动前端 Vite(浏览器预览,无 Tauri 外壳,无 invoke 能力)
+#   ./start.sh clean     清理构建产物(web/dist + cargo target)
+#   ./start.sh help      显示帮助
+#
+# 说明:仓库根目录无 package.json,前端依赖与 tauri CLI 均在 web/node_modules 下,
+# 故开发/构建统一通过 web/node_modules/.bin/tauri 调用。
+
+set -euo pipefail
+
+# 切到脚本所在目录(仓库根),保证无论从哪里调用都能正确定位
+cd "$(dirname "$0")"
+
+WEB_DIR="web"
+TAURI_BIN="$WEB_DIR/node_modules/.bin/tauri"
+
+# 彩色输出
+info()  { printf "\033[1;34m[INFO]\033[0m %s\n" "$*"; }
+error() { printf "\033[1;31m[ERR ]\033[0m %s\n" "$*" >&2; }
+
+# 前置依赖检查
+check_prereqs() {
+  # Node / npm 始终需要
+  if ! command -v node >/dev/null 2>&1; then
+    error "未检测到 Node.js,请先安装(推荐 Node 20+): https://nodejs.org"
+    exit 1
+  fi
+  # Rust 工具链仅在 dev/build 模式需要(tauri 会 cargo run/build)
+  if [[ "$MODE" != "web" ]]; then
+    if ! command -v cargo >/dev/null 2>&1; then
+      error "未检测到 Rust 工具链,请先安装: https://rustup.rs"
+      exit 1
+    fi
+  fi
+}
+
+# 确保前端依赖已安装
+ensure_deps() {
+  if [[ ! -d "$WEB_DIR/node_modules" ]] || [[ ! -x "$TAURI_BIN" ]]; then
+    info "安装前端依赖 (npm install)..."
+    (cd "$WEB_DIR" && npm install)
+  fi
+}
+
+run_dev() {
+  info "启动开发模式 (Tauri dev:Rust 后端 + Vite 前端 + 热重载)..."
+  info "首次启动 Rust 编译较慢(数分钟),之后增量编译很快。"
+  exec "$TAURI_BIN" dev
+}
+
+run_build() {
+  info "生产构建 (Tauri build,产出 dmg/安装包)..."
+  exec "$TAURI_BIN" build
+}
+
+run_web() {
+  info "仅启动前端 (Vite,浏览器预览 http://localhost:5173,无 Tauri 外壳)..."
+  (cd "$WEB_DIR" && exec npm run dev)
+}
+
+run_clean() {
+  info "清理构建产物..."
+  rm -rf "$WEB_DIR/dist"
+  if command -v cargo >/dev/null 2>&1; then
+    (cd src-tauri && cargo clean)
+  fi
+  info "清理完成"
+}
+
+show_help() {
+  cat <<EOF
+Claude Partner 启动脚本
+
+用法: ./start.sh [命令]
+
+命令:
+  dev       开发模式(默认):Tauri + Vite + 热重载
+  build     生产构建(产出 dmg/安装包)
+  web       仅前端 Vite(浏览器预览,无 Tauri 外壳)
+  clean     清理构建产物
+  help      显示本帮助
+EOF
+}
+
+# 解析参数
+case "${1:-dev}" in
+  dev|""        ) MODE=dev ;;
+  build         ) MODE=build ;;
+  web|frontend  ) MODE=web ;;
+  clean         ) MODE=clean ;;
+  -h|--help|help) show_help; exit 0 ;;
+  *)
+    error "未知命令: $1 (用 ./start.sh help 查看用法)"
+    exit 1
+    ;;
+esac
+
+check_prereqs
+
+# clean 不需要装依赖
+if [[ "$MODE" != "clean" ]]; then
+  ensure_deps
+fi
+
+case "$MODE" in
+  dev  ) run_dev ;;
+  build) run_build ;;
+  web  ) run_web ;;
+  clean) run_clean ;;
+esac

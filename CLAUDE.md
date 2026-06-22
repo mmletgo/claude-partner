@@ -29,6 +29,8 @@ docs/        → 需求/设计文档
 uiux/        → 设计稿参考资源
 ```
 
+**一键启动**：`./start.sh`（默认 dev 开发热重载；`build` 生产构建；`web` 仅前端 Vite；`help` 查看用法）。脚本会自检 Node/Rust 工具链并按需 `npm install`。
+
 ## 核心架构
 
 ### 双通道通信（务必遵守）
