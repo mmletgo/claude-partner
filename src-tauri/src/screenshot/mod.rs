@@ -6,8 +6,9 @@
 //!     改为 Tauri 透明置顶窗口 + React 选区页；抓屏本体用跨平台的 `xcap` crate（物理像素）。
 //!
 //! Code Logic（这个模块做什么）:
-//!     - `capture::capture_monitor`：抓取指定显示器的整屏帧（物理像素 RgbaImage）。
-//!     - `capture::crop_and_copy`：按物理像素 rect 裁剪并写剪贴板。
+//!     - `capture::capture_region`：抓指定显示器 + 按选区裁剪，返回 RgbaImage。
+//!     - `capture::region_to_png_base64`：选区快照编码 PNG base64（前端 canvas 背景）。
+//!     - `capture::save_clipboard_from_png`：PNG data URL 解码写剪贴板。
 //!     - `overlay::start_region_capture`：枚举显示器，每个显示器创建一个透明置顶全屏窗口。
 //!     - `overlay::close_all_overlays`：关闭所有选区窗口。
 
