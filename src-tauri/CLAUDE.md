@@ -68,7 +68,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **PromptRepo 同步方法**：`get_all_for_sync()`（含 deleted 全量）、`bulk_upsert(&[PromptRow])`（INSERT OR REPLACE，upsert 前不做合并决策）。
 - **trigger_sync 命令（commands/sync.rs）**：前端 `invoke('trigger_sync')` → 返回 `{accepted,synced,note}`，前端 `promptsApi.sync()` 取 `synced`。在 `lib.rs` invoke_handler 注册。
 - **错误处理**：`AppError` 新增 `axum::IntoResponse` 实现（500 + `{"error":"..."}`），使 sync handler 的 `Result<Json<_>, AppError>` 可作 axum handler 返回；与 Python handler error 响应一致。
-- **tracing 初始化**：`lib.rs run()` 开头 `tracing_subscriber::fmt().with_env_filter(EnvFilter::try_from_default_env().or("info")).try_init()`，输出到 stderr，axum/mDNS/sync 的 `tracing::info!/error!` 日志生效（Cargo.toml tracing-subscriber 加 `env-filter` feature）。
+- **tracing 初始化**：`lib.rs run()` 开头 `tracing_subscriber::fmt().with_env_filter(EnvFilter::try_from_default_env().or("info,mdns_sd=off")).try_init()`，输出到 stderr，axum/mDNS/sync 的 `tracing::info!/error!` 日志生效（Cargo.toml tracing-subscriber 加 `env-filter` feature）。`mdns_sd=off` 过滤库噪音：mdns-sd 0.11 在纯 IPv6 link-local 接口视图上收针对本机 hostname 的 A/AAAA 查询时，会打非致命 error `Cannot find valid addrs for TYPE_A response`（实际 A 记录走 IPv4 视图正常响应，不影响 P2P 发现）；库自身用 `log` crate，经 tracing-subscriber 默认 `log` feature（间接依赖 `tracing-log`）桥接进 tracing，故 EnvFilter target 级 `off` 即可消除。mDNS 关键错误已在 `discovery.rs` 用项目自有 tracing 宏记录，不依赖库日志。
 - **依赖**：`axum 0.7`（features=macros）、`tower 0.5`、`reqwest 0.12`（default-features=false，features=json/rustls-tls）、`mdns-sd 0.11`。
 
 ## M6 已落地行为约定（移植自 Python screenshot/，对照 overlay.py + capture.py）
