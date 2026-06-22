@@ -1,31 +1,24 @@
 /**
  * Overlay - 区域截图选区页（独立于主 AppShell）
  *
- * Business Logic（为什么需要这个组件）:
- *   用户在屏幕上框选区域截图，松手后裁剪写剪贴板，可直接粘贴到 Claude Code。
- *   采用微信截图风格：进入即整屏盖半透明黑色遮罩（每屏 overlay 各盖一层），框选时选区外保持暗、
- *   选区内挖洞清晰。选区窗口真透明（不用桌面截图作背景）。ESC/右键/点空白取消。
+ * Business Logic: 微信截图风格。三态：
+ *   - idle：整屏半透明遮罩
+ *   - selecting：拖拽框选（四块遮罩 + 蓝虚线边框）
+ *   - editing：选区确定，canvas 画桌面快照 + 标注，工具条选矩形/箭头/颜色/撤销/确认/取消
+ *   确认 → canvas.toDataURL 合成 → save_clipboard_image 写剪贴板。ESC/取消 → 关闭。
  *
- *   裁剪关键：mouseup 后先隐藏遮罩与选区边框（hiding=true 让 overlay 全透明），等浏览器渲染到屏幕，
- *   再 invoke crop_and_copy——否则 Rust 端重新抓屏会把蓝色边框/遮罩裁进最终截图。
- *
- * Code Logic（这个组件做什么）:
- *   - onMount：强制 html/body 背景透明，覆盖全局 reset.css 的 `body { background: var(--bg) }`
- *     （主题底色，浅色=#f5f4ed）。transparent 窗口需 html/body 全链路透明，否则会显示主题底色
- *     而非透出桌面（=白屏）；onUnmount 恢复原值。
- *   - mousedown 记起点（同步 selectionRef），mousemove 实时更新选区矩形（四块遮罩挖洞 + 蓝色虚线边框）。
- *   - mouseup 有效选区（宽高≥10）：先 hiding=true（隐藏遮罩/边框，overlay 全透明）→ 双 rAF 等渲染
- *     → invoke('crop_and_copy') 让 Rust 抓到纯桌面再裁剪；选区过小则 cancel。
- *   - ESC/右键 → invoke('cancel_region_capture')。
- *   - 坐标用逻辑像素（CSS px），dpr 一起传给 Rust，Rust ×dpr 换算物理像素裁剪（xcap 帧即物理像素）。
- *   - React hooks 必须在所有 early return 之前（项目规则 20）。
+ * Code Logic: 状态机 + selectionRef（mouseup 读最新选区）+ hiding（进编辑/确认前隐藏遮罩与边框，
+ *   让 Rust 抓纯桌面 / canvas 合成不含遮罩）。hooks 在所有 early return 之前（项目规则 20）。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { invoke } from '@/api/client';
+import { useAnnotationCanvas, type Annotation } from './useAnnotationCanvas';
+import { ScreenshotToolbar, COLORS, type ToolKind } from './ScreenshotToolbar';
 import styles from './Overlay.module.css';
 
-/** 选区矩形（逻辑像素，相对当前窗口左上角） */
+type Mode = 'idle' | 'selecting' | 'editing';
+
 interface Selection {
   startX: number;
   startY: number;
@@ -35,7 +28,6 @@ interface Selection {
   h: number;
 }
 
-/** URL query 中解析 display index；缺省 0（主屏） */
 function parseDisplay(): number {
   const params = new URLSearchParams(window.location.search);
   const raw = params.get('display');
@@ -44,16 +36,25 @@ function parseDisplay(): number {
 }
 
 export function Overlay() {
-  // hooks 必须在任何 early return 之前调用（项目规则 20）
+  const [mode, setMode] = useState<Mode>('idle');
   const [selection, setSelection] = useState<Selection | null>(null);
   const [hiding, setHiding] = useState(false);
+  // editing 状态
+  const [snapshot, setSnapshot] = useState<HTMLImageElement | null>(null);
+  const [annotations, setAnnotations] = useState<Annotation[]>([]);
+  const [draft, setDraft] = useState<Annotation | null>(null); // 正在画的标注预览
+  const [tool, setTool] = useState<ToolKind>('rect');
+  const [color, setColor] = useState<string>(COLORS[0]);
+  const [busy, setBusy] = useState(false); // 抓快照/写剪贴板进行中，禁重复触发
+
   const displayRef = useRef<number>(parseDisplay());
   const draggingRef = useRef<boolean>(false);
-  const selectionRef = useRef<Selection | null>(null); // 最新选区，供 mouseup 读取（避免 updater 副作用）
+  const selectionRef = useRef<Selection | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // DPR 在 overlay 窗口生命周期内为常量，用 lazy-init state 取代 ref（避免 render 阶段读 ref.current 触发 react-hooks/refs）
+  const [dpr] = useState<number>(() => window.devicePixelRatio || 1);
 
-  // 强制页面背景透明：transparent 窗口需 html/body 全链路透明，否则全局 reset.css 的
-  // body { background: var(--bg) }（主题底色，浅色=#f5f4ed）会让窗口显示为白屏而非透出桌面。
-  // onUnmount 恢复原值（窗口随截图结束销毁，恢复仅为卫生）。
+  // 强制 html/body 透明（覆盖全局 reset.css 的 var(--bg)，防 transparent 窗口白屏）
   useEffect(() => {
     const html = document.documentElement;
     const body = document.body;
@@ -67,7 +68,6 @@ export function Overlay() {
     };
   }, []);
 
-  // 取消：ESC 触发
   const cancel = useCallback(async () => {
     try {
       await invoke('cancel_region_capture');
@@ -76,141 +76,241 @@ export function Overlay() {
     }
   }, []);
 
-  // ESC 键监听
+  // ESC 取消
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        void cancel();
-      }
+      if (e.key === 'Escape') void cancel();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [cancel]);
 
-  // 鼠标按下：记录起点（同步 selectionRef）
-  const onMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return; // 仅左键开始选区
-    draggingRef.current = true;
-    const sel: Selection = {
-      startX: e.clientX,
-      startY: e.clientY,
-      x: e.clientX,
-      y: e.clientY,
-      w: 0,
-      h: 0,
-    };
-    selectionRef.current = sel;
-    setSelection(sel);
-  }, []);
-
-  // 鼠标移动：实时更新选区（同步 selectionRef）
-  const onMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!draggingRef.current) return;
-    setSelection((prev) => {
-      if (!prev) return prev;
-      const next: Selection = {
-        ...prev,
-        x: Math.min(prev.startX, e.clientX),
-        y: Math.min(prev.startY, e.clientY),
-        w: Math.abs(e.clientX - prev.startX),
-        h: Math.abs(e.clientY - prev.startY),
-      };
-      selectionRef.current = next;
-      return next;
-    });
-  }, []);
-
-  // 鼠标抬起：有效选区则先隐藏遮罩/边框再裁剪，避免把蓝色边框/遮罩抓进最终截图
-  const onMouseUp = useCallback(
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (e.button !== 0 || !draggingRef.current) return;
-      draggingRef.current = false;
-      const sel = selectionRef.current;
-      if (sel && sel.w >= 10 && sel.h >= 10) {
-        // hiding=true 让 overlay 全透明（无遮罩无边框），双 rAF 确保渲染到屏幕后再抓屏
-        setHiding(true);
-        requestAnimationFrame(() =>
-          requestAnimationFrame(() => {
-            void invoke('crop_and_copy', {
-              display: displayRef.current,
-              x: Math.round(sel.x),
-              y: Math.round(sel.y),
-              w: Math.round(sel.w),
-              h: Math.round(sel.h),
-              dpr: window.devicePixelRatio,
-            }).catch(() => {
-              // 裁剪失败：恢复遮罩，让用户可重试或 ESC 取消
-              setHiding(false);
-            });
-          }),
-        );
-      } else {
-        // 选区过小视为取消（对照 Python mouseRelease 无效选区 → cancelled）
-        void cancel();
-      }
-    },
-    [cancel],
+  // canvas 重绘（editing 时快照 + 已有标注 + 草稿预览）
+  useAnnotationCanvas(
+    canvasRef,
+    snapshot,
+    draft ? [...annotations, draft] : annotations,
+    selection?.w ?? 0,
+    selection?.h ?? 0,
+    dpr,
   );
 
-  // 右键取消
-  const onContextMenu = useCallback(
+  // === selecting 阶段：框选 ===
+  const onMouseDown = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      e.preventDefault();
+      if (mode !== 'idle' || e.button !== 0) return;
+      draggingRef.current = true;
+      const sel: Selection = { startX: e.clientX, startY: e.clientY, x: e.clientX, y: e.clientY, w: 0, h: 0 };
+      selectionRef.current = sel;
+      setSelection(sel);
+      setMode('selecting');
+    },
+    [mode],
+  );
+
+  const onMouseMoveSelect = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!draggingRef.current) return;
+      setSelection((prev) => {
+        if (!prev) return prev;
+        const next: Selection = {
+          ...prev,
+          x: Math.min(prev.startX, e.clientX),
+          y: Math.min(prev.startY, e.clientY),
+          w: Math.abs(e.clientX - prev.startX),
+          h: Math.abs(e.clientY - prev.startY),
+        };
+        selectionRef.current = next;
+        return next;
+      });
+    },
+    [],
+  );
+
+  // mouseup 有效选区 → 进 editing（抓快照）
+  const enterEditing = useCallback(async () => {
+    const sel = selectionRef.current;
+    if (!sel || sel.w < 10 || sel.h < 10) {
       void cancel();
+      return;
+    }
+    setBusy(true);
+    setHiding(true); // 隐藏遮罩/边框，Rust 抓纯桌面
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+    try {
+      const dataUrl = await invoke<string>('get_region_snapshot', {
+        display: displayRef.current,
+        x: Math.round(sel.x),
+        y: Math.round(sel.y),
+        w: Math.round(sel.w),
+        h: Math.round(sel.h),
+        dpr,
+      });
+      const img = new Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error('快照加载失败'));
+        img.src = dataUrl;
+      });
+      setSnapshot(img);
+      setHiding(false);
+      setMode('editing');
+    } catch {
+      setHiding(false);
+      setMode('idle'); // 快照失败回 idle 让用户重选
+    } finally {
+      setBusy(false);
+    }
+  }, [cancel, dpr]);
+
+  const onMouseUpSelect = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    void enterEditing();
+  }, [enterEditing]);
+
+  // === editing 阶段：在 canvas 上画标注 ===
+  // 用 pointer 事件 + setPointerCapture：拖拽时即使鼠标移出 canvas 边界（到选区外遮罩区域），
+  // pointermove/pointerup 仍路由回 canvas，pointerup 必触发——避免 mouseup 丢失导致
+  // draggingRef 残留 true、draft 不入栈也不清空（review Minor 1）。
+  const onCanvasPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!snapshot) return;
+      // 捕获指针，保证后续 pointermove/pointerup 都送达 canvas（哪怕移出边界）
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // 某些环境/已释放时可能抛异常，忽略——最坏退化为原 mouse 行为
+      }
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      draggingRef.current = true;
+      setDraft({ tool, color, x1: x, y1: y, x2: x, y2: y });
     },
-    [cancel],
+    [tool, color, snapshot],
   );
+
+  const onCanvasPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLCanvasElement>) => {
+      if (!draggingRef.current || !draft) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      setDraft({ ...draft, x2: e.clientX - rect.left, y2: e.clientY - rect.top });
+    },
+    [draft],
+  );
+
+  const onCanvasPointerUp = useCallback(() => {
+    if (!draggingRef.current || !draft) return;
+    draggingRef.current = false;
+    // 仅保留尺寸非零的标注
+    if (Math.abs(draft.x2 - draft.x1) >= 2 || Math.abs(draft.y2 - draft.y1) >= 2) {
+      setAnnotations((prev) => [...prev, draft]);
+    }
+    setDraft(null);
+  }, [draft]);
+
+  // 工具条回调
+  const undo = useCallback(() => setAnnotations((prev) => prev.slice(0, -1)), []);
+
+  const confirm = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    const canvas = canvasRef.current;
+    try {
+      const dataUrl = canvas?.toDataURL('image/png');
+      if (!dataUrl) throw new Error('canvas 合成失败');
+      await invoke('save_clipboard_image', { dataUrl });
+      // 成功后 Rust 已关 overlay；失败抛出
+    } catch {
+      setBusy(false); // 保留 editing 让用户重试
+    }
+  }, [busy]);
+
+  const showSelection = selection && selection.w > 0 && selection.h > 0;
+
+  // editing 工具条位置：默认选区下方居中，贴近下边则翻到上方
+  const tbH = 44;
+  const winH = typeof window !== 'undefined' ? window.innerHeight : 9999;
+  const tbBelow = selection && selection.y + selection.h + 8 + tbH <= winH;
+  const toolbarStyle: React.CSSProperties = selection
+    ? {
+        left: selection.x,
+        top: tbBelow ? selection.y + selection.h + 8 : Math.max(0, selection.y - tbH - 8),
+        width: selection.w,
+      }
+    : {};
 
   return (
     <div
       className={styles.overlay}
-      onMouseDown={onMouseDown}
-      onMouseMove={onMouseMove}
-      onMouseUp={onMouseUp}
-      onContextMenu={onContextMenu}
+      onMouseDown={mode === 'idle' ? onMouseDown : undefined}
+      onMouseMove={mode === 'selecting' ? onMouseMoveSelect : undefined}
+      onMouseUp={mode === 'selecting' ? onMouseUpSelect : undefined}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        void cancel();
+      }}
     >
-      {/* hiding=true 时不渲染任何遮罩/边框，让窗口全透明，Rust 抓到纯桌面（避免边框入图） */}
+      {/* hiding=true 时只透出桌面（进编辑/确认时不显示遮罩/边框/canvas） */}
       {!hiding &&
-        (selection && selection.w > 0 && selection.h > 0 ? (
+        (mode === 'editing' && snapshot ? (
           <>
-            {/* 框选中：四块半透明遮罩盖选区外（挖洞）+ 蓝色虚线选区边框 */}
-            <div
-              className={styles.mask}
-              style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${selection.y}px)` }}
-            />
-            <div
-              className={styles.mask}
-              style={{ left: 0, top: `${selection.y + selection.h}px`, right: 0, bottom: 0 }}
-            />
-            <div
-              className={styles.mask}
-              style={{ left: 0, top: `${selection.y}px`, width: `${selection.x}px`, height: `${selection.h}px` }}
-            />
-            <div
-              className={styles.mask}
-              style={{
-                left: `${selection.x + selection.w}px`,
-                top: `${selection.y}px`,
-                right: 0,
-                height: `${selection.h}px`,
-              }}
-            />
-            {/* 高亮矩形边框 */}
-            <div
-              className={styles.selection}
-              style={{
-                left: `${selection.x}px`,
-                top: `${selection.y}px`,
-                width: `${selection.w}px`,
-                height: `${selection.h}px`,
-              }}
-            />
+            {/* 此分支仅在 editing 且有快照时进入（用户已 enterEditing，selection 必非空），取一次收敛非空断言 */}
+            {(() => {
+              const sel = selection!;
+              return (
+                <>
+                  {/* 选区外四块遮罩 */}
+                  <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${sel.y}px)` }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y + sel.h}px`, right: 0, bottom: 0 }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y}px`, width: `${sel.x}px`, height: `${sel.h}px` }} />
+                  <div className={styles.mask} style={{ left: `${sel.x + sel.w}px`, top: `${sel.y}px`, right: 0, height: `${sel.h}px` }} />
+                  {/* canvas：选区内，画快照 + 标注 */}
+                  <canvas
+                    ref={canvasRef}
+                    className={styles.canvas}
+                    style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }}
+                    onPointerDown={onCanvasPointerDown}
+                    onPointerMove={onCanvasPointerMove}
+                    onPointerUp={onCanvasPointerUp}
+                  />
+                  {/* 工具条 */}
+                  <div className={styles.toolbarWrap} style={toolbarStyle}>
+                    <ScreenshotToolbar
+                      tool={tool}
+                      onToolChange={setTool}
+                      color={color}
+                      onColorChange={setColor}
+                      onUndo={undo}
+                      onConfirm={confirm}
+                      onCancel={() => void cancel()}
+                    />
+                  </div>
+                </>
+              );
+            })()}
+          </>
+        ) : showSelection ? (
+          <>
+            {/* showSelection 已保证 selection 非空（w>0 && h>0），取一次收敛非空断言 */}
+            {(() => {
+              const sel = selection!;
+              return (
+                <>
+                  {/* selecting：四块遮罩 + 蓝虚线边框 */}
+                  <div className={styles.mask} style={{ left: 0, top: 0, right: 0, bottom: `calc(100% - ${sel.y}px)` }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y + sel.h}px`, right: 0, bottom: 0 }} />
+                  <div className={styles.mask} style={{ left: 0, top: `${sel.y}px`, width: `${sel.x}px`, height: `${sel.h}px` }} />
+                  <div className={styles.mask} style={{ left: `${sel.x + sel.w}px`, top: `${sel.y}px`, right: 0, height: `${sel.h}px` }} />
+                  <div className={styles.selection} style={{ left: sel.x, top: sel.y, width: sel.w, height: sel.h }} />
+                </>
+              );
+            })()}
           </>
         ) : (
-          <>
-            {/* 未框选：整屏半透明黑色遮罩（微信截图风格，进入即全屏变暗） */}
-            <div className={styles.mask} style={{ inset: 0 }} />
-          </>
+          /* idle：整屏遮罩 */
+          <div className={styles.mask} style={{ inset: 0 }} />
         ))}
     </div>
   );

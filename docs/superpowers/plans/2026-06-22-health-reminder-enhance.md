@@ -400,4 +400,318 @@ git add src-tauri/src/health/mod.rs src-tauri/src/commands/health.rs src-tauri/s
 git commit -m "feat(health): 全屏遮罩提醒(复用截图透明窗口,reminder_fullscreen 开关)"
 ```
 
-<!-- PLAN_PART2 -->
+### Task 4: 活动统计图表(recharts + app 排行 + 小时分布)
+
+**Files:**
+- Modify: `src-tauri/src/storage/health_repo.rs`(加 get_app_usage / get_hourly_activity)
+- Modify: `src-tauri/src/commands/health.rs`(get_activity_detail 命令)
+- Modify: `src-tauri/src/lib.rs`(invoke_handler)
+- Modify: `web/package.json`(recharts)
+- Create: `web/src/pages/Health/StatsChart.tsx`
+- Modify: `web/src/api/health.ts` + `lib/types.ts`
+- Modify: `web/src/pages/Health/index.tsx`(集成图表)
+
+**Interfaces:**
+- Produces: 命令 `get_activity_detail` → `ActivityDetailDto`;`StatsChart` 组件
+
+- [ ] **Step 1: HealthRepo 加聚合方法**
+
+在 `src-tauri/src/storage/health_repo.rs` 加(参照现有 sqlx 运行期 query 模式):
+
+```rust
+    /// 按进程名聚合活跃分钟数,倒序返回(应用使用时长排行)。
+    pub async fn get_app_usage(&self, since_ts: i64) -> Result<Vec<(String, i64)>, AppError> {
+        let rows = sqlx::query(
+            "SELECT process_name, COUNT(*) AS mins FROM activity_records \
+             WHERE ts >= ? AND is_active = 1 AND process_name IS NOT NULL AND process_name <> '' \
+             GROUP BY process_name ORDER BY mins DESC",
+        )
+        .bind(since_ts)
+        .fetch_all(&self.db)
+        .await?;
+        rows.iter()
+            .map(|r| Ok((r.try_get::<Option<String>, _>("process_name")?.unwrap_or_default(), r.try_get("mins")?)))
+            .collect()
+    }
+
+    /// 按小时(UTC 0-23)聚合活跃分钟数,返回长度 24 的数组。
+    pub async fn get_hourly_activity(&self, since_ts: i64) -> Result<Vec<i64>, AppError> {
+        let mut hours = vec![0i64; 24];
+        let rows = sqlx::query(
+            "SELECT (ts / 3600 % 24) AS h, COUNT(*) AS mins FROM activity_records \
+             WHERE ts >= ? AND is_active = 1 GROUP BY h",
+        )
+        .bind(since_ts)
+        .fetch_all(&self.db)
+        .await?;
+        for r in rows {
+            let h: i64 = r.try_get("h")?;
+            let mins: i64 = r.try_get("mins")?;
+            if (0..24).contains(&h) { hours[h as usize] = mins; }
+        }
+        Ok(hours)
+    }
+```
+
+- [ ] **Step 2: 命令 get_activity_detail**
+
+在 `src-tauri/src/commands/health.rs` 加:
+
+```rust
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUsageItem {
+    pub name: String,
+    pub minutes: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityDetailDto {
+    pub app_usage: Vec<AppUsageItem>,
+    pub hourly: Vec<i64>,  // 长度 24
+}
+
+#[tauri::command]
+pub async fn get_activity_detail(state: State<'_, AppState>, since_ts: i64) -> Result<ActivityDetailDto, AppError> {
+    let app_usage = state.health_repo.get_app_usage(since_ts).await?
+        .into_iter().map(|(n, m)| AppUsageItem { name: n, minutes: m }).collect();
+    let hourly = state.health_repo.get_hourly_activity(since_ts).await?;
+    Ok(ActivityDetailDto { app_usage, hourly })
+}
+```
+`lib.rs` `generate_handler!` 加 `health_cmd::get_activity_detail,`。
+
+- [ ] **Step 3: 前端依赖 + api/types**
+
+```bash
+cd web && npm install recharts
+```
+`api/health.ts` 加 `getDetail: (sinceTs: number) => invoke<ActivityDetail>('get_activity_detail', { sinceTs }),`。
+`types.ts` 加:
+```ts
+export interface AppUsageItem { name: string; minutes: number; }
+export interface ActivityDetail { appUsage: AppUsageItem[]; hourly: number[]; }
+```
+
+- [ ] **Step 4: StatsChart 组件**
+
+创建 `web/src/pages/Health/StatsChart.tsx`:
+
+```tsx
+import { useTranslation } from 'react-i18next';
+import { Bar, BarChart, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import type { ActivityDetail } from '@/lib/types';
+
+export default function StatsChart({ detail }: { detail: ActivityDetail }) {
+  const { t } = useTranslation(['health', 'common']);
+  const appData = detail.appUsage.slice(0, 8).map((a) => ({ name: a.name, minutes: a.minutes }));
+  const hourData = detail.hourly.map((mins, h) => ({ h: `${h}`, mins }));
+  return (
+    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 320px' }}>
+        <h4>{t('health:appUsageTitle')}</h4>
+        {appData.length === 0 ? <p>{t('health:noData')}</p> : (
+          <ResponsiveContainer width="100%" height={240}>
+            <BarChart data={appData} layout="vertical" margin={{ left: 20 }}>
+              <XAxis type="number" /><YAxis type="category" dataKey="name" width={100} />
+              <Tooltip /><Bar dataKey="minutes" fill="#34C759" />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+      <div style={{ flex: '1 1 320px' }}>
+        <h4>{t('health:hourlyTitle')}</h4>
+        <ResponsiveContainer width="100%" height={240}>
+          <BarChart data={hourData}>
+            <XAxis dataKey="h" /><YAxis /><Tooltip /><Bar dataKey="mins" fill="#007AFF" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+```
+
+- [ ] **Step 5: Health 页集成图表**
+
+在 `Health/index.tsx` 加 `const [detail, setDetail] = useState<ActivityDetail | null>(null);`,refresh 内 `setDetail(await healthApi.getDetail(startOfDay));`,在统计区下方渲染 `{detail && <StatsChart detail={detail} />}`(import StatsChart)。i18n 加 `appUsageTitle`/`hourlyTitle`/`noData`。
+
+- [ ] **Step 6: 类型检查 + Commit**
+
+Run: `cd web && npx tsc --noEmit`
+```bash
+git add src-tauri/src/storage/health_repo.rs src-tauri/src/commands/health.rs src-tauri/src/lib.rs web/package.json web/src/pages/Health/StatsChart.tsx web/src/api/health.ts web/src/lib/types.ts web/src/pages/Health/index.tsx web/src/i18n
+git commit -m "feat(health): 活动统计图表(app 使用时长排行 + 小时分布,recharts)"
+```
+
+---
+
+### Task 5: 完整配置表单(Health Settings)
+
+**Files:**
+- Create: `web/src/pages/Health/Settings.tsx`
+- Modify: `web/src/pages/Health/index.tsx`(集成设置区,替换 Plan 1 占位注释)
+
+**Interfaces:**
+- Consumes: `healthApi.updateConfig` + `getHealthStatus`(取当前配置项)
+
+- [ ] **Step 1: 加 getHealthConfig 命令(取完整配置)**
+
+Plan 1 的 `get_health_status` 不含全部配置字段。补一个取配置的命令——在 `commands/health.rs` 加:
+
+```rust
+#[tauri::command]
+pub async fn get_health_config(state: State<'_, AppState>) -> Result<HealthConfigDto, AppError> {
+    Ok(state.config.read().unwrap().health.clone().into())
+}
+```
+`lib.rs` `generate_handler!` 加 `health_cmd::get_health_config,`。`api/health.ts` 加 `getConfig: () => invoke<HealthConfig>('get_health_config'),`。
+
+- [ ] **Step 2: Settings 组件**
+
+创建 `web/src/pages/Health/Settings.tsx`(受控表单,hooks 在 early return 前):
+
+```tsx
+import { useEffect, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { healthApi } from '@/api/health';
+import type { HealthConfig } from '@/lib/types';
+
+export default function Settings() {
+  const { t } = useTranslation(['health', 'common']);
+  const [cfg, setCfg] = useState<HealthConfig | null>(null);
+
+  useEffect(() => { void healthApi.getConfig().then(setCfg); }, []);
+  if (!cfg) return null;
+
+  const update = async (patch: Partial<HealthConfig>) => {
+    const next = { ...cfg, ...patch };
+    setCfg(next);
+    await healthApi.updateConfig(next);
+  };
+
+  const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
+    <label style={{ display: 'flex', justifyContent: 'space-between', gap: 12, margin: '8px 0' }}>
+      <span>{label}</span>{children}
+    </label>
+  );
+
+  return (
+    <section style={{ maxWidth: 480 }}>
+      <Field label={t('health:workWindowMinutes')}>
+        <input type="number" min={1} max={120} value={Math.round(cfg.workWindowSeconds / 60)}
+          onChange={(e) => update({ workWindowSeconds: Number(e.target.value) * 60 })} />
+      </Field>
+      <Field label={t('health:breakMinutes')}>
+        <input type="number" min={1} value={Math.round(cfg.breakSeconds / 60)}
+          onChange={(e) => update({ breakSeconds: Number(e.target.value) * 60 })} />
+      </Field>
+      <Field label={t('health:notifyEnabled')}>
+        <input type="checkbox" checked={cfg.notifyEnabled} onChange={(e) => update({ notifyEnabled: e.target.checked })} />
+      </Field>
+      <Field label={t('health:reminderFullscreen')}>
+        <input type="checkbox" checked={cfg.reminderFullscreen} onChange={(e) => update({ reminderFullscreen: e.target.checked })} />
+      </Field>
+      <Field label={t('health:recordWindowTitle')}>
+        <input type="checkbox" checked={cfg.recordWindowTitle} onChange={(e) => update({ recordWindowTitle: e.target.checked })} />
+      </Field>
+      <Field label={t('health:waterEnabled')}>
+        <input type="checkbox" checked={cfg.waterEnabled} onChange={(e) => update({ waterEnabled: e.target.checked })} />
+      </Field>
+      <Field label={t('health:waterIntervalMinutes')}>
+        <input type="number" min={1} value={Math.round(cfg.waterIntervalSeconds / 60)}
+          onChange={(e) => update({ waterIntervalSeconds: Number(e.target.value) * 60 })} />
+      </Field>
+      <Field label={t('health:dndStart')}>
+        <input type="time" value={cfg.dndStart ?? ''} onChange={(e) => update({ dndStart: e.target.value || null })} />
+      </Field>
+      <Field label={t('health:dndEnd')}>
+        <input type="time" value={cfg.dndEnd ?? ''} onChange={(e) => update({ dndEnd: e.target.value || null })} />
+      </Field>
+    </section>
+  );
+}
+```
+> `HealthConfig` 需含 Plan 1 + Task 1/Task 3 全部字段(enabled/workWindowSeconds/breakSeconds/recordWindowTitle/retainDays/notifyEnabled/dndStart/dndEnd/waterEnabled/waterIntervalSeconds/reminderFullscreen)。i18n 加 `reminderFullscreen`/`waterEnabled`/`waterIntervalMinutes` 文案。
+
+- [ ] **Step 3: Health 页集成设置**
+
+`Health/index.tsx` 删除 Plan 1 Step 6 的占位注释,在统计/图表下方渲染 `<Settings />`(import)。types.ts 的 `HealthConfig` 补齐全字段。
+
+- [ ] **Step 4: 类型检查 + Commit**
+
+Run: `cd web && npx tsc --noEmit`
+```bash
+git add src-tauri/src/commands/health.rs src-tauri/src/lib.rs web/src/pages/Health/Settings.tsx web/src/pages/Health/index.tsx web/src/api/health.ts web/src/lib/types.ts web/src/i18n
+git commit -m "feat(health): 完整配置表单(工作窗口/休息/通知/全屏/记录标题/喝水/免打扰)"
+```
+
+---
+
+### Task 6: 文档更新 + 全量验证
+
+**Files:**
+- Modify: `src-tauri/CLAUDE.md`、`web/CLAUDE.md`、`docs/prd.md`
+
+- [ ] **Step 1: 文档补全**
+
+在 Plan 1 Task 10 已更新的 `src-tauri/CLAUDE.md` 健康模块节基础上,补充:喝水提醒(water.rs + WaterState + health:water)、全屏遮罩(open_health_overlay/close_health_overlay + health-overlay-* 窗口)、应用内 toast、统计图表(get_app_usage/get_hourly_activity)、recharts 依赖。`web/CLAUDE.md` 补 ReminderToast/WaterToast/HealthOverlay/StatsChart/Settings 条目。`docs/prd.md` 把健康功能描述从 Plan 1 的「系统通知 + 基础统计」补全为「系统通知 + toast + 全屏 + 喝水 + app 排行图表」。
+
+- [ ] **Step 2: 全量构建 + 测试**
+
+Run:
+```bash
+cd src-tauri && cargo build && cargo test && cargo clippy -- -D warnings 2>&1 | tail -5
+cd ../web && npx tsc --noEmit && npm run lint && npm run build
+```
+Expected: 全绿。
+
+- [ ] **Step 3: 手动验证(规则 11/12)**
+
+`./start.sh` dev 启动后验证:
+1. 喝水提醒:临时把 waterInterval 调小(如 1 分钟)→ 收到喝水 toast → 点「已喝水」→ 记录入库,不再重复弹
+2. 应用内 toast:工作窗口满 → 右下角 toast 出现 → 推迟 5/10、跳过 生效
+3. 全屏遮罩:设置开 reminderFullscreen → 触发时全屏遮罩(三屏各一层)→ 按钮关闭
+4. 统计图表:活动一段时间后,Health 页 app 排行柱状图 + 小时分布图有数据
+5. 配置表单:改各参数 → 刷新后保持(updateConfig 持久化)
+6. 主动读 tracing 日志确认喝水计时/全屏开窗/聚合查询行为(规则 12)
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src-tauri/CLAUDE.md web/CLAUDE.md docs/prd.md
+git commit -m "docs(health): 补全健康模块文档(喝水/toast/全屏/图表,Plan 2 完成)"
+```
+
+---
+
+## Self-Review(写计划后自查)
+
+**1. Spec 覆盖**(对照 spec §5/§6/§8):
+- ✅ 喝水提醒(§8)→ Task 1(后端 WaterState + emit + record_water)+ Task 2(WaterToast)
+- ✅ 提醒方式 toast/全屏(§5)→ Task 2(ReminderToast)+ Task 3(HealthOverlay)
+- ✅ 活动统计图表(§6)→ Task 4(StatsChart + app 排行 + 小时分布)
+- ✅ 完整配置(§4 HealthConfig)→ Task 5(Settings 表单覆盖全部字段)
+- ✅ 免打扰 → Task 1 daemon 水判定复用 Plan 1 的 is_in_dnd
+- ⏸ 提醒文案风格库(spec YAGNI 明确后置)、视频检测(YAGNI 后置)、category 归类(YAGNI 后置)→ 不在本计划
+
+**2. Placeholder 扫描**:无 TBD;recharts 全屏窗口几何沿用截图 overlay 既有模式;xcap Monitor API 沿用 Plan 1 已确认用法。
+
+**3. 类型一致**:`HealthConfig` 后端(Dto camelCase)↔ 前端 全字段对齐(workWindowSeconds/breakSeconds/recordWindowTitle/retainDays/notifyEnabled/dndStart/dndEnd/waterEnabled/waterIntervalSeconds/reminderFullscreen);`ActivityDetailDto`(appUsage/hourly)↔ 前端 `ActivityDetail`;emit `health:water` ↔ 前端 listen `health:water`;命令名 `record_water`/`get_activity_detail`/`get_health_config`/`close_health_overlay` 与 api invoke 字符串一致。✅
+
+---
+
+## Execution Handoff
+
+**Plan 1 + Plan 2 已完成并保存:**
+- `docs/superpowers/plans/2026-06-22-health-reminder-core.md`(Plan 1 核心闭环,10 任务)
+- `docs/superpowers/plans/2026-06-22-health-reminder-enhance.md`(Plan 2 体验完善,6 任务)
+
+**执行顺序:先 Plan 1 全部完成并验证闭环,再 Plan 2。** 两种执行方式:
+
+**1. Subagent-Driven(推荐)** — 每任务派新 subagent 实现,task 间 review,快速迭代。复杂任务(规则 6/14)建议先建 git worktree 隔离开发,完成后再合并 master(注意当前 master 已有并行 merge,合并时解冲突)。
+
+**2. Inline Execution** — 当前会话按 executing-plans 批量执行 + checkpoint review。
+
+**选哪种执行方式?(Plan 1 从 Task 1 开始)**
