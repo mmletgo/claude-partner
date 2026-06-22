@@ -80,7 +80,11 @@ pub fn start_health_daemon(app: AppHandle, state: std::sync::Arc<AppState>) -> C
     let app_h = app.clone();
     let state_h = state.clone();
     let cancel_h = cancel.clone();
-    tokio::spawn(async move {
+    // 用 `tauri::async_runtime::spawn`（非 `tokio::spawn`）：本函数在 lib.rs setup 闭包的
+    // 同步段（block_on 之外）被调用，主线程无 Tokio reactor，`tokio::spawn` 会 panic
+    // "there is no reactor running"；走 Tauri 全局 runtime handle 不依赖当前线程上下文
+    // （与 cc/collector.rs / commands/updater.rs 的 spawn 范式一致）。
+    tauri::async_runtime::spawn(async move {
         loop {
             tokio::select! {
                 _ = cancel_h.cancelled() => break,
