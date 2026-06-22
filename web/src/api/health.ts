@@ -2,12 +2,13 @@
  * Health API - 通过 Tauri invoke 调用 Rust 后端健康提醒命令
  *
  * Business Logic（为什么需要这个模块）:
- *   久坐监测 / 工作休息状态机 / 系统通知提醒需要前端读写：开关监测、
- *   手动暂停/贪睡/跳过、读取当前状态与今日活跃统计、整体配置回写。
- *   本模块封装这 8 个 invoke 调用，供 Health 页与 toast 消费。
+ *   久坐监测 / 工作休息状态机 / 系统通知 + toast + 全屏提醒 / 喝水提醒 /
+ *   活动统计图表需要前端读写：开关监测、手动暂停/贪睡/跳过、读取当前状态与
+ *   今日活跃统计 + app 排行/小时分布明细、记录喝水、整体配置回写。
+ *   本模块封装这 11 个 invoke 调用，供 Health 页 / toast / 全屏遮罩消费。
  *
  * Code Logic（这个模块做什么）:
- *   基于 invoke 封装 8 个命令，返回类型化的 Promise，参数字段 camelCase
+ *   基于 invoke 封装 11 个命令，返回类型化的 Promise，参数字段 camelCase
  *   对齐 Rust #[tauri::command] 签名。
  */
 
