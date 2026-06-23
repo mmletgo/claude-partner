@@ -39,6 +39,10 @@ jobs:
           - platform: 'ubuntu-22.04'
             args: ''
             target: ''
+          # Linux arm64（aarch64）；GitHub 原生 arm64 runner，产出 arm64 AppImage/deb
+          - platform: 'ubuntu-24.04-arm'
+            args: ''
+            target: ''
 
     runs-on: ${{ matrix.platform }}
 
@@ -67,7 +71,7 @@ jobs:
           shared-key: ${{ matrix.platform }}-${{ matrix.target }}
 
       - name: Install Linux system dependencies (webkit2gtk-4.1 等 Tauri 运行/构建依赖)
-        if: matrix.platform == 'ubuntu-22.04'
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -99,5 +103,7 @@ jobs:
           prerelease: false
           # Windows 用 nsis 安装包（非 msi）作为 updater 的下载源
           updaterJsonPreferNsis: true
+          # 上传到 Release 的 asset 名加 平台_架构 前缀（保留原文件名，避免双语 msi/安装包同名冲突）
+          assetNamePattern: '{{platform}}_{{arch}}_{{filename}}'
           # 透传各平台的 build target 参数
           args: ${{ matrix.args }}
