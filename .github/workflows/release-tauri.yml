@@ -87,10 +87,12 @@ jobs:
         run: cd web && npm ci
 
       - name: Build & publish with tauri-action
-        # 固定到 dev 分支 commit（@v0=v0.6.2 存在 updater bundle 收集缺陷：不收集 .sig 导致
-        # latest.json "Signature not found" 跳过，updater 无法端到端校验）。dev 已修复 signatureFiles
-        # 从 artifacts 收集 + uploadUpdaterSignatures，确保 .sig 纳入 latest.json。
-        uses: tauri-apps/tauri-action@61337b436e85a75347fec553393c9e2be16a0d85
+        # 用 @v0（浮动，指向最新 v0.x release，自动跟进上游修复）。
+        # 注：latest.json 缺失是 tauri-action 上游 bug——其 artifacts 收集不收集 updater .sig
+        # （与 tauri v2 updater bundle 兼容缺陷），致 upload-version-json "Signature not found" 跳过。
+        # 已验证：固定 dev commit 61337b43 同样无效（dev 的 artifacts 收集也有此缺陷）。
+        # 该 bug 需 tauri-action 上游修复，@v0 浮动会在新 release 发布后自动跟进。
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # updater 签名私钥（空密码，无需 TAURI_SIGNING_PRIVATE_KEY_PASSWORD）。
