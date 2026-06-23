@@ -1,7 +1,7 @@
 {
-  "title": "在线设备",
+  "title": "设备",
   "onlineCount": "{{count}} 个在线",
-  "desc": "局域网内通过 mDNS 自动发现的对端实例",
+  "desc": "发现局域网设备，并集中管理 SSH 连接目标与配置同步",
   "localInfo": "本机信息",
   "loading": "加载中…",
   "fetchSelfFailed": "获取本机信息失败",

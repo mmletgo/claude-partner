@@ -334,6 +334,47 @@ pub async fn commit_all(git: &Path, workdir: &Path, msg: &str) -> Result<bool, A
     Ok(true)
 }
 
+/// 只提交指定路径的改动。
+///
+/// Business Logic: CLAUDE.md 主动推送只应更新云端的 claude_md/claude_md.json，
+///     不能把 cloud-sync 工作区中其它未提交残留一并提交。
+/// Code Logic: `git add -- <pathspec>` → `git status --porcelain -- <pathspec>` 判空
+///     → `git commit -m <msg> -- <pathspec>`。无变化返回 false。
+pub async fn commit_path(
+    git: &Path,
+    workdir: &Path,
+    pathspec: &str,
+    msg: &str,
+) -> Result<bool, AppError> {
+    run(
+        git,
+        workdir,
+        &["add", "--", pathspec],
+        Duration::from_secs(LOCAL_TIMEOUT_SECS),
+    )
+    .await?;
+
+    let status = run(
+        git,
+        workdir,
+        &["status", "--porcelain", "--", pathspec],
+        Duration::from_secs(LOCAL_TIMEOUT_SECS),
+    )
+    .await?;
+    if status.trim().is_empty() {
+        return Ok(false);
+    }
+
+    run(
+        git,
+        workdir,
+        &["commit", "-m", msg, "--", pathspec],
+        Duration::from_secs(LOCAL_TIMEOUT_SECS),
+    )
+    .await?;
+    Ok(true)
+}
+
 /// push 当前分支到 origin/<branch>，区分被拒（可重试）与其他失败。
 ///
 /// Business Logic: 多设备并发时后 push 会被远端拒绝，需识别此场景让上层 fetch+重试收敛。

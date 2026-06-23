@@ -18,9 +18,18 @@ use crate::cloud_sync::git_cli::{self, PushError};
 use crate::cloud_sync::snapshot::{export_from_db, import_to_db, ExportStats, ImportStats};
 use crate::config::config_dir;
 use crate::error::AppError;
+use crate::models::claude_md::ClaudeMdRow;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
+use std::fs;
 use std::path::{Path, PathBuf};
+
+/// GitHub 工作区中 CLAUDE.md 单例目录名（仅用于用户主动推送，不参与 cloud auto sync）。
+const CLAUDE_MD_DIR: &str = "claude_md";
+/// GitHub 工作区中 CLAUDE.md 单例文件名。
+const CLAUDE_MD_FILE: &str = "claude_md.json";
+/// Git pathspec：只提交 CLAUDE.md 这一个云端快照文件。
+const CLAUDE_MD_PATHSPEC: &str = "claude_md/claude_md.json";
 
 /// 同步结果（返回前端，camelCase 对齐锁定契约）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,12 +61,106 @@ pub struct TestCloudSyncResult {
     pub error: Option<String>,
 }
 
+/// CLAUDE.md 主动推送到 GitHub 的结果（内部用于合并前端提示）。
+#[derive(Debug, Clone)]
+pub struct CloudClaudeMdPushResult {
+    /// 人类可读说明。
+    pub note: String,
+}
+
 /// 返回云端同步工作区路径：`~/.claude-partner/cloud-sync/`。
 ///
 /// Business Logic: cloud_sync 的 git 工作区集中放在应用数据根下，便于清理与定位。
 /// Code Logic: 复用 config::config_dir()（与配置/数据库同根），追加 "cloud-sync"。
 pub fn cloud_sync_workdir() -> PathBuf {
     config_dir().join("cloud-sync")
+}
+
+/// 将本机 CLAUDE.md 版本主动推送到 GitHub 云端。
+///
+/// Business Logic: CLAUDE.md 不参与 cloud auto sync；用户在 CLAUDE.md 页面点击推送时，
+///     GitHub 云端也必须被更新为触发设备的版本。这里不 import/merge 远端 CLAUDE.md，
+///     只在远端最新工作树上覆盖写入本机 CLAUDE.md 快照并 push。
+///
+/// Code Logic: 未配置 repo_url 则跳过；否则 detect_git → ensure_repo → fetch/reset 到
+///     origin/<branch>（若远端分支存在）→ 写 claude_md/claude_md.json → 仅提交该 pathspec
+///     → push。push 被拒时重试一轮。
+pub async fn push_claude_md_to_cloud(
+    state: &AppState,
+    row: &ClaudeMdRow,
+) -> Result<CloudClaudeMdPushResult, AppError> {
+    let repo_configured = {
+        let cfg = state.config.read().unwrap();
+        cfg.cloud_sync_repo_url
+            .as_ref()
+            .is_some_and(|url| !url.trim().is_empty())
+    };
+    if !repo_configured {
+        return Ok(CloudClaudeMdPushResult {
+            note: "GitHub 云端未配置，已跳过".to_string(),
+        });
+    }
+
+    let git = git_cli::detect_git()?;
+    let (workdir, branch) = ensure_repo(state, &git).await?;
+
+    for attempt in 0..2u8 {
+        if attempt > 0 || has_remote_branch(&git, &workdir).await {
+            git_cli::fetch_origin(&git, &workdir).await?;
+        }
+        if has_remote_branch(&git, &workdir).await {
+            git_cli::reset_hard(&git, &workdir, &branch).await?;
+        }
+
+        write_claude_md_snapshot(&workdir, row)?;
+
+        let commit_msg = format!(
+            "push CLAUDE.md from {} @ {}",
+            state.device_id.as_str(),
+            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
+        );
+        let committed =
+            git_cli::commit_path(&git, &workdir, CLAUDE_MD_PATHSPEC, &commit_msg).await?;
+        if !committed {
+            return Ok(CloudClaudeMdPushResult {
+                note: "GitHub 云端 CLAUDE.md 已是最新".to_string(),
+            });
+        }
+
+        match git_cli::push(&git, &workdir, &branch).await {
+            Ok(()) => {
+                return Ok(CloudClaudeMdPushResult {
+                    note: "GitHub 云端 CLAUDE.md 已推送".to_string(),
+                });
+            }
+            Err(PushError::Rejected) if attempt == 0 => {
+                tracing::warn!("CLAUDE.md GitHub 推送被远端拒绝，fetch/reset 后重试一轮");
+                continue;
+            }
+            Err(PushError::Rejected) => {
+                return Err(AppError::generic(
+                    "CLAUDE.md 推送到 GitHub 被远端拒绝，重试后仍未成功，请稍后再试",
+                ));
+            }
+            Err(PushError::Other(e)) => return Err(e),
+        }
+    }
+
+    Err(AppError::generic("CLAUDE.md 推送到 GitHub 未完成"))
+}
+
+/// 写出 CLAUDE.md GitHub 快照文件。
+///
+/// Business Logic: 用户主动推送时，云端保存的是触发设备当前 DB Row（含 vector_clock 元数据），
+///     供其它设备或后续审计看到完整版本信息。
+/// Code Logic: 确保 claude_md/ 存在，pretty JSON 写 claude_md.json。
+fn write_claude_md_snapshot(workdir: &Path, row: &ClaudeMdRow) -> Result<(), AppError> {
+    let dir = workdir.join(CLAUDE_MD_DIR);
+    fs::create_dir_all(&dir)?;
+    let path = dir.join(CLAUDE_MD_FILE);
+    let text = serde_json::to_string_pretty(row)?;
+    fs::write(path, text)?;
+    Ok(())
 }
 
 /// 触发一次完整的云端同步（手动按钮 / scheduler 均调此入口）。

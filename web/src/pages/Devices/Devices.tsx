@@ -12,19 +12,29 @@
  *   - 顶部 outlined Card 显示本机信息（通过 /api/health 获取，设备名 + IP + 端口 + 状态）
  *   - 主区域用 auto-fill 网格渲染 DeviceCard，加载/空/错误态分别走
  *     skeleton / empty hint / error block
+ *   - SSH 目标管理直接并入设备页：局域网设备自动成为连接目标，也可手动添加 IP；
+ *     行内保存 username/port，一键复制 ssh 命令，配置可跨设备同步
  *   - 启动后用 setInterval 每 5 秒拉取一次设备列表；
  *     卸载时清除 interval 防止内存泄漏
  *   - 容器居中、限宽，保证在大窗口下也保持可读
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, Pill, Button, Input } from '@/components/primitives';
 import { DeviceCard } from '@/components/domain';
 import { devicesApi } from '@/api/devices';
 import type { HealthResponse } from '@/api/devices';
-import { SyncIcon, DevicesIcon, AlertIcon } from '@/lib/icons';
-import type { Device } from '@/lib/types';
+import { sshApi } from '@/api/ssh';
+import {
+  SyncIcon,
+  DevicesIcon,
+  AlertIcon,
+  CopyIcon,
+  TrashIcon,
+  PlusIcon,
+} from '@/lib/icons';
+import type { Device, SshTarget, OsInfo } from '@/lib/types';
 import styles from './Devices.module.css';
 
 /** 页面刷新间隔（ms） */
@@ -37,6 +47,31 @@ interface SelfDeviceInfo {
   address: string;
   port: number;
   status: 'online' | 'offline';
+}
+
+/** SSH 目标列表渲染行：实时设备与手动目标的合并结果 */
+interface SshTargetRow {
+  host: string;
+  username: string;
+  port: number;
+  label?: string;
+  online: boolean;
+  deviceName?: string;
+}
+
+/**
+ * 按 username/port 拼接 ssh 连接命令。
+ *
+ * Business Logic（为什么需要）:
+ *   设备页内的一键复制需要产出可直接粘贴到终端的 SSH 命令，减少用户记 IP/端口的成本。
+ *
+ * Code Logic（做什么）:
+ *   用户名为空时使用本机默认用户名；端口为 22 时省略 `-p`；最后压缩多余空白。
+ */
+function buildSshCommand(host: string, username: string, port: number): string {
+  const userPart = username.trim() ? `${username.trim()}@` : '';
+  const portPart = port === 22 ? '' : `-p ${port} `;
+  return `ssh ${portPart}${userPart}${host}`.replace(/\s+/g, ' ').trim();
 }
 
 /**
@@ -61,13 +96,25 @@ function toSelfDevice(resp: HealthResponse): SelfDeviceInfo {
  * @returns Devices 路由的根容器
  */
 export function Devices() {
-  const { t } = useTranslation(['devices', 'common']);
+  const { t } = useTranslation(['devices', 'ssh', 'common']);
   const [devices, setDevices] = useState<Device[]>([]);
   const [selfDevice, setSelfDevice] = useState<SelfDeviceInfo | null>(null);
   const [selfLoading, setSelfLoading] = useState<boolean>(true);
   const [selfError, setSelfError] = useState<string | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [targets, setTargets] = useState<SshTarget[]>([]);
+  const [osInfo, setOsInfo] = useState<OsInfo | null>(null);
+  const [sshLoading, setSshLoading] = useState<boolean>(true);
+  const [sshError, setSshError] = useState<string | null>(null);
+  const [copiedHost, setCopiedHost] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState<boolean>(false);
+  const [syncMsg, setSyncMsg] = useState<string | null>(null);
+  const [manualHost, setManualHost] = useState<string>('');
+  const [manualUser, setManualUser] = useState<string>('');
+  const [manualPort, setManualPort] = useState<string>('22');
+  const [manualLabel, setManualLabel] = useState<string>('');
+  const [edits, setEdits] = useState<Record<string, { username: string; port: string }>>({});
   const [tick, setTick] = useState<number>(0);
   const [search, setSearch] = useState<string>('');
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -104,11 +151,43 @@ export function Devices() {
     }
   }, [t]);
 
+  /**
+   * 拉取 SSH 配置与本机系统信息。
+   *
+   * Business Logic（为什么需要）:
+   *   设备页要同时管理连接目标，需把持久 SSH 目标与系统指南数据拉到同一个页面。
+   *
+   * Code Logic（做什么）:
+   *   并发请求 list_ssh_targets 与 get_os_info；失败时仅影响 SSH 区块，不阻断设备列表。
+   */
+  const fetchSshConfig = useCallback(async () => {
+    try {
+      setSshError(null);
+      const [nextTargets, nextOsInfo] = await Promise.all([
+        sshApi.list(),
+        sshApi.getOsInfo(),
+      ]);
+      setTargets(nextTargets);
+      setOsInfo(nextOsInfo);
+    } catch (err) {
+      setSshError(err instanceof Error ? err.message : t('ssh:fetchFailed'));
+    } finally {
+      setSshLoading(false);
+    }
+  }, [t]);
+
   // 首次挂载时获取本机信息
   /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
   useEffect(() => {
     fetchSelfDevice();
   }, [fetchSelfDevice]);
+  /* eslint-enable react-hooks/set-state-in-effect */
+
+  // 首次挂载时获取 SSH 目标与本机系统信息
+  /* eslint-disable react-hooks/set-state-in-effect -- 合法 fetch-in-effect，setState 在 await 后异步执行 */
+  useEffect(() => {
+    fetchSshConfig();
+  }, [fetchSshConfig]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // 首次挂载 + tick 变化时重新拉取设备列表
@@ -138,6 +217,75 @@ export function Devices() {
 
   const onlineCount = devices.filter((d) => d.status === 'online').length;
 
+  const targetByHost = useMemo(() => new Map(targets.map((target) => [target.host, target])), [
+    targets,
+  ]);
+
+  /**
+   * 合并 SSH 连接目标。
+   *
+   * Business Logic（为什么需要）:
+   *   局域网发现的设备应该天然出现在连接目标里；手动添加过但当前未发现的 IP 仍应保留。
+   *
+   * Code Logic（做什么）:
+   *   先按实时设备生成在线行，再补入 targets 中剩余 host，按 host 去重。
+   */
+  const sshTargetRows = useMemo<SshTargetRow[]>(() => {
+    const seen = new Set<string>();
+    const rows: SshTargetRow[] = [];
+
+    for (const device of devices) {
+      if (seen.has(device.address)) continue;
+      seen.add(device.address);
+      const cfg = targetByHost.get(device.address);
+      rows.push({
+        host: device.address,
+        username: cfg?.username ?? '',
+        port: cfg?.port ?? 22,
+        label: cfg?.label,
+        online: device.status === 'online',
+        deviceName: device.name,
+      });
+    }
+
+    for (const target of targets) {
+      if (seen.has(target.host)) continue;
+      seen.add(target.host);
+      rows.push({
+        host: target.host,
+        username: target.username,
+        port: target.port,
+        label: target.label,
+        online: false,
+      });
+    }
+
+    return rows;
+  }, [devices, targetByHost, targets]);
+
+  /**
+   * 保存 SSH 连接目标。
+   *
+   * Business Logic（为什么需要）:
+   *   用户在设备页编辑用户名/端口后，配置要立刻落库并参与跨设备同步。
+   *
+   * Code Logic（做什么）:
+   *   调 upsert_ssh_target 保存，然后刷新 targets，保持列表与后端一致。
+   */
+  const saveTarget = useCallback(
+    async (host: string, username: string, port: number, label?: string) => {
+      try {
+        await sshApi.upsert(host, username, port, label);
+        const nextTargets = await sshApi.list();
+        setTargets(nextTargets);
+        setSshError(null);
+      } catch (err) {
+        setSshError(err instanceof Error ? err.message : t('ssh:fetchFailed'));
+      }
+    },
+    [t],
+  );
+
   /**
    * 处理搜索输入
    *
@@ -152,7 +300,119 @@ export function Devices() {
    */
   const handleRefresh = () => {
     setLoading(true);
+    setSshLoading(true);
     setTick((prev) => prev + 1);
+    void fetchSshConfig();
+  };
+
+  /**
+   * 提交某个 SSH 目标的行内编辑。
+   *
+   * Business Logic（为什么需要）:
+   *   用户编辑 username/port 后在失焦或回车时自动保存，避免额外确认按钮增加操作成本。
+   *
+   * Code Logic（做什么）:
+   *   从 edits 取缓存，保留原 label，端口非法时回落 22，提交后删除该行编辑缓存。
+   */
+  const commitSshEdit = (host: string) => {
+    const edit = edits[host];
+    if (!edit) return;
+    const cfg = targetByHost.get(host);
+    void saveTarget(host, edit.username, Number(edit.port) || 22, cfg?.label);
+    setEdits((prev) => {
+      const next = { ...prev };
+      delete next[host];
+      return next;
+    });
+  };
+
+  /**
+   * 复制 SSH 命令到剪贴板。
+   *
+   * Business Logic（为什么需要）:
+   *   用户可以从设备页直接拿到终端命令，不需要手动拼 host/user/port。
+   *
+   * Code Logic（做什么）:
+   *   使用 Clipboard API 写入命令，并短暂标记 copiedHost 展示反馈。
+   */
+  const handleCopySsh = async (host: string, username: string, port: number) => {
+    try {
+      await navigator.clipboard.writeText(buildSshCommand(host, username, port));
+      setCopiedHost(host);
+      window.setTimeout(() => setCopiedHost(null), 1500);
+    } catch {
+      // 剪贴板不可用时保持静默，避免阻断用户继续编辑。
+    }
+  };
+
+  /**
+   * 删除 SSH 目标。
+   *
+   * Business Logic（为什么需要）:
+   *   手动添加或不再使用的连接目标应可从设备页移除。
+   *
+   * Code Logic（做什么）:
+   *   调 delete_ssh_target 软删除，再刷新 targets；实时发现设备仍会保留为在线行。
+   */
+  const handleDeleteSshTarget = async (host: string) => {
+    try {
+      await sshApi.remove(host);
+      const nextTargets = await sshApi.list();
+      setTargets(nextTargets);
+      setSshError(null);
+    } catch (err) {
+      setSshError(err instanceof Error ? err.message : t('ssh:fetchFailed'));
+    }
+  };
+
+  /**
+   * 手动添加 SSH 目标。
+   *
+   * Business Logic（为什么需要）:
+   *   mDNS 发现不到的机器仍可通过 IP/hostname 加入连接目标列表。
+   *
+   * Code Logic（做什么）:
+   *   host 去空后 upsert；成功后清空表单，失败由 saveTarget 写入 sshError。
+   */
+  const handleAddSshTarget = async () => {
+    const host = manualHost.trim();
+    if (!host) return;
+    await saveTarget(
+      host,
+      manualUser.trim(),
+      Number(manualPort) || 22,
+      manualLabel.trim() || undefined,
+    );
+    setManualHost('');
+    setManualUser('');
+    setManualPort('22');
+    setManualLabel('');
+  };
+
+  /**
+   * 触发跨设备同步。
+   *
+   * Business Logic（为什么需要）:
+   *   SSH 目标配置需要在多设备间同步，用户可在设备页主动触发一次。
+   *
+   * Code Logic（做什么）:
+   *   复用 trigger_sync；完成后刷新 SSH targets 并展示 3 秒反馈。
+   */
+  const handleSyncSshConfig = async () => {
+    setSyncing(true);
+    setSyncMsg(null);
+    try {
+      const result = await sshApi.sync();
+      setSyncMsg(
+        result.synced > 0 ? t('ssh:synced', { count: result.synced }) : t('ssh:syncNoDevices'),
+      );
+      await fetchSshConfig();
+    } catch {
+      setSyncMsg(t('ssh:syncFailed'));
+    } finally {
+      setSyncing(false);
+      window.setTimeout(() => setSyncMsg(null), 3000);
+    }
   };
 
   return (
@@ -169,15 +429,17 @@ export function Devices() {
             </h1>
             <p className={styles.lead}>{t('devices:desc')}</p>
           </div>
-          <Button
-            variant="secondary"
-            size="sm"
-            icon={<SyncIcon />}
-            onClick={handleRefresh}
-            loading={loading}
-          >
-            {t('common:action.refresh')}
-          </Button>
+          <div className={styles.headerActions}>
+            <Button
+              variant="secondary"
+              size="sm"
+              icon={<SyncIcon />}
+              onClick={handleRefresh}
+              loading={loading || sshLoading}
+            >
+              {t('common:action.refresh')}
+            </Button>
+          </div>
         </header>
 
         {/* 本机信息 */}
@@ -267,6 +529,192 @@ export function Devices() {
             ))}
           </div>
         )}
+
+        {/* SSH 连接目标 */}
+        <Card variant="outlined" padding="md" className={styles.sshCard}>
+          <div className={styles.sectionHeader}>
+            <div className={styles.sectionTitleGroup}>
+              <h2 className={styles.sectionTitle}>{t('ssh:targetsSection')}</h2>
+              {osInfo ? (
+                <Pill tone="neutral" className={styles.osPill}>
+                  {t('ssh:localOs')}: {osInfo.platform}
+                </Pill>
+              ) : null}
+            </div>
+            <div className={styles.sectionActions}>
+              {syncMsg ? <span className={styles.syncMsg}>{syncMsg}</span> : null}
+              <Button
+                variant="secondary"
+                size="sm"
+                icon={<SyncIcon />}
+                onClick={handleSyncSshConfig}
+                loading={syncing}
+              >
+                {syncing ? t('ssh:syncing') : t('ssh:syncConfig')}
+              </Button>
+            </div>
+          </div>
+
+          {sshError ? (
+            <div className={styles.errorBox} role="alert">
+              <AlertIcon />
+              <span>{sshError}</span>
+              <Button variant="secondary" size="sm" onClick={fetchSshConfig}>
+                {t('ssh:retry')}
+              </Button>
+            </div>
+          ) : null}
+
+          {sshLoading && sshTargetRows.length === 0 ? (
+            <div className={styles.empty}>
+              <SyncIcon /> {t('ssh:loading')}
+            </div>
+          ) : sshTargetRows.length === 0 ? (
+            <div className={styles.empty}>
+              <p className={styles.emptyTitle}>{t('ssh:emptyTitle')}</p>
+              <span className={styles.emptyHint}>{t('ssh:emptyHint')}</span>
+            </div>
+          ) : (
+            <div className={styles.targetList}>
+              {sshTargetRows.map((row) => {
+                const edit = edits[row.host];
+                const username = edit?.username ?? row.username;
+                const port = edit?.port ?? String(row.port);
+                return (
+                  <div className={styles.targetRow} key={row.host}>
+                    <span className={styles.targetHost} title={row.deviceName ?? row.label}>
+                      {row.host}
+                      {!row.online ? (
+                        <span className={styles.targetHostMeta}> {t('ssh:offlineSuffix')}</span>
+                      ) : null}
+                    </span>
+                    <Input
+                      size="sm"
+                      value={username}
+                      placeholder={t('ssh:manualUsernamePh')}
+                      onChange={(e) =>
+                        setEdits((prev) => ({
+                          ...prev,
+                          [row.host]: {
+                            username: e.target.value,
+                            port: prev[row.host]?.port ?? String(row.port),
+                          },
+                        }))
+                      }
+                      onBlur={() => commitSshEdit(row.host)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitSshEdit(row.host);
+                      }}
+                    />
+                    <Input
+                      type="number"
+                      size="sm"
+                      mono
+                      value={port}
+                      onChange={(e) =>
+                        setEdits((prev) => ({
+                          ...prev,
+                          [row.host]: {
+                            username: prev[row.host]?.username ?? row.username,
+                            port: e.target.value,
+                          },
+                        }))
+                      }
+                      onBlur={() => commitSshEdit(row.host)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') commitSshEdit(row.host);
+                      }}
+                    />
+                    <span className={styles.targetLabel}>{row.label ?? ''}</span>
+                    <div className={styles.targetActions}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        icon={<CopyIcon />}
+                        onClick={() => handleCopySsh(row.host, username, Number(port) || 22)}
+                      >
+                        {copiedHost === row.host ? t('ssh:copied') : t('ssh:copy')}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        icon={<TrashIcon />}
+                        onClick={() => handleDeleteSshTarget(row.host)}
+                        aria-label={t('ssh:delete')}
+                      />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className={styles.manualRow}>
+            <Input
+              size="sm"
+              value={manualHost}
+              placeholder={t('ssh:manualHostPh')}
+              onChange={(e) => setManualHost(e.target.value)}
+            />
+            <Input
+              size="sm"
+              value={manualUser}
+              placeholder={t('ssh:manualUsernamePh')}
+              onChange={(e) => setManualUser(e.target.value)}
+            />
+            <Input
+              type="number"
+              size="sm"
+              mono
+              value={manualPort}
+              placeholder={t('ssh:manualPortPh')}
+              onChange={(e) => setManualPort(e.target.value)}
+            />
+            <Input
+              size="sm"
+              value={manualLabel}
+              placeholder={t('ssh:manualLabelPh')}
+              onChange={(e) => setManualLabel(e.target.value)}
+            />
+            <Button variant="primary" size="sm" icon={<PlusIcon />} onClick={handleAddSshTarget}>
+              {t('ssh:add')}
+            </Button>
+          </div>
+        </Card>
+
+        {/* SSH 配置指南 */}
+        <Card variant="outlined" padding="md" className={styles.guideCard}>
+          <h2 className={styles.sectionTitle}>{t('ssh:guideSection')}</h2>
+          <div className={styles.guideBlock}>
+            <span className={styles.guideLabel}>
+              {t('ssh:guideLocalTitle')} ·{' '}
+              {osInfo?.platform === 'mac'
+                ? t('ssh:guideMac')
+                : osInfo?.platform === 'windows'
+                  ? t('ssh:guideWindows')
+                  : t('ssh:guideUbuntu')}
+            </span>
+            <span className={styles.guideText}>
+              {osInfo?.platform === 'mac'
+                ? t('ssh:guideLocalMac')
+                : osInfo?.platform === 'windows'
+                  ? t('ssh:guideLocalWindows')
+                  : t('ssh:guideLocalUbuntu')}
+            </span>
+          </div>
+          <div className={styles.guideBlock}>
+            <span className={styles.guideLabel}>{t('ssh:guideRemoteTitle')}</span>
+            <span className={styles.guideText}>
+              <strong>{t('ssh:guideMac')}:</strong> {t('ssh:guideRemoteMac')}
+            </span>
+            <span className={styles.guideText}>
+              <strong>{t('ssh:guideUbuntu')}:</strong> {t('ssh:guideRemoteUbuntu')}
+            </span>
+            <span className={styles.guideText}>
+              <strong>{t('ssh:guideWindows')}:</strong> {t('ssh:guideRemoteWindows')}
+            </span>
+          </div>
+        </Card>
       </div>
     </div>
   );

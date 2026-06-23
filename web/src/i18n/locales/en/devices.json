@@ -2,7 +2,7 @@
   "title": "Devices",
   "onlineCount": "{{count}} online",
   "onlineCount_other": "{{count}} online",
-  "desc": "Peer instances discovered automatically via mDNS on the LAN.",
+  "desc": "Discover LAN devices and manage SSH targets and synced connection settings in one place.",
   "localInfo": "This device",
   "loading": "Loading…",
   "fetchSelfFailed": "Failed to load device info",

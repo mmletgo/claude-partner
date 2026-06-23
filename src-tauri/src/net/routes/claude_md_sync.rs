@@ -1,16 +1,14 @@
-//! net/routes/claude_md_sync.rs — /api/sync/claude_md/{pull,push} handler（供对端 P2P 同步 user 级 CLAUDE.md）
+//! net/routes/claude_md_sync.rs — /api/sync/claude_md/{pull,push} handler（供对端 P2P 推送 user 级 CLAUDE.md）
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     user 级 CLAUDE.md（~/.claude/CLAUDE.md）需跨设备同步成全局记忆。对端设备发起同步时
-//!     调用这两个端点：pull 让对端告知本端需要回传的本端 CLAUDE.md 版本；push 让对端把本端
-//!     缺少/过时的 CLAUDE.md 推过来。与 prompts 同步路由（sync.rs）结构对称，只是 CLAUDE.md
-//!     是单例记录（id 恒为 "claude_md"），故 pull 请求只发本端向量时钟、响应只回 0 或 1 条。
+//!     user 级 CLAUDE.md（~/.claude/CLAUDE.md）只在用户主动点击推送时传播。push 让触发设备
+//!     把自己的 CLAUDE.md 推过来，本端必须覆盖为发送方版本；pull 仅保留兼容旧同步协议。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - POST /api/sync/claude_md/pull：body `{vector_clock: {...}}`，比对后若本端领先/并发
 //!       则返回本端 CLAUDE.md 完整 ClaudeMdRow，否则 None。
-//!     - POST /api/sync/claude_md/push：body `{claude_md: ClaudeMdRow}`，merge_claude_md 决策后
-//!       仅在合并结果与本地有差异时落库 + 写文件，返回 `{accepted: bool}`。
+//!     - POST /api/sync/claude_md/push：body `{claude_md: ClaudeMdRow}`，覆盖落库 + 写文件，
+//!       返回 `{accepted: bool}`。
 //!     字段 snake_case（ClaudeMdRow 默认序列化），与 sync.rs 的 prompts 同步路由一致。
 
 use crate::error::AppError;
@@ -43,7 +41,7 @@ pub struct ClaudeMdPushReq {
     pub claude_md: ClaudeMdRow,
 }
 
-/// claude_md/push 响应体：是否实际接受落库（true=合并后有变化已写入）。
+/// claude_md/push 响应体：是否实际接受落库（true=发送方版本与本地有差异并已写入）。
 #[derive(Debug, Serialize)]
 pub struct ClaudeMdPushResp {
     pub accepted: bool,
@@ -79,39 +77,27 @@ pub async fn claude_md_pull(
     Ok(Json(ClaudeMdPullResp { claude_md }))
 }
 
-/// POST /api/sync/claude_md/push：接收对端推送的 CLAUDE.md，合并决策后落库 + 写文件。
+/// POST /api/sync/claude_md/push：接收对端推送的 CLAUDE.md，覆盖落库 + 写文件。
 ///
-/// Business Logic: 对端把本端缺少/过时的 CLAUDE.md 推过来，本端 merge_claude_md 决策胜出方
-///     并合并向量时钟，仅当合并结果与本地有差异（内容或时钟）时才落库 + 写文件，避免无意义覆盖。
+/// Business Logic: CLAUDE.md 的用户主动推送语义是"接收端变成触发设备这份配置"，
+///     因此不能按双向同步 merge，也不能让接收端本地版本因时间戳/向量时钟获胜。
 ///
 /// Code Logic:
-///     1. 本地 None → 直接接收 remote（upsert + 写文件），accepted:true；
-///     2. 本地 Some → merge_claude_md，若 merged 与本地有差异（content/vector_clock）→ 落库 + 写文件，
-///        accepted:true；否则 accepted:false。
+///     1. 读取本地行用于判断是否有差异；
+///     2. 无论本地是否存在，都 upsert 发送方 row + write_file_if_changed；
+///     3. accepted 表示本地同步字段是否发生变化。
 pub async fn claude_md_push(
     State(state): State<AppState>,
     Json(req): Json<ClaudeMdPushReq>,
 ) -> Result<Json<ClaudeMdPushResp>, AppError> {
     let local = state.claude_md_repo.get().await?;
-    let accepted = match local {
-        None => {
-            // 本地无记录 → 直接接收对端版本
-            state.claude_md_repo.upsert(&req.claude_md).await?;
-            crate::sync::claude_md::write_file_if_changed(&req.claude_md.content).await?;
-            true
-        }
-        Some(local_row) => {
-            // 合并决策胜出方 + 向量时钟
-            let merged = crate::sync::claude_md::merge_claude_md(&local_row, &req.claude_md);
-            if merged.content != local_row.content || merged.vector_clock != local_row.vector_clock
-            {
-                state.claude_md_repo.upsert(&merged).await?;
-                crate::sync::claude_md::write_file_if_changed(&merged.content).await?;
-                true
-            } else {
-                false
-            }
-        }
-    };
+    let accepted = local.as_ref().is_none_or(|local_row| {
+        local_row.content != req.claude_md.content
+            || local_row.vector_clock != req.claude_md.vector_clock
+            || local_row.updated_at != req.claude_md.updated_at
+            || local_row.device_id != req.claude_md.device_id
+    });
+    state.claude_md_repo.upsert(&req.claude_md).await?;
+    crate::sync::claude_md::write_file_if_changed(&req.claude_md.content).await?;
     Ok(Json(ClaudeMdPushResp { accepted }))
 }

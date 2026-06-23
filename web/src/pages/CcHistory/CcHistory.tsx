@@ -41,6 +41,7 @@ export function CcHistory() {
   const [projectsLoadState, setProjectsLoadState] = useState<LoadState>('loading');
   const [projectsError, setProjectsError] = useState<string | null>(null);
   const [selectedProjectPath, setSelectedProjectPath] = useState<string | null>(null);
+  const [projectSearch, setProjectSearch] = useState('');
 
   // ── prompt 列表 ──
   const [prompts, setPrompts] = useState<CcHistoryItem[]>([]);
@@ -233,6 +234,17 @@ export function CcHistory() {
     [projects, selectedProjectPath],
   );
 
+  // ── 项目筛选：按项目名与绝对路径本地匹配 ──
+  const visibleProjects = useMemo(() => {
+    const keyword = projectSearch.trim().toLowerCase();
+    if (!keyword) return projects;
+    return projects.filter((p) => {
+      const name = p.projectName.toLowerCase();
+      const path = p.projectPath.toLowerCase();
+      return name.includes(keyword) || path.includes(keyword);
+    });
+  }, [projectSearch, projects]);
+
   const lang = i18n.language === 'zh' ? 'zh' : 'en';
 
   // ── 渲染 ──
@@ -279,6 +291,24 @@ export function CcHistory() {
       <section className={styles.body}>
         {/* 左栏：项目列表 */}
         <aside className={styles.sidebar} aria-label={t('ccHistory:projectListAriaLabel')}>
+          {projects.length > 0 ? (
+            <div className={styles.projectSearch}>
+              <Input
+                type="search"
+                size="sm"
+                value={projectSearch}
+                onChange={(e) => setProjectSearch(e.target.value)}
+                placeholder={t('ccHistory:projectSearchPlaceholder')}
+                icon={<SearchIcon />}
+                aria-label={t('ccHistory:projectSearchAriaLabel')}
+              />
+              {projectSearch.trim() ? (
+                <span className={styles.projectSearchMeta}>
+                  {t('ccHistory:projectSearchCount', { count: visibleProjects.length })}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           {projectsLoadState === 'loading' && projects.length === 0 ? (
             <ul className={styles.projectList} aria-busy="true">
               {[0, 1, 2, 3].map((i) => (
@@ -293,9 +323,14 @@ export function CcHistory() {
               <p>{t('ccHistory:emptyProjects')}</p>
               <p className={styles.emptyHint}>{t('ccHistory:emptyProjectsHint')}</p>
             </div>
+          ) : visibleProjects.length === 0 ? (
+            <div className={styles.empty}>
+              <p>{t('ccHistory:emptyProjectSearch')}</p>
+              <p className={styles.emptyHint}>{t('ccHistory:emptyProjectSearchHint')}</p>
+            </div>
           ) : (
             <ul className={styles.projectList}>
-              {projects.map((p) => {
+              {visibleProjects.map((p) => {
                 const active = p.projectPath === selectedProjectPath;
                 return (
                   <li key={p.projectPath}>

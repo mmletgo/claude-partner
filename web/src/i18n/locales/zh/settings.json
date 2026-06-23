@@ -1,6 +1,6 @@
 {
   "title": "设置",
-  "subtitle": "管理设备名、快捷键、同步策略与版本信息。",
+  "subtitle": "管理设备名、截图快捷键、云端同步与版本信息。",
   "loading": "加载中…",
   "loadFailed": "加载失败：{{error}}",
   "basic": {
@@ -14,16 +14,9 @@
   },
   "shortcut": {
     "title": "快捷键",
-    "screenshot": { "label": "截图快捷键", "helper": "框选区域并复制到剪贴板。" },
-    "toggleWindow": { "label": "切换窗口", "helper": "显示/隐藏主窗口。" },
-    "openSettings": { "label": "打开设置", "helper": "直接定位到本面板。" },
-    "quickSend": { "label": "快速发送", "helper": "选择文件并发送到最近设备。" }
+    "screenshot": { "label": "截图快捷键", "helper": "框选区域并复制到剪贴板。" }
   },
   "sync": {
-    "title": "同步与存储",
-    "autoSync": { "label": "启用自动同步", "helper": "联网后自动与其他设备同步 Prompt。" },
-    "saveHistory": { "label": "保存传输历史", "helper": "在本地数据库保留 30 天的传输记录。" },
-    "encryptSensitive": { "label": "加密敏感 Prompt", "helper": "对包含密钥/令牌的 Prompt 启用额外加密。" },
     "enabled": "启用",
     "disabled": "禁用"
   },

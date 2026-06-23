@@ -1,6 +1,6 @@
 {
   "title": "Settings",
-  "subtitle": "Manage device name, shortcuts, sync strategy, and version info.",
+  "subtitle": "Manage device name, screenshot shortcut, cloud sync, and version info.",
   "loading": "Loading…",
   "loadFailed": "Failed to load: {{error}}",
   "basic": {
@@ -14,16 +14,9 @@
   },
   "shortcut": {
     "title": "Shortcuts",
-    "screenshot": { "label": "Screenshot shortcut", "helper": "Select an area and copy it to the clipboard." },
-    "toggleWindow": { "label": "Toggle window", "helper": "Show/hide the main window." },
-    "openSettings": { "label": "Open settings", "helper": "Jump straight to this panel." },
-    "quickSend": { "label": "Quick send", "helper": "Pick a file and send it to the most recent device." }
+    "screenshot": { "label": "Screenshot shortcut", "helper": "Select an area and copy it to the clipboard." }
   },
   "sync": {
-    "title": "Sync & storage",
-    "autoSync": { "label": "Enable auto-sync", "helper": "Automatically sync Prompts with other devices when online." },
-    "saveHistory": { "label": "Save transfer history", "helper": "Keep transfer records in the local database for 30 days." },
-    "encryptSensitive": { "label": "Encrypt sensitive Prompts", "helper": "Add extra encryption for Prompts containing keys/tokens." },
     "enabled": "On",
     "disabled": "Off"
   },

@@ -1,7 +1,7 @@
 {
   "eyebrow": "SETTINGS",
   "title": "CLAUDE.md",
-  "desc": "Edit your user-level global instructions. Saving writes to ~/.claude/CLAUDE.md and can be pushed to other devices on your local network.",
+  "desc": "Edit your user-level global instructions. Saving writes to ~/.claude/CLAUDE.md and can be actively pushed to local-network devices and the configured GitHub cloud.",
   "save": "Save",
   "push": "Push",
   "saving": "Saving…",

@@ -3,14 +3,14 @@
  *
  * Business Logic（为什么需要这个页面）:
  *   用户希望在 Claude Partner 内直接编辑 user 级全局指令文件（~/.claude/CLAUDE.md），
- *   避免每次手动开编辑器。编辑后保存即可写回磁盘，并能一键推送到局域网内其他设备，
+ *   避免每次手动开编辑器。编辑后保存即可写回磁盘，并能一键推送到局域网设备和 GitHub 云端，
  *   让多台机器共享同一份全局指令。
  *
  * Code Logic（这个页面做什么）:
  *   - 进页面调 get_claude_md 载入内容与元数据
  *   - textarea 实时编辑，"未保存"标记对比 text 与 savedText
  *   - 保存按钮调 update_claude_md 写回（内容未变时跳过）
- *   - 推送按钮调 push_claude_md，把本机当前内容分发到局域网设备
+ *   - 推送按钮调 push_claude_md，把本机当前内容分发到局域网设备和 GitHub 云端
  *   - 操作反馈用本地 toast state（setTimeout 自动清除）
  *   - hooks 全部无条件声明在渲染之前（项目规则 20）
  */
@@ -86,13 +86,13 @@ export function ClaudeMd() {
     }
   }, [text, savedText, t, showToast]);
 
-  /** 推送：保存当前编辑器内容，并只向局域网设备推送本机 CLAUDE.md */
+  /** 推送：保存当前编辑器内容，并向局域网设备和 GitHub 云端推送本机 CLAUDE.md */
   const handlePush = useCallback(async () => {
     setPushing(true);
     try {
-      await claudeMdApi.push(text);
+      const result = await claudeMdApi.push(text);
       setSavedText(text);
-      showToast(t('claudeMd:pushed'));
+      showToast(result.note || t('claudeMd:pushed'));
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {

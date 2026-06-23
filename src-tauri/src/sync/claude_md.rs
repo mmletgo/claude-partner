@@ -47,6 +47,7 @@ pub fn claude_md_path() -> PathBuf {
 ///    - Before / Equal → local 胜；
 ///    - Concurrent → wins_concurrent_cm 决策。
 /// 3. 胜出方克隆 + 覆盖 vector_clock 为合并结果。
+#[allow(dead_code)]
 pub fn merge_claude_md(local: &ClaudeMdRow, remote: &ClaudeMdRow) -> ClaudeMdRow {
     let merged_clock = vector_clock::merge(&local.vector_clock, &remote.vector_clock);
     let relation = vector_clock::compare(&remote.vector_clock, &local.vector_clock);
@@ -73,6 +74,7 @@ pub fn merge_claude_md(local: &ClaudeMdRow, remote: &ClaudeMdRow) -> ClaudeMdRow
 /// Code Logic: 返回 true 表示 remote 胜出。
 ///     - updated_at 严格更大者胜；
 ///     - 相等时 device_id 字典序更大者胜。
+#[allow(dead_code)]
 fn wins_concurrent_cm(local: &ClaudeMdRow, remote: &ClaudeMdRow) -> bool {
     if remote.updated_at > local.updated_at {
         return true;

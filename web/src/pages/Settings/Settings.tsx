@@ -2,12 +2,12 @@
  * Settings 页面 - 偏好设置中心
  *
  * Business Logic（为什么需要这个页面）:
- *   用户需要集中调整设备名、接收目录、快捷键、同步策略等运行时偏好，
+ *   用户需要集中调整设备名、接收目录、截图快捷键、云端同步等运行时偏好，
  *   改变会通过表单即时反映在 UI 状态中；"保存"按钮在用户主动提交时
  *   把整张配置表发送到后端持久化，区分"未保存修改"和"已保存配置"。
  *
  * Code Logic（这个页面做什么）:
- *   - 顶部 4 个 Card 区块：基本设置 / 快捷键 / 同步与存储 / 关于
+ *   - Card 区块：基本设置 / 权限管理 / 截图快捷键 / 云端同步 / 关于
  *   - 组件挂载时从后端加载配置和版本信息
  *   - Toggle 控件内联实现，避免引入额外 Switch 组件；状态切换走
  *     受控的 onClick + role="switch" + aria-checked
@@ -40,16 +40,8 @@ import styles from './Settings.module.css';
 interface ShortcutField {
   id: string;
   /** label/helper 的 i18n 子键，对应 shortcut.<key>.{label,helper} */
-  labelKey: 'screenshot' | 'toggleWindow' | 'openSettings' | 'quickSend';
+  labelKey: 'screenshot';
   value: string;
-}
-
-/** 同步与存储开关定义（label/helper 同样按 i18n 解析） */
-interface ToggleField {
-  id: string;
-  /** label/helper 的 i18n 子键，对应 sync.<key>.{label,helper} */
-  labelKey: 'autoSync' | 'saveHistory' | 'encryptSensitive';
-  enabled: boolean;
 }
 
 /** Settings 页面整体表单状态 */
@@ -57,7 +49,6 @@ interface SettingsState {
   deviceName: string;
   receiveDir: string;
   shortcuts: ShortcutField[];
-  toggles: ToggleField[];
 }
 
 /** 云端同步 Card 的可编辑表单值（受控输入，与已应用配置分离） */
@@ -72,23 +63,10 @@ interface CloudSyncForm {
 /** 快捷键字段定义（值本地化，文案走 t） */
 const SHORTCUT_FIELDS: ShortcutField[] = [
   { id: 'screenshot', labelKey: 'screenshot', value: 'Cmd+Shift+S' },
-  { id: 'toggle-window', labelKey: 'toggleWindow', value: 'Cmd+Shift+P' },
-  { id: 'open-settings', labelKey: 'openSettings', value: 'Cmd+,' },
-  { id: 'quick-send', labelKey: 'quickSend', value: 'Cmd+Shift+U' },
-];
-
-/** 同步与存储开关定义（enabled 走默认值，文案走 t） */
-const TOGGLE_FIELDS: ToggleField[] = [
-  { id: 'auto-sync', labelKey: 'autoSync', enabled: true },
-  { id: 'save-history', labelKey: 'saveHistory', enabled: true },
-  { id: 'encrypt-prompts', labelKey: 'encryptSensitive', enabled: false },
 ];
 
 /** 默认快捷键字段（深拷贝，避免污染常量） */
 const DEFAULT_SHORTCUTS: ShortcutField[] = SHORTCUT_FIELDS.map((s) => ({ ...s }));
-
-/** 默认同步开关（深拷贝，避免污染常量） */
-const DEFAULT_TOGGLES: ToggleField[] = TOGGLE_FIELDS.map((t) => ({ ...t }));
 
 /**
  * 生成默认状态
@@ -100,7 +78,6 @@ function createDefaultState(): SettingsState {
     deviceName: '',
     receiveDir: '',
     shortcuts: DEFAULT_SHORTCUTS.map((s) => ({ ...s })),
-    toggles: DEFAULT_TOGGLES.map((t) => ({ ...t })),
   };
 }
 
@@ -267,18 +244,6 @@ export function Settings() {
   }, []);
 
   /**
-   * 切换某项 toggle 的开关
-   *
-   * @param id toggle id
-   */
-  const handleToggleClick = useCallback((id: string) => {
-    setState((prev) => ({
-      ...prev,
-      toggles: prev.toggles.map((t) => (t.id === id ? { ...t, enabled: !t.enabled } : t)),
-    }));
-  }, []);
-
-  /**
    * 恢复默认：重置 state 到默认值
    */
   const handleResetDefaults = () => {
@@ -367,7 +332,6 @@ export function Settings() {
             }
             return { ...s };
           }),
-          toggles: DEFAULT_TOGGLES.map((t) => ({ ...t })),
         };
         setState(loaded);
         // 把已加载配置作为"未保存"比较的基准快照
@@ -682,50 +646,6 @@ export function Settings() {
                     />
                   </div>
                 </div>
-              ))}
-            </div>
-          </Card.Body>
-        </Card>
-
-        {/* Card 3: 同步与存储 */}
-        <Card variant="flat" padding="md">
-          <Card.Header>
-            <h2 className={styles.sectionTitle}>{t('settings:sync.title')}</h2>
-          </Card.Header>
-          <Card.Body padding="md">
-            <div className={styles.toggleList}>
-              {state.toggles.map((t2) => (
-                <button
-                  key={t2.id}
-                  type="button"
-                  className={styles.toggleRow}
-                  onClick={() => handleToggleClick(t2.id)}
-                  role="switch"
-                  aria-checked={t2.enabled}
-                  aria-label={t(`settings:sync.${t2.labelKey}.label`)}
-                >
-                  <div className={styles.toggleText}>
-                    <span className={styles.toggleLabel}>
-                      {t(`settings:sync.${t2.labelKey}.label`)}
-                    </span>
-                    <span className={styles.toggleHelper}>
-                      {t(`settings:sync.${t2.labelKey}.helper`)}
-                    </span>
-                  </div>
-                  <span className={styles.toggleState}>
-                    {t2.enabled ? (
-                      <Pill tone="success" dot>
-                        <CheckIcon size={12} />
-                        {t('settings:sync.enabled')}
-                      </Pill>
-                    ) : (
-                      <Pill tone="neutral" dot>
-                        <XIcon size={12} />
-                        {t('settings:sync.disabled')}
-                      </Pill>
-                    )}
-                  </span>
-                </button>
               ))}
             </div>
           </Card.Body>

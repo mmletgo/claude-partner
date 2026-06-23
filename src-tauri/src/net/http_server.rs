@@ -41,7 +41,7 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
         // P2P 同步协议（M4）：对端调 pull/push，字段对照 Python protocol.py
         .route("/api/sync/pull", post(sync::sync_pull))
         .route("/api/sync/push", post(sync::sync_push))
-        // P2P CLAUDE.md 同步协议（user 级 CLAUDE.md 跨设备同步，单例 0/1 条）
+        // P2P CLAUDE.md 主动推送协议（单例 0/1 条；push 覆盖为发送方版本）
         .route(
             "/api/sync/claude_md/pull",
             post(claude_md_sync::claude_md_pull),

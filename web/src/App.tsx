@@ -9,7 +9,6 @@ import { CcHistory } from './pages/CcHistory';
 import { Scratchpad } from './pages/Scratchpad';
 import { ClaudeMd } from './pages/ClaudeMd';
 import { Devices } from './pages/Devices';
-import { Ssh } from './pages/Ssh';
 import { Settings } from './pages/Settings';
 import { Health } from './pages/Health';
 import { Welcome } from './pages/Welcome';
@@ -119,7 +118,7 @@ export default function App() {
             <Route path="/scratchpad" element={<Scratchpad />} />
             <Route path="/claude-md" element={<ClaudeMd />} />
             <Route path="/devices" element={<Devices />} />
-            <Route path="/ssh" element={<Ssh />} />
+            <Route path="/ssh" element={<Navigate to="/devices" replace />} />
             <Route path="/settings" element={<Settings />} />
             <Route path="/health" element={<Health />} />
             {isDev && <Route path="/design-system" element={<DesignSystem />} />}

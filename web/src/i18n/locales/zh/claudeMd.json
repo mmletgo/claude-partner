@@ -1,7 +1,7 @@
 {
   "eyebrow": "设置",
   "title": "CLAUDE.md 配置",
-  "desc": "编辑你的 user 级全局指令文件。保存后会写入 ~/.claude/CLAUDE.md，并可推送到局域网内的其他设备。",
+  "desc": "编辑你的 user 级全局指令文件。保存后会写入 ~/.claude/CLAUDE.md，并可主动推送到局域网设备和已配置的 GitHub 云端。",
   "save": "保存",
   "push": "推送",
   "saving": "保存中…",

@@ -1,7 +1,7 @@
 //! commands/claude_md.rs — user 级 CLAUDE.md 读写命令
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     前端 /claude-md 页通过 invoke 调用这两个命令完成 CLAUDE.md 的读取与编辑。
+//!     前端 /claude-md 页通过 invoke 调用这三个命令完成 CLAUDE.md 的读取、编辑与主动推送。
 //!     CLAUDE.md 既是磁盘文件（~/.claude/CLAUDE.md，用户可能用任意编辑器改），
 //!     也是 DB 单例记录（同步的权威来源），故读时需先对账（文件→DB），写时需双写（文件+DB）。
 //!
@@ -10,7 +10,7 @@
 //!         DB 无行时返回空 DTO（content/updatedAt 为空串，vectorClock 为空 map）。
 //!     `update_claude_md`：先 create_dir_all + write 文件，再推进 vector_clock，
 //!         upsert DB 行后返回 DTO（update 刚写过文件，无需再对账）。
-//!     `push_claude_md`：先把前端当前内容保存为本机版本，再只向对端 push，不拉取远端。
+//!     `push_claude_md`：先把前端当前内容保存为本机版本，再推送到局域网设备和 GitHub 云端。
 //!     返回类型用 camelCase 的 `ClaudeMdDto`，对齐前端 TS 类型。
 
 use crate::error::AppError;
@@ -69,20 +69,26 @@ pub async fn update_claude_md(
     Ok(row.to_dto())
 }
 
-/// 推送 CLAUDE.md：保存本机当前内容后，只向局域网设备推送，不拉取远端版本。
+/// 推送 CLAUDE.md：保存本机当前内容后，推送到局域网设备与 GitHub 云端。
 ///
 /// Business Logic: CLAUDE.md 页面里的"同步/推送"按钮应以本机编辑器内容为准分发到其他设备，
-///     避免旧的全局 trigger_sync 先 pull 远端版本导致本机内容被覆盖。
-/// Code Logic: 复用本地写入逻辑推进 vector_clock，随后调用 push_claude_md_to_peers；
-///     返回 `{accepted,synced,note}`，与既有同步按钮结果结构保持一致。
+///     并覆盖 GitHub 云端的 CLAUDE.md 快照；不能复用全局 trigger_sync 的 pull/merge 语义。
+/// Code Logic: 复用本地写入逻辑推进 vector_clock，随后调用 push_claude_md_to_peers 和
+///     push_claude_md_to_cloud；返回 `{accepted,synced,note}`，与既有同步按钮结果结构保持一致。
 #[tauri::command]
 pub async fn push_claude_md(
     state: State<'_, AppState>,
     content: String,
 ) -> Result<serde_json::Value, AppError> {
     let row = write_local_claude_md(state.inner(), content).await?;
-    let result = crate::sync::engine::push_claude_md_to_peers(state.inner(), &row).await;
-    Ok(serde_json::to_value(&result)?)
+    let lan = crate::sync::engine::push_claude_md_to_peers(state.inner(), &row).await;
+    let cloud = crate::cloud_sync::engine::push_claude_md_to_cloud(state.inner(), &row).await?;
+    let note = format!("{}；{}", lan.note, cloud.note);
+    Ok(serde_json::to_value(&crate::sync::engine::SyncResult {
+        accepted: true,
+        synced: lan.synced,
+        note,
+    })?)
 }
 
 /// 写入本机 CLAUDE.md 文件和 DB 单例，并推进本设备向量时钟。

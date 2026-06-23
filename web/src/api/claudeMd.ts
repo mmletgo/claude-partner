@@ -3,13 +3,13 @@
  *
  * Business Logic（为什么需要这个模块）:
  *   用户希望在应用内直接编辑 user 级全局指令文件（~/.claude/CLAUDE.md），
- *   并能一键推送到局域网其他设备。本模块封装 get/update/push 三个后端命令，
+ *   并能一键推送到局域网其他设备和 GitHub 云端。本模块封装 get/update/push 三个后端命令，
  *   供 ClaudeMd 页面调用。
  *
  * Code Logic（这个模块做什么）:
  *   - `get`: 读取当前 CLAUDE.md 内容 + 元数据（updatedAt / deviceId / vectorClock）
  *   - `update`: 写入新内容，返回更新后的 dto（含递增后的向量时钟）
- *   - `push`: 保存当前本机内容并推送到局域网设备，返回 accepted/synced/note 结果
+ *   - `push`: 保存当前本机内容并推送到局域网设备 + GitHub 云端，返回 accepted/synced/note 结果
  */
 
 import { invoke } from './client';
@@ -36,6 +36,6 @@ export const claudeMdApi = {
   /** 写入新内容（会递增本设备向量时钟），返回更新后的 dto */
   update: (content: string) => invoke<ClaudeMdDto>('update_claude_md', { content }),
 
-  /** 保存并推送本机 CLAUDE.md 到局域网设备，不拉取远端内容 */
+  /** 保存并推送本机 CLAUDE.md 到局域网设备和 GitHub 云端，不拉取远端内容 */
   push: (content: string) => invoke<PushResult>('push_claude_md', { content }),
 };
