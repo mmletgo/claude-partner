@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -158,7 +159,12 @@ async fn handle_sample(
             .is_some_and(|t| t > now);
         let dnd = is_in_dnd(now, cfg.dnd_start.as_deref(), cfg.dnd_end.as_deref());
         if !snoozed && !dnd && cfg.notify_enabled {
-            // 仅 emit 事件载荷;系统通知由前端监听后弹出(文案走 i18n)。
+            send_system_notification(
+                app,
+                "该起来活动一下啦 🌿",
+                "连续工作已久,站起来走走、伸展一下吧。",
+            );
+            // 继续 emit 事件载荷;前端监听后显示应用内 toast,提供贪睡/跳过操作。
             let _ = app.emit(
                 "health:reminder",
                 serde_json::json!({ "workWindowSeconds": cfg.work_window_seconds }),
@@ -185,6 +191,9 @@ async fn handle_sample(
         }
         let dnd = is_in_dnd(now, cfg.dnd_start.as_deref(), cfg.dnd_end.as_deref());
         if !dnd {
+            if cfg.notify_enabled {
+                send_system_notification(app, "该喝水啦 💧", "记得补充水分,喝口水再继续。");
+            }
             let _ = app.emit("health:water", serde_json::json!({}));
         }
     }
@@ -195,6 +204,18 @@ async fn handle_sample(
         tracing::warn!("活动记录清理失败: {e}");
     }
     Ok(())
+}
+
+/// 发送健康提醒系统通知。
+///
+/// Business Logic: 久坐提醒和喝水提醒不应只停留在主窗口内的 toast;当用户开启
+///     `notify_enabled` 时,后台 daemon 触发提醒后要进入操作系统通知中心。
+/// Code Logic: 通过 tauri-plugin-notification 的 Rust API 构造通知;发送失败不影响
+///     健康 daemon 与应用内事件,仅记录 warning。
+fn send_system_notification(app: &AppHandle, title: &str, body: &str) {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
+        tracing::warn!("健康系统通知发送失败: {e}");
+    }
 }
 
 /// 打开全屏健康提醒遮罩窗口(每屏一个,复用截图透明窗口构建模式)。

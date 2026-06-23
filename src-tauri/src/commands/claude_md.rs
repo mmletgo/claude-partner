@@ -10,6 +10,7 @@
 //!         DB 无行时返回空 DTO（content/updatedAt 为空串，vectorClock 为空 map）。
 //!     `update_claude_md`：先 create_dir_all + write 文件，再推进 vector_clock，
 //!         upsert DB 行后返回 DTO（update 刚写过文件，无需再对账）。
+//!     `push_claude_md`：先把前端当前内容保存为本机版本，再只向对端 push，不拉取远端。
 //!     返回类型用 camelCase 的 `ClaudeMdDto`，对齐前端 TS 类型。
 
 use crate::error::AppError;
@@ -64,6 +65,33 @@ pub async fn update_claude_md(
     state: State<'_, AppState>,
     content: String,
 ) -> Result<ClaudeMdDto, AppError> {
+    let row = write_local_claude_md(state.inner(), content).await?;
+    Ok(row.to_dto())
+}
+
+/// 推送 CLAUDE.md：保存本机当前内容后，只向局域网设备推送，不拉取远端版本。
+///
+/// Business Logic: CLAUDE.md 页面里的"同步/推送"按钮应以本机编辑器内容为准分发到其他设备，
+///     避免旧的全局 trigger_sync 先 pull 远端版本导致本机内容被覆盖。
+/// Code Logic: 复用本地写入逻辑推进 vector_clock，随后调用 push_claude_md_to_peers；
+///     返回 `{accepted,synced,note}`，与既有同步按钮结果结构保持一致。
+#[tauri::command]
+pub async fn push_claude_md(
+    state: State<'_, AppState>,
+    content: String,
+) -> Result<serde_json::Value, AppError> {
+    let row = write_local_claude_md(state.inner(), content).await?;
+    let result = crate::sync::engine::push_claude_md_to_peers(state.inner(), &row).await;
+    Ok(serde_json::to_value(&result)?)
+}
+
+/// 写入本机 CLAUDE.md 文件和 DB 单例，并推进本设备向量时钟。
+///
+/// Business Logic: 保存与推送都需要先把前端当前内容确认为本机最新版本；统一写入逻辑可避免
+///     两个命令在文件/DB/vector_clock 上出现细微差异。
+/// Code Logic: 读取旧 vector_clock → 写 ~/.claude/CLAUDE.md → increment(device_id)
+///     → upsert claude_md 单例 → 返回完整 Row 供 DTO 或 push 使用。
+async fn write_local_claude_md(state: &AppState, content: String) -> Result<ClaudeMdRow, AppError> {
     let old = state.claude_md_repo.get().await?;
     let old_vc = old
         .as_ref()
@@ -89,5 +117,5 @@ pub async fn update_claude_md(
         vector_clock: new_vc,
     };
     state.claude_md_repo.upsert(&row).await?;
-    Ok(row.to_dto())
+    Ok(row)
 }

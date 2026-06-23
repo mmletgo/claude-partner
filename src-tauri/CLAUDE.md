@@ -216,8 +216,9 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **文件↔DB 对账（`sync/claude_md.rs::reconcile_from_file`）**：触发时机——`get_claude_md` 开头（进页面/刷新）、`trigger_sync` 对端遍历前（一次）。三分支：DB 无行→用文件内容初始化（空文件→空 vc；非空→`{device_id:1}`）；内容一致→no-op；不一致（应用外编辑）→以文件为准 + `increment` 本设备 vc（使对端感知）。`update_claude_md` **不对账**（刚写过文件）。
 - **合并（`sync/claude_md.rs::merge_claude_md`）**：策略与 `merger.rs` 一致——`compare(remote,local)` 为 `After`→remote 胜，`Before`/`Equal`→local 胜，`Concurrent`→LWW（`updated_at` 更晚胜，相等用 device_id 字典序 tie-break）。胜出方内容 + 合并后的 vc。配 6 单测。
 - **P2P 端点（`net/routes/claude_md_sync.rs`，snake_case 互通）**：`POST /api/sync/claude_md/pull`（body `{vector_clock}`，返回 `{claude_md: Option<ClaudeMdRow>}`，本地领先/并发时下发）；`POST /api/sync/claude_md/push`（body `{claude_md}`，merge 后落库+写文件，返回 `{accepted}`）。`http_server.rs` 已注册。`peer_client` 加 `claude_md_pull`/`claude_md_push`（失败返回 `Err`，调用方 `tracing::warn` 视 `None` 继续，兼容旧版本无此路由的对端）。
-- **同步挂载（`sync/engine.rs::trigger_sync`）**：对端遍历前 `reconcile_from_file` 一次；每个对端 `sync_with_peer`（prompts）后追加 `sync_claude_md_with_peer`（失败 warn 不阻断，**不影响 synced 计数**，计数语义保持"prompts 同步成功"）。单对端流程：health → pull → merge 落库+写文件 → 重读本地 → `compare` 决策 push（对端无数据且本地非空，或本地领先/并发）。
-- **命令层（`commands/claude_md.rs`，lib.rs invoke_handler 注册 2 个）**：`get_claude_md`（reconcile + 读 DB，None 返回空 dto）、`update_claude_md`（写文件 + `increment` vc + upsert）。同步复用 `trigger_sync`（前端 CLAUDE.md 页与 Prompts 页同步按钮都调它，一次同步全部可同步数据）。
+- **同步挂载（`sync/engine.rs::trigger_sync`）**：对端遍历前 `reconcile_from_file` 一次；每个对端 `sync_with_peer`（prompts）后追加 `sync_claude_md_with_peer`（失败 warn 不阻断，**不影响 synced 计数**，计数语义保持"prompts 同步成功"）。单对端流程：health → pull → merge 落库+写文件 → 重读本地 → `compare` 决策 push（对端无数据且本地非空，或本地领先/并发）。这是全局同步链路，Prompt 页等仍可复用。
+- **手动推送（`sync/engine.rs::push_claude_md_to_peers`）**：CLAUDE.md 页按钮不再复用 `trigger_sync`，而是先保存前端当前内容，再只执行 health → `claude_md_push`，不 pull 远端版本，避免远端 CLAUDE.md 覆盖本机编辑器内容。
+- **命令层（`commands/claude_md.rs`，lib.rs invoke_handler 注册 3 个）**：`get_claude_md`（reconcile + 读 DB，None 返回空 dto）、`update_claude_md`（写文件 + `increment` vc + upsert）、`push_claude_md`（保存当前内容 + 推送本机版本到局域网设备，不拉取远端）。
 - **建表（lib.rs）**：常量 `CLAUDE_MD_SCHEMA`，`init_db` 内 `TRANSFER_SCHEMA` 后执行。AppState 扩展 `claude_md_repo: Arc<ClaudeMdRepo>`。
 
 ## SSH 目标同步已落地行为约定（models/ssh_target.rs + storage/ssh_target_repo.rs + sync/ssh_target.rs + commands/ssh_target.rs + net/routes/ssh_target_sync.rs）

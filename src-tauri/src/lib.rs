@@ -385,6 +385,7 @@ pub fn run() {
             sync_cmd::trigger_sync,
             claude_md_cmd::get_claude_md,
             claude_md_cmd::update_claude_md,
+            claude_md_cmd::push_claude_md,
             transfer_cmd::list_transfers,
             transfer_cmd::send_transfer,
             transfer_cmd::cancel_transfer,

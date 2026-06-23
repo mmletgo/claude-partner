@@ -390,6 +390,7 @@ Tauri 自动打包三平台本平台产物（macOS→dmg/app、Windows→nsis/ms
 | config.get_version | 应用版本号 |
 | prompts.list / get / create / update / delete / list_tags | Prompt CRUD（delete 为软删除，自增 vector_clock） |
 | trigger_sync | 触发全网 Prompt 同步，返回 {accepted, synced, note} |
+| get_claude_md / update_claude_md / push_claude_md | CLAUDE.md 读取 / 保存 / 推送本机配置到局域网设备 |
 | list_transfers / send_transfer / cancel_transfer | 文件传输任务管理 |
 | check_permissions / request_permission | macOS 权限检查与申请（屏幕录制 / 输入监控） |
 | check_update / download_update / get_download_status / cancel_download / install_update | 自动更新 5 命令 |

@@ -2,10 +2,11 @@
 //!
 //! Business Logic（为什么需要这个模块）:
 //!     把 git_cli + snapshot 拼成完整的同步流程：detect_git → ensure_repo（clone/复用工作区）
-//!     → 定分支 → reconcile CLAUDE.md → fetch → reset --hard → import(merge 进本地) →
-//!     export(写回工作区) → commit → push。push 被拒（多设备并发）时 fetch+reset+import+
+//!     → 定分支 → fetch → reset --hard → import(merge 进本地) → export(写回工作区)
+//!     → commit → push。push 被拒（多设备并发）时 fetch+reset+import+
 //!     export+commit+push 再来一轮（最多 1 次重试 = 总共 2 轮）即可收敛。
 //!     本地 SQLite + 向量时钟是权威源，git 只做传输，冲突解决完全复用 merge_*。
+//!     CLAUDE.md 不参与云端自动同步，只由 CLAUDE.md 页面用户主动推送。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - `trigger_cloud_sync`：完整同步，返回 CloudSyncResult（pulled/pushed/note）。
@@ -27,7 +28,7 @@ use std::path::{Path, PathBuf};
 pub struct CloudSyncResult {
     /// 整体是否成功。
     pub ok: bool,
-    /// 本次 import 实际落库的条数总和（prompts + cc 历史 + ssh 目标；CLAUDE.md 计 0 或 1）。
+    /// 本次 import 实际落库的条数总和（prompts + cc 历史 + ssh 目标）。
     pub pulled: u64,
     /// 本次 export 写出的文件数总和。
     pub pushed: u64,
@@ -69,13 +70,10 @@ pub fn cloud_sync_workdir() -> PathBuf {
 ///     export 的条数（export 是覆盖式，以最后一轮为准）。
 pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
     let now = chrono::Utc::now().to_rfc3339();
-    let ok_note = |pulled: u64, pushed: u64, cm: bool| {
+    let ok_note = |pulled: u64, pushed: u64| {
         let mut parts: Vec<String> = Vec::new();
         parts.push(format!("拉取更新 {pulled} 条"));
         parts.push(format!("推送 {pushed} 条"));
-        if cm {
-            parts.push("CLAUDE.md 已同步".to_string());
-        }
         format!("同步成功：{}", parts.join("，"))
     };
 
@@ -112,10 +110,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
 
     // 最多两轮（首轮 + 1 次重试收敛）
     for attempt in 0..2u8 {
-        // 3. CLAUDE.md 文件↔DB 对账（纳入应用外编辑，import 内部会再做一次，这里保险）
-        //    注：import_to_db 内部已含 reconcile_from_file，无需重复。
-
-        // 4. fetch origin（首轮空仓库可能无 origin 引用，容错跳过）
+        // 3. fetch origin（首轮空仓库可能无 origin 引用，容错跳过）
         if attempt > 0 || has_remote_branch(&git, &workdir).await {
             if let Err(e) = git_cli::fetch_origin(&git, &workdir).await {
                 // 首轮 fetch 失败（如全新空仓库无远端内容）容错继续；重试轮失败则记录
@@ -125,14 +120,14 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
             }
         }
 
-        // 5. reset --hard origin/<branch>（远端有分支时）
+        // 4. reset --hard origin/<branch>（远端有分支时）
         if has_remote_branch(&git, &workdir).await {
             if let Err(e) = git_cli::reset_hard(&git, &workdir, &branch).await {
                 tracing::warn!("cloud_sync: reset --hard 失败（继续）: {e}");
             }
         }
 
-        // 6. import（远端 → 本地 merge）
+        // 5. import（远端 → 本地 merge）
         let import_stats: ImportStats = match import_to_db(state, &workdir).await {
             Ok(s) => s,
             Err(e) => {
@@ -146,18 +141,14 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
             }
         };
         total_pulled += import_stats.prompts + import_stats.cc_history + import_stats.ssh_targets;
-        if import_stats.claude_md_updated {
-            total_pulled += 1;
-        }
         tracing::info!(
-            "cloud_sync: import 完成 prompts={} cc={} ssh={} claude_md_updated={}",
+            "cloud_sync: import 完成 prompts={} cc={} ssh={}",
             import_stats.prompts,
             import_stats.cc_history,
-            import_stats.ssh_targets,
-            import_stats.claude_md_updated
+            import_stats.ssh_targets
         );
 
-        // 7. export（本地权威 → 工作区）
+        // 6. export（本地权威 → 工作区）
         last_export = match export_from_db(state, &workdir).await {
             Ok(s) => s,
             Err(e) => {
@@ -171,14 +162,13 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
             }
         };
         tracing::info!(
-            "cloud_sync: export 完成 prompts={} cc={} ssh={} claude_md={}",
+            "cloud_sync: export 完成 prompts={} cc={} ssh={}",
             last_export.prompts,
             last_export.cc_history,
-            last_export.ssh_targets,
-            last_export.claude_md
+            last_export.ssh_targets
         );
 
-        // 8. commit（message 带设备 ID + 时间戳，便于多设备同步审计与回滚定位；无变化则跳过 push）
+        // 7. commit（message 带设备 ID + 时间戳，便于多设备同步审计与回滚定位；无变化则跳过 push）
         let commit_msg = format!(
             "cloud sync from {} @ {}",
             state.device_id.as_str(),
@@ -205,12 +195,12 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                 ok: true,
                 pulled: total_pulled,
                 pushed,
-                note: ok_note(total_pulled, pushed, last_export.claude_md),
+                note: ok_note(total_pulled, pushed),
                 synced_at: chrono::Utc::now().to_rfc3339(),
             };
         }
 
-        // 9. push
+        // 8. push
         match git_cli::push(&git, &workdir, &branch).await {
             Ok(()) => {
                 tracing::info!("cloud_sync: push 成功");
@@ -219,7 +209,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
                     ok: true,
                     pulled: total_pulled,
                     pushed,
-                    note: ok_note(total_pulled, pushed, last_export.claude_md),
+                    note: ok_note(total_pulled, pushed),
                     synced_at: chrono::Utc::now().to_rfc3339(),
                 };
             }
@@ -253,7 +243,7 @@ pub async fn trigger_cloud_sync(state: &AppState) -> CloudSyncResult {
     CloudSyncResult {
         ok: false,
         pulled: total_pulled,
-        pushed: last_export.prompts + last_export.cc_history,
+        pushed: last_export.total(),
         note: "同步未完成（未知原因）".to_string(),
         synced_at: chrono::Utc::now().to_rfc3339(),
     }

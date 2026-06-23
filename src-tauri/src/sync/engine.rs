@@ -92,6 +92,60 @@ pub async fn trigger_sync(state: &AppState) -> SyncResult {
     }
 }
 
+/// 将本机 CLAUDE.md 版本推送给所有在线对端，不执行远端 pull。
+///
+/// Business Logic: CLAUDE.md 页面里的手动按钮语义是"以本机当前配置为准，分发到局域网设备"，
+///     不能先拉取远端版本覆盖本机编辑器内容。因此这里只做 health + push，远端收到后仍走
+///     既有 merge 规则落库，保持协议兼容。
+/// Code Logic: 读取设备快照；逐个健康检查；可达则调用 claude_md_push(row)；请求成功即计入
+///     synced，失败仅记录日志并继续其他设备。
+pub async fn push_claude_md_to_peers(state: &AppState, row: &ClaudeMdRow) -> SyncResult {
+    let devices: Vec<crate::models::device::Device> = {
+        let guard = state.devices.read().expect("devices 读锁中毒");
+        guard.values().cloned().collect()
+    };
+
+    if devices.is_empty() {
+        tracing::debug!("没有在线设备，跳过 CLAUDE.md 推送");
+        return SyncResult {
+            accepted: true,
+            synced: 0,
+            note: "没有在线设备".to_string(),
+        };
+    }
+
+    tracing::info!("开始向 {} 个设备推送 CLAUDE.md", devices.len());
+
+    let mut pushed_count: u64 = 0;
+    for device in devices {
+        let base_url = device.base_url();
+        if !state.peer_client.health(&device.host, device.port).await {
+            tracing::debug!("设备 {} 不可达，跳过 CLAUDE.md 推送", device.name);
+            continue;
+        }
+
+        match state.peer_client.claude_md_push(&base_url, row).await {
+            Ok(accepted) => {
+                pushed_count += 1;
+                tracing::info!(
+                    "向 {} 推送 CLAUDE.md 完成，accepted={}",
+                    device.name,
+                    accepted
+                );
+            }
+            Err(e) => {
+                tracing::warn!("向 {} 推送 CLAUDE.md 失败: {e}", device.name);
+            }
+        }
+    }
+
+    SyncResult {
+        accepted: true,
+        synced: pushed_count,
+        note: format!("已向 {} 个设备推送 CLAUDE.md", pushed_count),
+    }
+}
+
 /// 与单个对端执行完整双向同步。
 ///
 /// Business Logic: 确保双方数据一致。对照 Python `sync_with_peer`。

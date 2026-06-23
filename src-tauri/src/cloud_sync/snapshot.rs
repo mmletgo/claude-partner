@@ -5,7 +5,6 @@
 //!     import 进本地（与本地 merge_* 合并），再把本地权威 export 写回工作区供 commit/push。
 //!     工作区结构（workdir 下）：
 //!       - prompts/<id>.json        → PromptRow（含 deleted，照写以传播软删除）
-//!       - claude_md/claude_md.json → ClaudeMdRow（单例）
 //!       - claude_history/<id>.json → ClaudeHistoryRow（含 deleted）
 //!       - ssh_targets/<host>.json → SshTargetRow（含 deleted）
 //!
@@ -15,17 +14,15 @@
 //!     - `import_to_db`：扫描工作区 JSON → merge_* 进本地（仅变化才落库）→ 返回统计。
 //!     - `export_from_db`：清空 prompts/ 与 claude_history/ 与 ssh_targets/ → 本地全量写回 → 返回统计。
 //!
-//! 复用既有 merge_prompt / merge_claude_md / merge_cc_history / merge_ssh_target，冲突解决与局域网同步完全一致。
+//! CLAUDE.md 不参与云端自动同步；它只由 CLAUDE.md 页面用户主动推送。
+//! 复用既有 merge_prompt / merge_cc_history / merge_ssh_target，冲突解决与局域网同步完全一致。
 
 use crate::cc::merger::merge_cc_history;
 use crate::cc::models::ClaudeHistoryRow;
 use crate::error::AppError;
-use crate::models::claude_md::ClaudeMdRow;
 use crate::models::prompt::PromptRow;
 use crate::models::ssh_target::SshTargetRow;
 use crate::state::AppState;
-use crate::sync::claude_md::merge_claude_md;
-use crate::sync::claude_md::{reconcile_from_file, write_file_if_changed};
 use crate::sync::merger::merge_prompt;
 use crate::sync::ssh_target::merge_ssh_target;
 use std::fs;
@@ -33,22 +30,16 @@ use std::path::Path;
 
 /// 工作区下 prompts 目录名。
 const PROMPTS_DIR: &str = "prompts";
-/// 工作区下 CLAUDE.md 单例目录名。
-const CLAUDE_MD_DIR: &str = "claude_md";
 /// 工作区下 CC 历史目录名。
 const CC_HISTORY_DIR: &str = "claude_history";
 /// 工作区下 SSH 目标目录名。
 const SSH_TARGETS_DIR: &str = "ssh_targets";
-/// CLAUDE.md 单例文件名（id_to_filename 不适用，固定名）。
-const CLAUDE_MD_FILE: &str = "claude_md.json";
 
-/// import 统计：各类型实际落库条数 / CLAUDE.md 是否变更。
+/// import 统计：各类型实际落库条数。
 #[derive(Debug, Clone, Default)]
 pub struct ImportStats {
     /// prompts 实际合并产生变化的条数。
     pub prompts: u64,
-    /// CLAUDE.md 是否因合并而落库+写文件。
-    pub claude_md_updated: bool,
     /// CC 历史实际合并产生变化的条数。
     pub cc_history: u64,
     /// SSH 目标实际合并产生变化的条数。
@@ -60,8 +51,6 @@ pub struct ImportStats {
 pub struct ExportStats {
     /// prompts 写出文件数（含 deleted）。
     pub prompts: u64,
-    /// 是否写出 CLAUDE.md 单例文件。
-    pub claude_md: bool,
     /// CC 历史写出文件数（含 deleted）。
     pub cc_history: u64,
     /// SSH 目标写出文件数（含 deleted）。
@@ -69,11 +58,11 @@ pub struct ExportStats {
 }
 
 impl ExportStats {
-    /// prompts + cc_history + ssh_targets 的总写出数（不含 claude_md 单例）。
+    /// prompts + cc_history + ssh_targets 的总写出数。
     ///
     /// Business Logic: engine 统计 pushed 条数时需对多类型条目求和，集中在此避免散落的
     ///     `last_export.prompts + last_export.cc_history` 漏加新类型。
-    /// Code Logic: 三字段相加（claude_md 是 bool 单例，单独由调用方判断）。
+    /// Code Logic: 三字段相加。CLAUDE.md 不参与云端自动同步。
     pub fn total(&self) -> u64 {
         self.prompts + self.cc_history + self.ssh_targets
     }
@@ -157,25 +146,18 @@ fn ssh_target_changed(merged: &SshTargetRow, local: &SshTargetRow) -> bool {
 ///
 /// Business Logic: pull 后工作区有远端版本，需逐条与本地合并，使本地吸收远端变化，
 ///     供后续 export 写回统一版本。仅当合并结果与本地有差异时才 bulk_upsert（省 IO）。
-///     CLAUDE.md 额外先 reconcile_from_file 一次（与局域网同步流程一致，纳入应用外编辑）。
+///     CLAUDE.md 不参与云端自动同步，避免 GitHub 自动同步覆盖用户本机配置。
 ///
 /// Code Logic:
-/// 1. 先 reconcile_from_file（CLAUDE.md 文件↔DB 对账）；
-/// 2. 扫 prompts/*.json 反解 id → PromptRow，逐条本地 get：None 直接收，Some 则 merge_prompt，
+/// 1. 扫 prompts/*.json 反解 id → PromptRow，逐条本地 get：None 直接收，Some 则 merge_prompt，
 ///    仅 prompt_changed 才收集；批量 bulk_upsert；
-/// 3. claude_md/claude_md.json 若存在：merge_claude_md，变化则 upsert + write_file_if_changed；
-/// 4. claude_history/*.json：merge_cc_history，变化才 bulk_upsert；
-/// 5. ssh_targets/*.json：merge_ssh_target，变化才 bulk_upsert（host 为主键，文件名 hex 还原）；
-/// 6. 返回 ImportStats。
+/// 2. claude_history/*.json：merge_cc_history，变化才 bulk_upsert；
+/// 3. ssh_targets/*.json：merge_ssh_target，变化才 bulk_upsert（host 为主键，文件名 hex 还原）；
+/// 4. 返回 ImportStats。
 pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStats, AppError> {
     let mut stats = ImportStats::default();
 
-    // 1. CLAUDE.md 文件↔DB 对账（纳入应用外编辑）
-    if let Err(e) = reconcile_from_file(state).await {
-        tracing::warn!("cloud_sync import: CLAUDE.md 对账失败（继续）: {e}");
-    }
-
-    // 2. prompts import
+    // 1. prompts import
     let prompts_dir = workdir.join(PROMPTS_DIR);
     if prompts_dir.is_dir() {
         let mut to_upsert: Vec<PromptRow> = Vec::new();
@@ -234,37 +216,7 @@ pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStat
         }
     }
 
-    // 3. CLAUDE.md import（单例）
-    let claude_md_path = workdir.join(CLAUDE_MD_DIR).join(CLAUDE_MD_FILE);
-    if claude_md_path.exists() {
-        if let Ok(text) = fs::read_to_string(&claude_md_path) {
-            if let Ok(remote) = serde_json::from_str::<ClaudeMdRow>(&text) {
-                let local = state.claude_md_repo.get().await?;
-                match local {
-                    None => {
-                        // 本地无 → 直接落库 + 写文件
-                        state.claude_md_repo.upsert(&remote).await?;
-                        write_file_if_changed(&remote.content).await?;
-                        stats.claude_md_updated = true;
-                    }
-                    Some(local_row) => {
-                        let merged = merge_claude_md(&local_row, &remote);
-                        let changed = merged.content != local_row.content
-                            || merged.vector_clock != local_row.vector_clock
-                            || merged.updated_at != local_row.updated_at
-                            || merged.device_id != local_row.device_id;
-                        if changed {
-                            state.claude_md_repo.upsert(&merged).await?;
-                            write_file_if_changed(&merged.content).await?;
-                            stats.claude_md_updated = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // 4. CC 历史 import
+    // 2. CC 历史 import
     let cc_dir = workdir.join(CC_HISTORY_DIR);
     if cc_dir.is_dir() {
         let mut to_upsert: Vec<ClaudeHistoryRow> = Vec::new();
@@ -321,7 +273,7 @@ pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStat
         }
     }
 
-    // 5. SSH 目标 import（host 为主键，文件名 hex 还原）
+    // 3. SSH 目标 import（host 为主键，文件名 hex 还原）
     let ssh_dir = workdir.join(SSH_TARGETS_DIR);
     if ssh_dir.is_dir() {
         let mut to_upsert: Vec<SshTargetRow> = Vec::new();
@@ -392,25 +344,23 @@ pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStat
 /// Business Logic: import 合并后本地是最新权威，需完整写回工作区供 commit/push。
 ///     每次全量覆盖（先清空 prompts/ 与 claude_history/ 与 ssh_targets/ 目录内容，保留目录本身），
 ///     确保工作区与本地一一对应，不会残留本地已删除但远端曾有的文件。
+///     CLAUDE.md 不参与云端自动同步，工作区内旧 claude_md 文件会保持原样但被本流程忽略。
 ///
 /// Code Logic:
 /// 1. 清空 prompts/ 与 claude_history/ 与 ssh_targets/ 目录内容（保留目录）；
 /// 2. prompt_repo.get_all_for_sync() 全量（含 deleted）逐条写 prompts/<id_to_filename>.json；
-/// 3. claude_md_repo.get() 若 Some 写 claude_md/claude_md.json（无则不写）；
-/// 4. cc_history 全量写 claude_history/<id_to_filename>.json；
-/// 5. ssh_targets 全量写 ssh_targets/<id_to_filename(host)>.json；
-/// 6. 返回 ExportStats。
+/// 3. cc_history 全量写 claude_history/<id_to_filename>.json；
+/// 4. ssh_targets 全量写 ssh_targets/<id_to_filename(host)>.json；
+/// 5. 返回 ExportStats。
 pub async fn export_from_db(state: &AppState, workdir: &Path) -> Result<ExportStats, AppError> {
     let mut stats = ExportStats::default();
 
     let prompts_dir = workdir.join(PROMPTS_DIR);
-    let claude_md_dir = workdir.join(CLAUDE_MD_DIR);
     let cc_dir = workdir.join(CC_HISTORY_DIR);
     let ssh_dir = workdir.join(SSH_TARGETS_DIR);
 
     // 确保目录存在 + 清空 prompts 与 cc 历史与 ssh_targets（保留目录）
     fs::create_dir_all(&prompts_dir)?;
-    fs::create_dir_all(&claude_md_dir)?;
     fs::create_dir_all(&cc_dir)?;
     fs::create_dir_all(&ssh_dir)?;
     clear_dir_contents(&prompts_dir)?;
@@ -426,18 +376,6 @@ pub async fn export_from_db(state: &AppState, workdir: &Path) -> Result<ExportSt
         fs::write(&path, text)?;
     }
     stats.prompts = all_prompts.len() as u64;
-
-    // CLAUDE.md 单例
-    if let Some(row) = state.claude_md_repo.get().await? {
-        let path = claude_md_dir.join(CLAUDE_MD_FILE);
-        let text = serde_json::to_string_pretty(&row)?;
-        fs::write(&path, text)?;
-        stats.claude_md = true;
-    } else {
-        // 本地无 CLAUDE.md：移除工作区可能残留的旧文件，避免传播过期内容
-        let path = claude_md_dir.join(CLAUDE_MD_FILE);
-        let _ = fs::remove_file(&path);
-    }
 
     // CC 历史全量写出（含 deleted）
     let all_cc = state.cc_history_repo.get_all_for_sync().await?;
@@ -559,10 +497,9 @@ mod tests {
     }
 
     #[test]
-    fn claude_md_constants_stable() {
-        assert_eq!(CLAUDE_MD_FILE, "claude_md.json");
-        assert_eq!(CLAUDE_MD_DIR, "claude_md");
+    fn sync_dir_constants_stable() {
         assert_eq!(PROMPTS_DIR, "prompts");
         assert_eq!(CC_HISTORY_DIR, "claude_history");
+        assert_eq!(SSH_TARGETS_DIR, "ssh_targets");
     }
 }

@@ -5,15 +5,24 @@
  *   前端需要获取局域网内其他设备列表，以及获取本机设备信息用于"本机信息"卡片展示。
  *
  * Code Logic（这个模块做什么）:
- *   - list: invoke list_devices（M3 实现，暂未实现）。
- *   - health: Tauri 下本地后端必然可达，无需就绪探测；本方法用于取本机设备信息。
- *     M3 的 get_local_device 尚未实现，这里复用 get_config 返回的
- *     deviceId/deviceName/httpPort 组装出 HealthResponse（address 固定 127.0.0.1），
+ *   - list: invoke list_devices，返回局域网内已发现的对端设备。
+ *   - health: invoke get_local_device 获取本机设备信息，再组装为旧 health 响应形状，
  *     保持调用处 Devices 页的 toSelfDevice 映射零改动。
  */
 
 import { invoke } from './client';
-import type { AppConfig, Device } from '@/lib/types';
+import type { Device } from '@/lib/types';
+
+/** Rust list_devices 返回的原始 DTO（camelCase，由 serde rename_all 产生） */
+interface DeviceDto {
+  id: string;
+  name: string;
+  address: string;
+  port: number;
+  lastSeen?: string;
+  online: boolean;
+  isSelf?: boolean;
+}
 
 /** 本机设备信息（对齐旧 /api/health 响应字段，snake_case，供 Devices 页 toSelfDevice 消费） */
 export interface HealthResponse {
@@ -24,21 +33,45 @@ export interface HealthResponse {
   ts: number;
 }
 
+/**
+ * 将 Rust 设备 DTO 归一化为前端 Device 类型。
+ *
+ * Business Logic（为什么需要）:
+ *   Rust 后端用 online:boolean 表示 mDNS 发现状态，而页面和 DeviceCard 统一消费
+ *   status:'online'|'offline'。在 API 边界完成转换，避免每个页面重复处理。
+ *
+ * Code Logic（做什么）:
+ *   映射 id/name/address/port/lastSeen 原字段，并把 online 布尔值转换为 status 枚举。
+ */
+function toDevice(dto: DeviceDto): Device {
+  return {
+    id: dto.id,
+    name: dto.name,
+    address: dto.address,
+    port: dto.port,
+    status: dto.online ? 'online' : 'offline',
+    lastSeen: dto.lastSeen,
+  };
+}
+
 export const devicesApi = {
   /** 获取局域网内已发现的设备列表（M3 实现） */
-  list: () => invoke<Device[]>('list_devices'),
+  list: async (): Promise<Device[]> => {
+    const list = await invoke<DeviceDto[]>('list_devices');
+    return list.map(toDevice);
+  },
 
   /**
    * 获取本机设备信息。
-   * Tauri 下本地后端始终在线，复用 get_config 组装 HealthResponse。
+   * Tauri 下本地后端始终在线，复用 get_local_device 组装 HealthResponse。
    */
   health: async (): Promise<HealthResponse> => {
-    const cfg = await invoke<AppConfig>('get_config');
+    const local = await invoke<DeviceDto>('get_local_device');
     return {
       ok: true,
-      device_id: cfg.deviceId,
-      device_name: cfg.deviceName,
-      http_port: cfg.httpPort,
+      device_id: local.id,
+      device_name: local.name,
+      http_port: local.port,
       ts: Date.now(),
     };
   },

@@ -3,14 +3,14 @@
  *
  * Business Logic（为什么需要这个页面）:
  *   用户希望在 Claude Partner 内直接编辑 user 级全局指令文件（~/.claude/CLAUDE.md），
- *   避免每次手动开编辑器。编辑后保存即可写回磁盘，并能一键同步到局域网内其他设备，
+ *   避免每次手动开编辑器。编辑后保存即可写回磁盘，并能一键推送到局域网内其他设备，
  *   让多台机器共享同一份全局指令。
  *
  * Code Logic（这个页面做什么）:
  *   - 进页面调 get_claude_md 载入内容与元数据
  *   - textarea 实时编辑，"未保存"标记对比 text 与 savedText
  *   - 保存按钮调 update_claude_md 写回（内容未变时跳过）
- *   - 同步按钮调 trigger_sync 后重新拉取远端最新内容
+ *   - 推送按钮调 push_claude_md，把本机当前内容分发到局域网设备
  *   - 操作反馈用本地 toast state（setTimeout 自动清除）
  *   - hooks 全部无条件声明在渲染之前（项目规则 20）
  */
@@ -28,7 +28,7 @@ export function ClaudeMd() {
   const [savedText, setSavedText] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [syncing, setSyncing] = useState(false);
+  const [pushing, setPushing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
 
   // toast 自动清除的定时器引用，避免重复提示叠加
@@ -86,21 +86,19 @@ export function ClaudeMd() {
     }
   }, [text, savedText, t, showToast]);
 
-  /** 同步：触发 P2P 同步后重新拉取远端最新内容覆盖本地 */
-  const handleSync = useCallback(async () => {
-    setSyncing(true);
+  /** 推送：保存当前编辑器内容，并只向局域网设备推送本机 CLAUDE.md */
+  const handlePush = useCallback(async () => {
+    setPushing(true);
     try {
-      await claudeMdApi.sync();
-      const dto = await claudeMdApi.get();
-      setText(dto.content);
-      setSavedText(dto.content);
-      showToast(t('claudeMd:synced'));
+      await claudeMdApi.push(text);
+      setSavedText(text);
+      showToast(t('claudeMd:pushed'));
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err));
     } finally {
-      setSyncing(false);
+      setPushing(false);
     }
-  }, [t, showToast]);
+  }, [text, t, showToast]);
 
   const dirty = text !== savedText;
 
@@ -120,7 +118,7 @@ export function ClaudeMd() {
           size="sm"
           icon={<ClaudeMdIcon />}
           onClick={handleSave}
-          disabled={loading || saving || !dirty}
+          disabled={loading || saving || pushing || !dirty}
         >
           {saving ? t('claudeMd:saving') : t('claudeMd:save')}
         </Button>
@@ -128,10 +126,10 @@ export function ClaudeMd() {
           variant="secondary"
           size="sm"
           icon={<SyncIcon />}
-          onClick={handleSync}
-          disabled={loading || syncing}
+          onClick={handlePush}
+          disabled={loading || saving || pushing}
         >
-          {syncing ? t('claudeMd:syncing') : t('claudeMd:sync')}
+          {pushing ? t('claudeMd:pushing') : t('claudeMd:push')}
         </Button>
         {dirty ? <span className={styles.unsaved}>{t('claudeMd:unsaved')}</span> : null}
         <span className={styles.charCount}>{t('claudeMd:charCount', { n: text.length })}</span>

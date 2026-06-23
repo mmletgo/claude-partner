@@ -32,7 +32,7 @@
     "subtitle": "通过 GitHub 私有仓库跨网络同步。需在本机已配置 git 访问权限（SSH key 或 HTTPS 凭证）。",
     "repoUrl": { "label": "仓库地址", "helper": "如 git@github.com:user/repo.git 或 HTTPS URL。" },
     "branch": { "label": "分支（可选）", "helper": "留空则使用仓库默认分支。" },
-    "enabled": { "label": "启用云端同步", "helper": "将 Prompt 与 CLAUDE.md 同步到 GitHub 仓库。" },
+    "enabled": { "label": "启用云端同步", "helper": "将 Prompt、CC 历史与 SSH 配置同步到 GitHub 仓库；CLAUDE.md 仅支持手动推送。" },
     "auto": { "label": "自动定时同步", "helper": "按设定间隔自动同步。" },
     "interval": { "label": "同步间隔", "helper": "自动同步的间隔时间，单位秒。" },
     "testConnection": "测试连接",
