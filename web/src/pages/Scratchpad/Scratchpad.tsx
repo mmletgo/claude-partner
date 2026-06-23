@@ -11,8 +11,7 @@
  *   - 实时字符计数显示
  *   - 复制全部：navigator.clipboard.writeText
  *   - 清空：二次确认 modal 后写入空内容
- *   - 局域网同步：调用 scratchpadApi.syncLan 后刷新内容
- *   - GitHub 同步：调用 configApi.triggerCloudSync 后刷新内容
+ *   - 同步：同时调用 scratchpadApi.syncLan 与 configApi.triggerCloudSync 后刷新内容
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,7 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { configApi } from '@/api/config';
 import { scratchpadApi } from '@/api/scratchpad';
 import { Button, Card } from '@/components/primitives';
-import { CopyIcon, SyncIcon, TrashIcon, UploadIcon, XIcon } from '@/lib/icons';
+import { CopyIcon, SyncIcon, TrashIcon, XIcon } from '@/lib/icons';
 import styles from './Scratchpad.module.css';
 
 const AUTOSAVE_DELAY_MS = 500;
@@ -39,8 +38,7 @@ export function Scratchpad() {
   const [pendingClear, setPendingClear] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [lanSyncing, setLanSyncing] = useState(false);
-  const [cloudSyncing, setCloudSyncing] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const loadedRef = useRef(false);
@@ -159,35 +157,57 @@ export function Scratchpad() {
     applyServerContent(scratchpad.content);
   }, [applyServerContent]);
 
-  const handleLanSync = useCallback(async () => {
-    setLanSyncing(true);
+  /**
+   * Business Logic（为什么需要）:
+   *   用户只需要一个同步入口，点击后本机速记本应同时同步到局域网设备与 GitHub 云端。
+   *
+   * Code Logic（做什么）:
+   *   先保存待写入内容，再并发触发局域网同步和 GitHub 云端同步；
+   *   两个同步结果用 allSettled 汇总，避免其中一路失败导致另一路没有触发。
+   */
+  const handleSync = useCallback(async () => {
+    setSyncing(true);
     setError(null);
     setStatus(null);
     try {
       await savePendingNow();
-      const result = await scratchpadApi.syncLan();
-      await refreshAfterSync();
-      setStatus(t('scratchpad:lanSyncDone', { count: result.synced }));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t('scratchpad:lanSyncFailed'));
-    } finally {
-      setLanSyncing(false);
-    }
-  }, [refreshAfterSync, savePendingNow, t]);
+      const [lanResult, cloudResult] = await Promise.allSettled([
+        scratchpadApi.syncLan(),
+        configApi.triggerCloudSync(),
+      ]);
 
-  const handleCloudSync = useCallback(async () => {
-    setCloudSyncing(true);
-    setError(null);
-    setStatus(null);
-    try {
-      await savePendingNow();
-      const result = await configApi.triggerCloudSync();
       await refreshAfterSync();
-      setStatus(result.ok ? t('scratchpad:cloudSyncDone', { note: result.note }) : result.note);
+
+      const statusParts: string[] = [];
+      const failureParts: string[] = [];
+
+      if (lanResult.status === 'fulfilled') {
+        statusParts.push(t('scratchpad:lanSyncDone', { count: lanResult.value.synced }));
+      } else {
+        const reason = lanResult.reason instanceof Error ? lanResult.reason.message : t('scratchpad:lanSyncFailed');
+        statusParts.push(t('scratchpad:lanSyncFailed'));
+        failureParts.push(t('scratchpad:lanSyncFailedWithReason', { reason }));
+      }
+
+      if (cloudResult.status === 'fulfilled' && cloudResult.value.ok) {
+        statusParts.push(t('scratchpad:cloudSyncDone', { note: cloudResult.value.note }));
+      } else if (cloudResult.status === 'fulfilled') {
+        statusParts.push(t('scratchpad:cloudSyncFailed'));
+        failureParts.push(t('scratchpad:cloudSyncFailedWithReason', { reason: cloudResult.value.note }));
+      } else {
+        const reason = cloudResult.reason instanceof Error ? cloudResult.reason.message : t('scratchpad:cloudSyncFailed');
+        statusParts.push(t('scratchpad:cloudSyncFailed'));
+        failureParts.push(t('scratchpad:cloudSyncFailedWithReason', { reason }));
+      }
+
+      setStatus(statusParts.join(t('scratchpad:syncSummarySeparator')));
+      if (failureParts.length > 0) {
+        setError(t('scratchpad:syncFailed', { detail: failureParts.join(t('scratchpad:syncFailureSeparator')) }));
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('scratchpad:cloudSyncFailed'));
+      setError(err instanceof Error ? err.message : t('scratchpad:syncFailed', { detail: t('scratchpad:saveFailed') }));
     } finally {
-      setCloudSyncing(false);
+      setSyncing(false);
     }
   }, [refreshAfterSync, savePendingNow, t]);
 
@@ -208,11 +228,8 @@ export function Scratchpad() {
         <Button variant="secondary" size="sm" icon={<TrashIcon />} onClick={handleClearRequest}>
           {t('scratchpad:clear')}
         </Button>
-        <Button variant="secondary" size="sm" icon={<SyncIcon />} loading={lanSyncing} onClick={handleLanSync}>
-          {lanSyncing ? t('scratchpad:lanSyncing') : t('scratchpad:syncLan')}
-        </Button>
-        <Button variant="secondary" size="sm" icon={<UploadIcon />} loading={cloudSyncing} onClick={handleCloudSync}>
-          {cloudSyncing ? t('scratchpad:cloudSyncing') : t('scratchpad:syncCloud')}
+        <Button variant="secondary" size="sm" icon={<SyncIcon />} loading={syncing} onClick={handleSync}>
+          {syncing ? t('scratchpad:syncing') : t('scratchpad:syncAll')}
         </Button>
         <span className={styles.charCount}>{t('scratchpad:charCount', { n: charCount })}</span>
       </div>
