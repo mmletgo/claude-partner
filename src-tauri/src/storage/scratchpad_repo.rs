@@ -1,12 +1,12 @@
-//! storage/scratchpad_repo.rs — 速记本单例数据访问层
+//! storage/scratchpad_repo.rs — 速记本多页面数据访问层
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     Scratchpad 从前端 localStorage 迁移到 Rust/SQLite 后，页面自动保存、局域网同步、
-//!     GitHub 云同步都必须读写同一份权威数据。速记本是单例文本，全表只保留 id="scratchpad"。
+//!     Scratchpad 从单个自动保存文本升级为多页面自动保存。页面、局域网同步和 GitHub 云同步
+//!     都必须读写同一份 SQLite 权威数据；旧单例内容保留为 id="scratchpad" 的默认页。
 //!
 //! Code Logic（这个模块做什么）:
-//!     持有 SqlitePool，提供 get_or_init / update_content / get_for_sync / upsert。
-//!     vector_clock 以 JSON TEXT 存储；清空文本是普通 update，不走 deleted。
+//!     持有 SqlitePool，提供 schema 兼容迁移、页面 CRUD、同步全量读取和批量 upsert。
+//!     vector_clock 以 JSON TEXT 存储；删除为软删除，清空文本是普通 content="" 更新。
 
 use crate::error::AppError;
 use crate::models::scratchpad::{ScratchpadRow, SCRATCHPAD_ID};
@@ -14,6 +14,7 @@ use chrono::Utc;
 use sqlx::sqlite::{SqlitePool, SqliteRow};
 use sqlx::Row;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 /// 速记本仓库，封装 scratchpad 表的所有数据库操作。
 pub struct ScratchpadRepo {
@@ -32,10 +33,44 @@ impl ScratchpadRepo {
 
     /// 当前时间的 RFC3339 字符串。
     ///
-    /// Business Logic: 新建和更新速记本时需要稳定的 LWW 时间戳参与冲突解决。
+    /// Business Logic: 新建和更新页面时需要稳定的 LWW 时间戳参与冲突解决。
     /// Code Logic: 使用 UTC RFC3339，与 prompts/ssh_targets 的时间格式一致。
     fn now_iso() -> String {
         Utc::now().to_rfc3339()
+    }
+
+    /// 归一化页面标题。
+    ///
+    /// Business Logic: 用户可以输入空标题，但列表中必须有可展示名称。
+    /// Code Logic: trim 后为空返回“未命名”，否则返回 trim 后文本。
+    fn normalize_title(title: &str) -> String {
+        let trimmed = title.trim();
+        if trimmed.is_empty() {
+            "未命名".to_string()
+        } else {
+            trimmed.to_string()
+        }
+    }
+
+    /// 确保旧库 schema 拥有 title 列。
+    ///
+    /// Business Logic: 已安装用户的旧 scratchpad 表没有 title；升级后必须无损迁移为默认页标题“速记本”。
+    /// Code Logic: PRAGMA table_info 检查列名，缺失时 ALTER TABLE ADD COLUMN title TEXT NOT NULL DEFAULT '速记本'。
+    pub async fn ensure_schema(&self) -> Result<(), AppError> {
+        let columns = sqlx::query("PRAGMA table_info(scratchpad)")
+            .fetch_all(&self.db)
+            .await?;
+        let has_title = columns.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .map(|name| name == "title")
+                .unwrap_or(false)
+        });
+        if !has_title {
+            sqlx::query("ALTER TABLE scratchpad ADD COLUMN title TEXT NOT NULL DEFAULT '速记本'")
+                .execute(&self.db)
+                .await?;
+        }
+        Ok(())
     }
 
     /// 将数据库行映射为 ScratchpadRow。
@@ -48,6 +83,7 @@ impl ScratchpadRepo {
         let vector_clock: HashMap<String, u64> = serde_json::from_str(&vc_text)?;
         Ok(ScratchpadRow {
             id: row.try_get("id")?,
+            title: row.try_get("title")?,
             content: row.try_get("content")?,
             created_at: row.try_get("created_at")?,
             updated_at: row.try_get("updated_at")?,
@@ -57,16 +93,30 @@ impl ScratchpadRepo {
         })
     }
 
-    /// 查询当前速记本单例（含空内容）。
+    /// 列出所有未删除页面，按 updated_at 降序。
     ///
-    /// Business Logic: 同步和页面加载都需要读取单例；未初始化时由 get_or_init 创建。
-    /// Code Logic: 按固定 id 查询，返回 Option 方便 get_or_init 分支处理。
-    pub async fn get(&self) -> Result<Option<ScratchpadRow>, AppError> {
+    /// Business Logic: 前端侧栏只展示当前有效页面，最近编辑的页面应排在前面。
+    /// Code Logic: 查询 deleted=0 的完整行；命令层再投影为 summary DTO。
+    pub async fn list_pages(&self) -> Result<Vec<ScratchpadRow>, AppError> {
+        let rows = sqlx::query(
+            "SELECT id, title, content, created_at, updated_at, device_id, vector_clock, deleted \
+             FROM scratchpad WHERE deleted = 0 ORDER BY updated_at DESC",
+        )
+        .fetch_all(&self.db)
+        .await?;
+        rows.iter().map(Self::row_to_scratchpad).collect()
+    }
+
+    /// 按页面 id 查询一页（含已删除记录，供同步和删除判断使用）。
+    ///
+    /// Business Logic: 页面详情、同步合并和软删除都需要按 id 精确读取。
+    /// Code Logic: id 作为主键查询，返回 Option 由调用方决定 not-found 行为。
+    pub async fn get(&self, page_id: &str) -> Result<Option<ScratchpadRow>, AppError> {
         let row = sqlx::query(
-            "SELECT id, content, created_at, updated_at, device_id, vector_clock, deleted \
+            "SELECT id, title, content, created_at, updated_at, device_id, vector_clock, deleted \
              FROM scratchpad WHERE id = ?",
         )
-        .bind(SCRATCHPAD_ID)
+        .bind(page_id)
         .fetch_optional(&self.db)
         .await?;
         match row {
@@ -75,18 +125,22 @@ impl ScratchpadRepo {
         }
     }
 
-    /// 获取速记本；若不存在则初始化空单例。
+    /// 获取默认页；若不存在则创建空白默认页。
     ///
-    /// Business Logic: 用户第一次打开速记本也应得到可自动保存的 DB 记录。空初始化不代表一次用户编辑，
-    ///     因此 vector_clock 为空，避免把“未写内容”传播成有意义的远端更新。
-    /// Code Logic: 查询 None 时插入 id="scratchpad"、content=""、deleted=false 的行。
-    pub async fn get_or_init(&self, device_id: &str) -> Result<ScratchpadRow, AppError> {
-        if let Some(row) = self.get().await? {
+    /// Business Logic: 旧速记本入口需要稳定落到默认页，首次启动也应有可自动保存页面。
+    ///     空初始化不代表一次用户编辑，因此 vector_clock 为空，避免传播无意义变更。
+    /// Code Logic: id 固定为 "scratchpad"，title 固定为“速记本”，content 为空。
+    pub async fn get_or_create_default_page(
+        &self,
+        device_id: &str,
+    ) -> Result<ScratchpadRow, AppError> {
+        if let Some(row) = self.get(SCRATCHPAD_ID).await? {
             return Ok(row);
         }
         let now = Self::now_iso();
         let row = ScratchpadRow {
             id: SCRATCHPAD_ID.to_string(),
+            title: "速记本".to_string(),
             content: String::new(),
             created_at: now.clone(),
             updated_at: now,
@@ -98,22 +152,57 @@ impl ScratchpadRepo {
         Ok(row)
     }
 
-    /// 更新速记本文本并推进本机向量时钟。
+    /// 创建普通新页面。
+    ///
+    /// Business Logic: 用户新增页面时应立即生成可保存、可同步的独立页面；空标题统一展示为“未命名”。
+    /// Code Logic: UUID v4 作为 id，vector_clock 初始化为 {device_id:1}，支持测试传入固定 updated_at。
+    pub async fn create_page(
+        &self,
+        title: &str,
+        content: &str,
+        device_id: &str,
+        updated_at_override: Option<&str>,
+    ) -> Result<ScratchpadRow, AppError> {
+        let now = updated_at_override
+            .map(ToString::to_string)
+            .unwrap_or_else(Self::now_iso);
+        let mut vector_clock = HashMap::new();
+        vector_clock.insert(device_id.to_string(), 1);
+        let row = ScratchpadRow {
+            id: Uuid::new_v4().to_string(),
+            title: Self::normalize_title(title),
+            content: content.to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+            device_id: device_id.to_string(),
+            vector_clock,
+            deleted: false,
+        };
+        self.upsert(&row).await?;
+        Ok(row)
+    }
+
+    /// 更新页面内容并推进本机向量时钟。
     ///
     /// Business Logic: 页面自动保存、清空都调用此方法；每次用户文本变更都必须被同步层感知。
-    /// Code Logic: 读取旧行（无则初始化），保留 created_at，content 改为 next，updated_at=now，
+    /// Code Logic: 读取旧行，保留 title/created_at，content 改为 next，updated_at=now，
     ///     vector_clock[device_id]+=1，deleted=false，然后 upsert。
-    pub async fn update_content(
+    pub async fn update_page_content(
         &self,
+        page_id: &str,
         next: &str,
         device_id: &str,
     ) -> Result<ScratchpadRow, AppError> {
-        let existing = self.get_or_init(device_id).await?;
+        let existing = self
+            .get(page_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(format!("速记本页面不存在: {page_id}")))?;
         let mut vector_clock = existing.vector_clock.clone();
         let counter = vector_clock.entry(device_id.to_string()).or_insert(0);
         *counter += 1;
         let row = ScratchpadRow {
-            id: SCRATCHPAD_ID.to_string(),
+            id: existing.id,
+            title: existing.title,
             content: next.to_string(),
             created_at: existing.created_at,
             updated_at: Self::now_iso(),
@@ -125,29 +214,99 @@ impl ScratchpadRepo {
         Ok(row)
     }
 
-    /// 返回速记本同步实体列表（单例 0/1 条）。
+    /// 重命名页面并推进本机向量时钟。
     ///
-    /// Business Logic: cloud snapshot 和 P2P 同步按“列表”接口复用批量结构；速记本仍保持单例语义。
-    /// Code Logic: 直接查询已有行，不主动初始化，避免纯后台流程制造无意义记录；调用方需要时可 get_or_init。
-    pub async fn get_for_sync(&self) -> Result<Vec<ScratchpadRow>, AppError> {
-        match self.get().await? {
-            Some(row) => Ok(vec![row]),
-            None => Ok(Vec::new()),
-        }
+    /// Business Logic: 标题是同步字段，重命名需要传播到局域网与云端。
+    /// Code Logic: 读取旧行，归一化 title，更新时间与 device_id，vector_clock[device_id]+=1。
+    pub async fn rename_page(
+        &self,
+        page_id: &str,
+        title: &str,
+        device_id: &str,
+    ) -> Result<ScratchpadRow, AppError> {
+        let existing = self
+            .get(page_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(format!("速记本页面不存在: {page_id}")))?;
+        let mut vector_clock = existing.vector_clock.clone();
+        let counter = vector_clock.entry(device_id.to_string()).or_insert(0);
+        *counter += 1;
+        let row = ScratchpadRow {
+            id: existing.id,
+            title: Self::normalize_title(title),
+            content: existing.content,
+            created_at: existing.created_at,
+            updated_at: Self::now_iso(),
+            device_id: device_id.to_string(),
+            vector_clock,
+            deleted: false,
+        };
+        self.upsert(&row).await?;
+        Ok(row)
     }
 
-    /// 插入/替换速记本单例。
+    /// 软删除页面并推进本机向量时钟。
     ///
-    /// Business Logic: 同步合并后需要把胜出版本落库；id 固定，INSERT OR REPLACE 足够表达覆盖。
-    /// Code Logic: vector_clock 序列化为紧凑 JSON，deleted bool 转 0/1。
+    /// Business Logic: 删除需要传播到其他设备和云端，因此不能物理删除。
+    /// Code Logic: 保留内容与标题，设置 deleted=true，更新时间与 device_id，vector_clock[device_id]+=1。
+    pub async fn soft_delete_page(
+        &self,
+        page_id: &str,
+        device_id: &str,
+    ) -> Result<ScratchpadRow, AppError> {
+        let existing = self
+            .get(page_id)
+            .await?
+            .ok_or_else(|| AppError::not_found(format!("速记本页面不存在: {page_id}")))?;
+        let mut vector_clock = existing.vector_clock.clone();
+        let counter = vector_clock.entry(device_id.to_string()).or_insert(0);
+        *counter += 1;
+        let row = ScratchpadRow {
+            id: existing.id,
+            title: existing.title,
+            content: existing.content,
+            created_at: existing.created_at,
+            updated_at: Self::now_iso(),
+            device_id: device_id.to_string(),
+            vector_clock,
+            deleted: true,
+        };
+        self.upsert(&row).await?;
+        Ok(row)
+    }
+
+    /// 返回全部页面（含 deleted 软删除记录），用于跨设备同步和云同步。
+    pub async fn get_all_for_sync(&self) -> Result<Vec<ScratchpadRow>, AppError> {
+        let rows = sqlx::query(
+            "SELECT id, title, content, created_at, updated_at, device_id, vector_clock, deleted \
+             FROM scratchpad",
+        )
+        .fetch_all(&self.db)
+        .await?;
+        rows.iter().map(Self::row_to_scratchpad).collect()
+    }
+
+    /// 批量插入/替换页面。
+    ///
+    /// Business Logic: 同步合并后需要批量落库胜出版本；每页以 id 为主键。
+    /// Code Logic: 逐条 INSERT OR REPLACE，vector_clock 序列化为紧凑 JSON，deleted bool 转 0/1。
+    pub async fn bulk_upsert(&self, rows: &[ScratchpadRow]) -> Result<(), AppError> {
+        for row in rows {
+            self.upsert(row).await?;
+        }
+        Ok(())
+    }
+
+    /// 插入/替换单页。
     pub async fn upsert(&self, row: &ScratchpadRow) -> Result<(), AppError> {
         let vc_text = serde_json::to_string(&row.vector_clock)?;
         sqlx::query(
             "INSERT OR REPLACE INTO scratchpad \
-             (id, content, created_at, updated_at, device_id, vector_clock, deleted) \
-             VALUES (?, ?, ?, ?, ?, ?, ?)",
+             (id, title, content, created_at, updated_at, device_id, vector_clock, deleted) \
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
+        .bind(&row.title)
         .bind(&row.content)
         .bind(&row.created_at)
         .bind(&row.updated_at)
@@ -166,8 +325,8 @@ mod tests {
     use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
     use std::str::FromStr;
 
-    /// 构造内存 SQLite 并建好 scratchpad 表，返回仓库。
-    async fn setup_repo() -> ScratchpadRepo {
+    /// 构造内存 SQLite 并建好指定 scratchpad schema，返回仓库。
+    async fn setup_repo_with_schema(schema: &str) -> ScratchpadRepo {
         let options = SqliteConnectOptions::from_str("sqlite::memory:")
             .unwrap()
             .create_if_missing(true);
@@ -176,40 +335,102 @@ mod tests {
             .connect_with(options)
             .await
             .unwrap();
-        sqlx::query(
+        sqlx::query(schema).execute(&pool).await.unwrap();
+        let repo = ScratchpadRepo::new(pool);
+        repo.ensure_schema().await.unwrap();
+        repo
+    }
+
+    /// 构造内存 SQLite 并建好多页面 scratchpad 表，返回仓库。
+    async fn setup_repo() -> ScratchpadRepo {
+        setup_repo_with_schema(
+            "CREATE TABLE IF NOT EXISTS scratchpad (\
+             id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '速记本', content TEXT NOT NULL, \
+             created_at TEXT NOT NULL, updated_at TEXT NOT NULL, device_id TEXT NOT NULL, \
+             vector_clock TEXT NOT NULL, deleted INTEGER DEFAULT 0)",
+        )
+        .await
+    }
+
+    /// 旧单例表迁移时会补 title 列，并把已有内容保留为“速记本”页面。
+    #[tokio::test]
+    async fn ensure_schema_adds_title_to_legacy_singleton_table() {
+        let repo = setup_repo_with_schema(
             "CREATE TABLE IF NOT EXISTS scratchpad (\
              id TEXT PRIMARY KEY, content TEXT NOT NULL, created_at TEXT NOT NULL, \
              updated_at TEXT NOT NULL, device_id TEXT NOT NULL, vector_clock TEXT NOT NULL, \
              deleted INTEGER DEFAULT 0)",
         )
-        .execute(&pool)
-        .await
-        .unwrap();
-        ScratchpadRepo::new(pool)
+        .await;
+        let now = ScratchpadRepo::now_iso();
+        let legacy = ScratchpadRow {
+            id: "scratchpad".to_string(),
+            title: "速记本".to_string(),
+            content: "legacy content".to_string(),
+            created_at: now.clone(),
+            updated_at: now,
+            device_id: "device-a".to_string(),
+            vector_clock: HashMap::new(),
+            deleted: false,
+        };
+        repo.upsert(&legacy).await.unwrap();
+
+        let listed = repo.list_pages().await.unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "scratchpad");
+        assert_eq!(listed[0].title, "速记本");
+        assert_eq!(listed[0].content, "legacy content");
     }
 
-    /// 首次读取会创建空白单例，且不推进 vector_clock。
+    /// 首次读取会创建空白默认页面，且不推进 vector_clock。
     #[tokio::test]
-    async fn get_or_init_creates_empty_singleton_without_advancing_clock() {
+    async fn get_or_create_default_page_creates_empty_page_without_advancing_clock() {
         let repo = setup_repo().await;
-        let row = repo.get_or_init("device-a").await.unwrap();
+        let row = repo.get_or_create_default_page("device-a").await.unwrap();
 
         assert_eq!(row.id, "scratchpad");
+        assert_eq!(row.title, "速记本");
         assert_eq!(row.content, "");
         assert_eq!(row.device_id, "device-a");
         assert!(row.vector_clock.is_empty());
         assert!(!row.deleted);
     }
 
+    /// 创建多个页面后，列表只返回未删除页面，并按 updated_at 降序。
+    #[tokio::test]
+    async fn create_and_list_pages_excludes_deleted_and_orders_by_updated_at_desc() {
+        let repo = setup_repo().await;
+        let first = repo
+            .create_page("first", "", "device-a", Some("2024-01-01T00:00:00+00:00"))
+            .await
+            .unwrap();
+        let second = repo
+            .create_page("second", "", "device-a", Some("2024-01-02T00:00:00+00:00"))
+            .await
+            .unwrap();
+        repo.soft_delete_page(&first.id, "device-a").await.unwrap();
+
+        let listed = repo.list_pages().await.unwrap();
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, second.id);
+        assert_eq!(listed[0].title, "second");
+    }
+
     /// 更新内容会推进本机向量时钟，并保留首次创建时间。
     #[tokio::test]
-    async fn update_content_increments_current_device_clock_and_preserves_created_at() {
+    async fn update_page_content_increments_current_device_clock_and_preserves_created_at() {
         let repo = setup_repo().await;
-        let initial = repo.get_or_init("device-a").await.unwrap();
+        let initial = repo.get_or_create_default_page("device-a").await.unwrap();
 
-        let updated = repo.update_content("hello", "device-a").await.unwrap();
+        let updated = repo
+            .update_page_content(&initial.id, "hello", "device-a")
+            .await
+            .unwrap();
 
         assert_eq!(updated.id, "scratchpad");
+        assert_eq!(updated.title, "速记本");
         assert_eq!(updated.content, "hello");
         assert_eq!(updated.created_at, initial.created_at);
         assert_eq!(updated.device_id, "device-a");
@@ -217,15 +438,52 @@ mod tests {
         assert!(!updated.deleted);
     }
 
-    /// 同步读取返回单例行，便于 cloud/P2P 复用同一实体。
+    /// 重命名页面会推进本机向量时钟，并把空标题归一化为“未命名”。
     #[tokio::test]
-    async fn get_for_sync_returns_singleton_including_empty_content() {
+    async fn rename_page_increments_clock_and_normalizes_blank_title() {
         let repo = setup_repo().await;
-        repo.get_or_init("device-a").await.unwrap();
+        let initial = repo.get_or_create_default_page("device-a").await.unwrap();
 
-        let rows = repo.get_for_sync().await.unwrap();
+        let renamed = repo
+            .rename_page(&initial.id, "   ", "device-a")
+            .await
+            .unwrap();
 
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].id, "scratchpad");
+        assert_eq!(renamed.title, "未命名");
+        assert_eq!(renamed.vector_clock.get("device-a"), Some(&1));
+    }
+
+    /// 删除页面是软删除，且同步读取仍包含删除记录。
+    #[tokio::test]
+    async fn soft_delete_page_marks_deleted_and_get_all_for_sync_includes_it() {
+        let repo = setup_repo().await;
+        let initial = repo.get_or_create_default_page("device-a").await.unwrap();
+
+        repo.soft_delete_page(&initial.id, "device-a")
+            .await
+            .unwrap();
+
+        let listed = repo.list_pages().await.unwrap();
+        let synced = repo.get_all_for_sync().await.unwrap();
+        assert!(listed.is_empty());
+        assert_eq!(synced.len(), 1);
+        assert!(synced[0].deleted);
+        assert_eq!(synced[0].vector_clock.get("device-a"), Some(&1));
+    }
+
+    /// 同步读取返回全部页面行，便于 cloud/P2P 复用同一实体。
+    #[tokio::test]
+    async fn get_all_for_sync_returns_all_pages_including_empty_content() {
+        let repo = setup_repo().await;
+        repo.get_or_create_default_page("device-a").await.unwrap();
+        repo.create_page("second", "", "device-a", None)
+            .await
+            .unwrap();
+
+        let rows = repo.get_all_for_sync().await.unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().any(|row| row.id == "scratchpad"));
+        assert!(rows.iter().any(|row| row.title == "second"));
     }
 }

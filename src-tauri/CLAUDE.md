@@ -23,9 +23,9 @@ src/
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
 ├── commands/          — #[tauri::command]：prompts + prompt_optimizer + scratchpad + cc_history + cloud_sync + github_trending + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health [已实现]
 ├── models/prompt.rs   — PromptRow（snake_case，DB/同步）+ PromptDto（camelCase，前端） [已实现]
-├── models/scratchpad.rs — ScratchpadRow（单例，DB/同步）+ ScratchpadDto（camelCase，前端） [已实现]
+├── models/scratchpad.rs — ScratchpadRow（多页面，DB/同步）+ ScratchpadPageDto/SummaryDto（camelCase，前端） [已实现]
 ├── storage/prompt_repo.rs — sqlx 运行期 query（非宏），list/get/create/update/soft_delete/list_tags [已实现]
-├── storage/scratchpad_repo.rs — scratchpad 单例 get_or_init/update_content/get_for_sync/upsert [已实现]
+├── storage/scratchpad_repo.rs — scratchpad 多页面 CRUD、旧表 title 迁移、同步 upsert [已实现]
 ├── storage/cc_history_repo.rs — claude_history 表 CRUD + bulk_ingest(IGNORE)/bulk_upsert(REPLACE) + scan_state [已实现]
 ├── storage/health_repo.rs — activity_records/water_records 读写 + aggregate_minutes 统计 [已实现]
 ├── sync/              — 向量时钟 + LWW 合并 + engine              [M4]
@@ -228,15 +228,15 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## 速记本同步已落地行为约定（models/scratchpad.rs + storage/scratchpad_repo.rs + sync/scratchpad.rs + commands/scratchpad.rs + net/routes/scratchpad_sync.rs）
 
-- **功能定位**：Scratchpad 是单个自动保存文本，不拆成多笔记。内容权威源为 SQLite `scratchpad` 表；前端页面不再读写 localStorage。清空是 `content=""` 的普通更新，不是软删除。
-- **数据模型（单例）**：`scratchpad` 表全表仅一行，id 恒为 `"scratchpad"`。字段 `content`/`created_at`/`updated_at`/`device_id`/`vector_clock`/`deleted`。`ScratchpadRow`（snake_case，DB/P2P/cloud JSON）+ `ScratchpadDto`（camelCase，前端）+ `to_dto`。首次 `get_or_init(device_id)` 创建空内容行，vector_clock 为空，避免把“未编辑过”传播成一次变更。
-- **仓库（storage/scratchpad_repo.rs）**：`get_or_init`（首次空初始化）/`update_content`（保留 created_at，更新 content/updated_at/device_id，递增本机 vector_clock）/`get_for_sync`（单例 0/1 条）/`upsert`（INSERT OR REPLACE）。配 3 个单测。
-- **合并（sync/scratchpad.rs）**：复用 `sync::vector_clock::{compare,merge}`；策略与 Prompt/SSH 一致：严格领先覆盖、并发 LWW、时间戳相等按 device_id 字典序 tie-break，胜出方内容 + 合并后的 vector_clock。配 3 个单测。
-- **P2P 端点（net/routes/scratchpad_sync.rs，snake_case 互通）**：`POST /api/scratchpad/sync/pull`（body `{vector_clock}`，返回 `{scratchpad: Option<ScratchpadRow>}`）+ `POST /api/scratchpad/sync/push`（body `{scratchpad}`，接收端 merge 后按需 upsert，返回 `{accepted}`）。`peer_client` 加 `scratchpad_pull`/`scratchpad_push`，旧对端无路由时返回 None/false 并仅 debug。
+- **功能定位**：Scratchpad 是多页面自动保存文本集合。内容权威源为 SQLite `scratchpad` 表；前端页面不再读写 localStorage。清空是当前页 `content=""` 的普通更新，删除页面才走软删除。
+- **数据模型（多页面）**：`scratchpad` 表每行一个页面，字段 `id`/`title`/`content`/`created_at`/`updated_at`/`device_id`/`vector_clock`/`deleted`。旧库缺 `title` 时 `init_db`/repo schema 检查补 `title TEXT NOT NULL DEFAULT '速记本'`，旧单页内容保留为标题“速记本”的页面。`ScratchpadRow`（snake_case，DB/P2P/cloud JSON）+ `ScratchpadPageDto`/`ScratchpadPageSummaryDto`（camelCase，前端）+ `to_dto`/`to_summary_dto`。
+- **仓库（storage/scratchpad_repo.rs）**：`get_or_create_default_page`（无页面时创建默认页）/`list_pages`（排除 deleted，按 updated_at desc）/`get`/`create_page`/`update_page_content`/`rename_page`/`soft_delete_page`/`get_all_for_sync`（含 deleted）/`bulk_upsert`/`upsert`。创建/更新/重命名/删除都会推进本机 vector_clock；空标题归一为“未命名”。
+- **合并（sync/scratchpad.rs）**：复用 `sync::vector_clock::{compare,merge}`；逐页面合并，策略与 Prompt/SSH 一致：严格领先覆盖、并发 LWW、时间戳相等按 device_id 字典序 tie-break，胜出方 title/content/deleted/device_id/updated_at + 合并后的 vector_clock。title/content/deleted 均参与变化判断。
+- **P2P 端点（net/routes/scratchpad_sync.rs，snake_case 互通）**：`POST /api/scratchpad/sync/pull`（body `{summaries:[{id,vector_clock}]}`，返回 `{pages:[ScratchpadRow]}`）+ `POST /api/scratchpad/sync/push`（body `{pages:[ScratchpadRow]}`，接收端逐页 merge 后按需 upsert，返回 `{accepted}`）。`peer_client` 加多页面 `scratchpad_pull`/`scratchpad_push`，旧对端无路由时返回空 Vec/false 并仅 debug。
 - **同步挂载（sync/engine.rs::sync_with_peer）**：Prompt / CC 历史 / SSH 目标之后追加 `scratchpad_sync_with_peer`，失败 warn 不阻断，且不计入 `synced` 计数。页面 `sync_scratchpad` 命令复用全局 `trigger_sync`。
-- **云端同步（cloud_sync/snapshot.rs）**：自动同步范围包含 `scratchpad/scratchpad.json`。import 时与本地 merge_scratchpad 后按需 upsert；export 时用 `get_or_init` 确保首次云同步也写出空单例。`ImportStats`/`ExportStats` 的 total 包含 scratchpad。
-- **命令层（commands/scratchpad.rs，lib.rs invoke_handler 注册 3 个）**：`get_scratchpad`（get_or_init + DTO）、`update_scratchpad(content)`（自动保存入口）、`sync_scratchpad`（复用 trigger_sync 返回 `{accepted,synced,note}`）。
-- **建表（lib.rs + migrations/0001_init.sql）**：常量 `SCRATCHPAD_SCHEMA`，字段与 ScratchpadRow 对齐。AppState 扩展 `scratchpad_repo: Arc<ScratchpadRepo>`。
+- **云端同步（cloud_sync/snapshot.rs）**：自动同步范围包含 `scratchpad/<hex(id)>.json` 多文件，deleted 页面也导出以传播软删除。import 扫 `scratchpad/*.json`，兼容旧 `scratchpad/scratchpad.json`，逐页与本地 `merge_scratchpad` 后按需 upsert；export 清空 scratchpad 目录后写出全量页面。`ImportStats`/`ExportStats` 的 total 包含所有 scratchpad 页面数量。
+- **命令层（commands/scratchpad.rs，lib.rs invoke_handler 注册 7 个）**：`list_scratchpad_pages`、`get_scratchpad_page(pageId)`、`create_scratchpad_page(title?)`、`update_scratchpad_page_content(pageId,content)`、`rename_scratchpad_page(pageId,title)`、`delete_scratchpad_page(pageId)`（返回 `{ok,pageId}`）、`sync_scratchpad`（复用 trigger_sync 返回 `{accepted,synced,note}`）。
+- **建表（lib.rs + migrations/0001_init.sql）**：常量 `SCRATCHPAD_SCHEMA`，字段与 ScratchpadRow 对齐并包含 `title`。AppState 扩展 `scratchpad_repo: Arc<ScratchpadRepo>`。
 
 ## SSH 目标同步已落地行为约定（models/ssh_target.rs + storage/ssh_target_repo.rs + sync/ssh_target.rs + commands/ssh_target.rs + net/routes/ssh_target_sync.rs）
 
@@ -255,10 +255,10 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **系统 git CLI**（不引入 git 库）：`cloud_sync/git_cli.rs` 用 `tokio::process::Command` 封装系统 git，应用**不管理认证**（复用本机 git 凭证 / SSH key / credential helper / token）。`detect_git()` 跑 `git --version` 探测（失败给平台提示，Windows 提示装 Git for Windows）；`run(git, workdir, args, timeout)` 统一入口：`.current_dir(workdir)`、stdout/stderr piped、`tokio::time::timeout` 包裹、非零退出转 `AppError::generic`（含 stderr）。clone/fetch/push 180s 超时，其余 30s。`push` 用自定义 `PushError::{Rejected, Other(AppError)}` 区分"被远端拒绝（可重试）"与"普通失败"（stderr 含 rejected/non-fast-forward/fetch first → Rejected）。
 - **工作区路径**：`~/.cc-partner/cloud-sync/`（`engine::cloud_sync_workdir()` 复用 `config::config_dir()`，config_dir 已提升为 pub）。首次 clone 远端到此 + `set_local_identity`（local user.name/email = cc-partner / cc-partner@local，不污染全局 git 配置）；后续复用。
 - **工作区文件结构**（`cloud_sync/snapshot.rs`）：
-  - `prompts/<id>.json` → PromptRow；`claude_history/<id>.json` → ClaudeHistoryRow；`ssh_targets/<host>.json` → SshTargetRow；`scratchpad/scratchpad.json` → ScratchpadRow。旧仓库中若残留 `claude_md/claude_md.json`，本流程会忽略它，不 import 覆盖本机，也不 export/commit 本机 CLAUDE.md。
+  - `prompts/<id>.json` → PromptRow；`claude_history/<id>.json` → ClaudeHistoryRow；`ssh_targets/<host>.json` → SshTargetRow；`scratchpad/<hex(id)>.json` → ScratchpadRow。旧仓库中若残留 `claude_md/claude_md.json`，本流程会忽略它，不 import 覆盖本机，也不 export/commit 本机 CLAUDE.md。
   - **文件名安全化（关键）**：id 可能含 Windows 非法字符（CC 历史 id 是 `{session_id}:{uuid}` 含冒号）。`id_to_filename` / `filename_to_id` 用 **hex 编码** id 的 UTF-8 字节做可逆映射（输出仅 `[0-9a-f]`，跨平台安全，round-trip 一致）。export 和 import 必须用同一映射（已配 7 个单测覆盖含冒号 / 斜杠 / 中文 / 空串 / 非法 hex 回退）。
-- **import_to_db**：扫 prompts/*.json + claude_history/*.json + ssh_targets/*.json + scratchpad/scratchpad.json → 逐条本地 get：None 直接收，Some 则 `merge_*`，仅当合并结果在 vector_clock/updated_at/content/title/deleted 等同步字段有差异才收集 → `bulk_upsert`/`upsert`。返回 `ImportStats{prompts, cc_history, ssh_targets, scratchpad}`。单文件解析失败 `tracing::warn` 跳过不中断。
-- **export_from_db**：覆盖式——先 `clear_dir_contents` 清空 prompts/、claude_history/、ssh_targets/、scratchpad/（保留目录），再全量写回 JSON；deleted 照写以传播软删除。Scratchpad 用 `get_or_init` 确保首次云同步也写出 `scratchpad/scratchpad.json`。返回 `ExportStats{prompts, cc_history, ssh_targets, scratchpad}`。CLAUDE.md 目录不创建、不清理、不写入。
+- **import_to_db**：扫 prompts/*.json + claude_history/*.json + ssh_targets/*.json + scratchpad/*.json（兼容旧 scratchpad/scratchpad.json）→ 逐条本地 get：None 直接收，Some 则 `merge_*`，仅当合并结果在 vector_clock/updated_at/content/title/deleted 等同步字段有差异才收集 → `bulk_upsert`/`upsert`。返回 `ImportStats{prompts, cc_history, ssh_targets, scratchpad}`。单文件解析失败 `tracing::warn` 跳过不中断。
+- **export_from_db**：覆盖式——先 `clear_dir_contents` 清空 prompts/、claude_history/、ssh_targets/、scratchpad/（保留目录），再全量写回 JSON；deleted 照写以传播软删除。Scratchpad 用 `get_all_for_sync` 写出 `scratchpad/<hex(id)>.json` 多页面文件。返回 `ExportStats{prompts, cc_history, ssh_targets, scratchpad}`。CLAUDE.md 目录不创建、不清理、不写入。
 - **push rejected 收敛**（`engine::trigger_cloud_sync`）：每轮 = fetch(远端有引用时) → reset --hard origin/<branch>(远端有引用时) → import → export → commit → push。commit message 形如 `cloud sync from <device_id> @ <ISO 时间戳>`，便于多设备同步审计与回滚定位。commit 无变化则跳过 push 视为成功（pull 已吸收远端）。push 返回 `PushError::Rejected` 时再 fetch+reset+import+export+commit+push 一轮（最多 1 次重试 = 总共 2 轮）。`has_remote_branch`（`git rev-parse --verify origin/HEAD`）判断全新空仓库无远端引用时跳过 fetch/reset 容错。pulled = 各轮 import 条数总和，pushed = 最后一轮 export 条数。任一步骤失败返回 `CloudSyncResult{ok:false, note:友好中文}`，绝不 panic。
 - **test_connection**：detect_git → git_version；若配了 repo_url：工作区已存在则 fetch 测连通 + `default_remote_branch`；无工作区则 clone 到临时目录 `cp-cloud-sync-test-<uuid>` 测连通（测完删除），返回默认分支。未配 url 仅返回 git 可用。无 commit/push 副作用。
 - **配置字段**（`AppConfig`，全部 `#[serde(default)]` 保旧 config.json 兼容）：`cloud_sync_repo_url: Option<String>`、`cloud_sync_enabled: bool`、`cloud_sync_auto: bool`、`cloud_sync_interval_secs: u64`（默认 600，`default_cloud_sync_interval()`）、`cloud_sync_branch: Option<String>`。load() 首次生成默认值补 None/false/false/600/None。

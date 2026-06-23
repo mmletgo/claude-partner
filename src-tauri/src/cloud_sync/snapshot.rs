@@ -7,7 +7,7 @@
 //!       - prompts/<id>.json        → PromptRow（含 deleted，照写以传播软删除）
 //!       - claude_history/<id>.json → ClaudeHistoryRow（含 deleted）
 //!       - ssh_targets/<host>.json → SshTargetRow（含 deleted）
-//!       - scratchpad/scratchpad.json → ScratchpadRow（单例自动保存文本）
+//!       - scratchpad/<hex(id)>.json  → ScratchpadRow（多页面，含 deleted）
 //!
 //! Code Logic（这个模块做什么）:
 //!     - `id_to_filename` / `filename_to_id`：id → 安全文件名的可逆映射（hex 编码，
@@ -25,6 +25,7 @@ use crate::models::prompt::PromptRow;
 use crate::models::scratchpad::{ScratchpadRow, SCRATCHPAD_ID};
 use crate::models::ssh_target::SshTargetRow;
 use crate::state::AppState;
+use crate::storage::ScratchpadRepo;
 use crate::sync::merger::merge_prompt;
 use crate::sync::scratchpad::{merge_scratchpad, scratchpad_changed};
 use crate::sync::ssh_target::merge_ssh_target;
@@ -39,9 +40,51 @@ const CC_HISTORY_DIR: &str = "claude_history";
 const SSH_TARGETS_DIR: &str = "ssh_targets";
 /// 工作区下速记本目录名。
 const SCRATCHPAD_DIR: &str = "scratchpad";
-/// 工作区下速记本单例文件名。
-const SCRATCHPAD_FILE: &str = "scratchpad.json";
 
+/// 云端速记本 JSON 的兼容反序列化结构。
+///
+/// Business Logic: 旧版云端 `scratchpad/scratchpad.json` 没有 title 字段；升级后仍必须导入为默认页。
+/// Code Logic: title 缺失时补“速记本”，deleted 缺失时补 false，再转换为 ScratchpadRow。
+#[derive(Debug, serde::Deserialize)]
+struct ScratchpadCloudRow {
+    id: String,
+    #[serde(default = "default_scratchpad_title")]
+    title: String,
+    content: String,
+    created_at: String,
+    updated_at: String,
+    device_id: String,
+    vector_clock: std::collections::HashMap<String, u64>,
+    #[serde(default)]
+    deleted: bool,
+}
+
+/// 旧速记本云端 JSON 缺 title 时使用的默认标题。
+///
+/// Business Logic: 旧单页内容升级后需要以“速记本”标题显示在第一页。
+/// Code Logic: 返回固定中文标题，与 DB title 迁移默认值一致。
+fn default_scratchpad_title() -> String {
+    "速记本".to_string()
+}
+
+impl ScratchpadCloudRow {
+    /// 转换为同步层使用的 ScratchpadRow。
+    ///
+    /// Business Logic: 云端导入后必须进入同一套 merge_scratchpad 逻辑。
+    /// Code Logic: 字段原样搬运，title 已由 serde default 兜底。
+    fn into_row(self) -> ScratchpadRow {
+        ScratchpadRow {
+            id: self.id,
+            title: self.title,
+            content: self.content,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            device_id: self.device_id,
+            vector_clock: self.vector_clock,
+            deleted: self.deleted,
+        }
+    }
+}
 /// import 统计：各类型实际落库条数。
 #[derive(Debug, Clone, Default)]
 pub struct ImportStats {
@@ -51,7 +94,7 @@ pub struct ImportStats {
     pub cc_history: u64,
     /// SSH 目标实际合并产生变化的条数。
     pub ssh_targets: u64,
-    /// 速记本实际合并产生变化的条数（0 或 1）。
+    /// 速记本实际合并产生变化的页面数。
     pub scratchpad: u64,
 }
 
@@ -74,7 +117,7 @@ pub struct ExportStats {
     pub cc_history: u64,
     /// SSH 目标写出文件数（含 deleted）。
     pub ssh_targets: u64,
-    /// 速记本写出文件数（单例，通常为 1）。
+    /// 速记本写出文件数（含 deleted 页面）。
     pub scratchpad: u64,
 }
 
@@ -201,7 +244,7 @@ fn read_json_file<T: serde::de::DeserializeOwned>(path: &Path) -> Option<T> {
 ///    仅 prompt_changed 才收集；批量 bulk_upsert；
 /// 2. claude_history/*.json：merge_cc_history，变化才 bulk_upsert；
 /// 3. ssh_targets/*.json：merge_ssh_target，变化才 bulk_upsert（host 为主键，文件名 hex 还原）；
-/// 4. scratchpad/scratchpad.json：merge_scratchpad，变化才 upsert；
+/// 4. scratchpad/*.json：按文件名还原 id，merge_scratchpad，变化才 upsert；兼容旧 scratchpad/scratchpad.json；
 /// 5. 返回 ImportStats。
 pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStats, AppError> {
     let mut stats = ImportStats::default();
@@ -385,22 +428,8 @@ pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStat
         }
     }
 
-    // 4. 速记本 import（单例文件）
-    let scratchpad_path = workdir.join(SCRATCHPAD_DIR).join(SCRATCHPAD_FILE);
-    if scratchpad_path.is_file() {
-        if let Some(mut remote) = read_json_file::<ScratchpadRow>(&scratchpad_path) {
-            remote.id = SCRATCHPAD_ID.to_string();
-            let local = state
-                .scratchpad_repo
-                .get_or_init(state.device_id.as_str())
-                .await?;
-            let merged = merge_scratchpad(&local, &remote);
-            if scratchpad_changed(&merged, &local) {
-                state.scratchpad_repo.upsert(&merged).await?;
-                stats.scratchpad = 1;
-            }
-        }
-    }
+    stats.scratchpad =
+        import_scratchpad_dir(&state.scratchpad_repo, &workdir.join(SCRATCHPAD_DIR)).await?;
 
     Ok(stats)
 }
@@ -417,7 +446,7 @@ pub async fn import_to_db(state: &AppState, workdir: &Path) -> Result<ImportStat
 /// 2. prompt_repo.get_all_for_sync() 全量（含 deleted）逐条写 prompts/<id_to_filename>.json；
 /// 3. cc_history 全量写 claude_history/<id_to_filename>.json；
 /// 4. ssh_targets 全量写 ssh_targets/<id_to_filename(host)>.json；
-/// 5. scratchpad 单例写 scratchpad/scratchpad.json；
+/// 5. scratchpad 全量写 scratchpad/<hex(id)>.json；
 /// 6. 返回 ExportStats。
 pub async fn export_from_db(state: &AppState, workdir: &Path) -> Result<ExportStats, AppError> {
     let mut stats = ExportStats::default();
@@ -467,15 +496,7 @@ pub async fn export_from_db(state: &AppState, workdir: &Path) -> Result<ExportSt
     }
     stats.ssh_targets = all_ssh.len() as u64;
 
-    // 速记本单例写出（确保首次云同步也有空单例）
-    let scratchpad = state
-        .scratchpad_repo
-        .get_or_init(state.device_id.as_str())
-        .await?;
-    let scratchpad_path = scratchpad_dir.join(SCRATCHPAD_FILE);
-    let text = serde_json::to_string_pretty(&scratchpad)?;
-    fs::write(&scratchpad_path, text)?;
-    stats.scratchpad = 1;
+    stats.scratchpad = export_scratchpad_dir(&state.scratchpad_repo, &scratchpad_dir).await?;
 
     Ok(stats)
 }
@@ -509,12 +530,135 @@ fn clear_dir_contents(dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 从 scratchpad 目录导入多页面 JSON，并返回实际落库页面数。
+///
+/// Business Logic: 云同步升级为多文件后，需要读取 `scratchpad/<hex(id)>.json`；
+///     旧版 `scratchpad/scratchpad.json` 也必须继续导入为默认页。
+/// Code Logic: 文件 stem 通过 filename_to_id 还原，非法 hex 会回退原 stem；逐页 merge 后批量 upsert。
+async fn import_scratchpad_dir(
+    repo: &ScratchpadRepo,
+    scratchpad_dir: &Path,
+) -> Result<u64, AppError> {
+    if !scratchpad_dir.is_dir() {
+        return Ok(0);
+    }
+
+    let mut to_upsert: Vec<ScratchpadRow> = Vec::new();
+    for entry in fs::read_dir(scratchpad_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let stem = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s,
+            None => continue,
+        };
+        let id = if stem == SCRATCHPAD_ID {
+            SCRATCHPAD_ID.to_string()
+        } else {
+            filename_to_id(stem)
+        };
+        let remote = match read_json_file::<ScratchpadCloudRow>(&path) {
+            Some(mut r) => {
+                if r.id != id {
+                    r.id = id;
+                }
+                r.into_row()
+            }
+            None => continue,
+        };
+        match repo.get(&remote.id).await? {
+            None => to_upsert.push(remote),
+            Some(local) => {
+                let merged = merge_scratchpad(&local, &remote);
+                if scratchpad_changed(&merged, &local) {
+                    to_upsert.push(merged);
+                }
+            }
+        }
+    }
+
+    let changed = to_upsert.len() as u64;
+    if !to_upsert.is_empty() {
+        repo.bulk_upsert(&to_upsert).await?;
+    }
+    Ok(changed)
+}
+
+/// 把全部 scratchpad 页面导出到 scratchpad 目录，并返回写出文件数。
+///
+/// Business Logic: 云端镜像应包含全部页面（含 deleted），让删除和重命名都能跨设备传播。
+/// Code Logic: 每页写为 `scratchpad/<hex(id)>.json`，不再生成旧固定名 `scratchpad.json`。
+async fn export_scratchpad_dir(
+    repo: &ScratchpadRepo,
+    scratchpad_dir: &Path,
+) -> Result<u64, AppError> {
+    let all_pages = repo.get_all_for_sync().await?;
+    for page in &all_pages {
+        let fname = format!("{}.json", id_to_filename(&page.id));
+        let path = scratchpad_dir.join(&fname);
+        let text = serde_json::to_string_pretty(page)?;
+        fs::write(&path, text)?;
+    }
+    Ok(all_pages.len() as u64)
+}
+
 #[cfg(test)]
 mod tests {
     //! snapshot 单测：重点覆盖 id_to_filename / filename_to_id 的可逆性
     //! （含冒号、斜杠等特殊字符的 id），以及辅助判定函数的行为。
 
     use super::*;
+    use crate::models::scratchpad::SCRATCHPAD_ID;
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    /// 构造测试用临时目录。
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "cc-partner-snapshot-{name}-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 创建 scratchpad 云同步 helper 测试需要的内存仓库。
+    async fn setup_scratchpad_repo() -> ScratchpadRepo {
+        let options = SqliteConnectOptions::from_str("sqlite::memory:")
+            .unwrap()
+            .create_if_missing(true);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS scratchpad (id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '速记本', content TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, device_id TEXT NOT NULL, vector_clock TEXT NOT NULL, deleted INTEGER DEFAULT 0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        ScratchpadRepo::new(pool)
+    }
+
+    /// 构造测试用 ScratchpadRow。
+    fn scratchpad_row(id: &str, title: &str, content: &str, vc_counter: u64) -> ScratchpadRow {
+        let mut vector_clock = HashMap::new();
+        vector_clock.insert("device-remote".to_string(), vc_counter);
+        ScratchpadRow {
+            id: id.to_string(),
+            title: title.to_string(),
+            content: content.to_string(),
+            created_at: "2024-01-01T00:00:00+00:00".to_string(),
+            updated_at: "2024-01-02T00:00:00+00:00".to_string(),
+            device_id: "device-remote".to_string(),
+            vector_clock,
+            deleted: false,
+        }
+    }
 
     #[test]
     fn id_to_filename_roundtrip_simple() {
@@ -607,5 +751,61 @@ mod tests {
 
         assert_eq!(stats.scratchpad, 1);
         assert_eq!(stats.total(), 7);
+    }
+
+    /// 旧云同步单文件 scratchpad/scratchpad.json 仍可导入为默认页。
+    #[tokio::test]
+    async fn import_accepts_legacy_single_scratchpad_file() {
+        let repo = setup_scratchpad_repo().await;
+        let workdir = temp_dir("legacy-import");
+        let scratchpad_dir = workdir.join(SCRATCHPAD_DIR);
+        std::fs::create_dir_all(&scratchpad_dir).unwrap();
+        std::fs::write(
+            scratchpad_dir.join("scratchpad.json"),
+            serde_json::json!({
+                "id": SCRATCHPAD_ID,
+                "content": "legacy cloud",
+                "created_at": "2024-01-01T00:00:00+00:00",
+                "updated_at": "2024-01-02T00:00:00+00:00",
+                "device_id": "device-remote",
+                "vector_clock": { "device-remote": 1 },
+                "deleted": false
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let changed = import_scratchpad_dir(&repo, &scratchpad_dir).await.unwrap();
+        let got = repo.get(SCRATCHPAD_ID).await.unwrap().unwrap();
+
+        assert_eq!(changed, 1);
+        assert_eq!(got.title, "速记本");
+        assert_eq!(got.content, "legacy cloud");
+        let _ = std::fs::remove_dir_all(workdir);
+    }
+
+    /// 多页面 scratchpad export 使用 hex(id).json，并统计全部页面。
+    #[tokio::test]
+    async fn export_writes_multiple_scratchpad_pages_with_hex_filenames() {
+        let repo = setup_scratchpad_repo().await;
+        let workdir = temp_dir("multi-export");
+        let scratchpad_dir = workdir.join(SCRATCHPAD_DIR);
+        std::fs::create_dir_all(&scratchpad_dir).unwrap();
+        let default_page = scratchpad_row(SCRATCHPAD_ID, "速记本", "default", 1);
+        let second_page = scratchpad_row("page:two", "第二页", "second", 1);
+        repo.upsert(&default_page).await.unwrap();
+        repo.upsert(&second_page).await.unwrap();
+
+        let exported = export_scratchpad_dir(&repo, &scratchpad_dir).await.unwrap();
+
+        assert_eq!(exported, 2);
+        assert!(scratchpad_dir
+            .join(format!("{}.json", id_to_filename(SCRATCHPAD_ID)))
+            .is_file());
+        assert!(scratchpad_dir
+            .join(format!("{}.json", id_to_filename("page:two")))
+            .is_file());
+        assert!(!scratchpad_dir.join("scratchpad.json").is_file());
+        let _ = std::fs::remove_dir_all(workdir);
     }
 }

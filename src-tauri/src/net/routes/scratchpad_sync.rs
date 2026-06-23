@@ -1,12 +1,12 @@
 //! net/routes/scratchpad_sync.rs — /api/scratchpad/sync/{pull,push} handler
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     局域网设备间需要同步同一个速记本文本。由于 Scratchpad 是单例，协议只传一个
-//!     vector_clock 或一条 ScratchpadRow，不引入多笔记列表语义。
+//!     局域网设备间需要同步多个速记本页面。路径沿用旧版本，协议升级为 summaries/pages，
+//!     旧对端解析失败由 peer_client 兼容为跳过，不阻断其他同步。
 //!
 //! Code Logic（这个模块做什么）:
-//!     - pull：对端发 `{vector_clock}`，本端根据向量时钟判断是否返回本端完整 scratchpad；
-//!     - push：对端发 `{scratchpad}`，本端与本地单例 merge_scratchpad 后按需 upsert。
+//!     - pull：对端发 `{summaries:[{id, vector_clock}]}`，本端返回对端缺少/本端领先/并发的 pages；
+//!     - push：对端发 `{pages:[ScratchpadRow]}`，本端逐条 merge_scratchpad 后按需 bulk_upsert。
 
 use crate::error::AppError;
 use crate::models::scratchpad::ScratchpadRow;
@@ -18,69 +18,106 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// scratchpad/sync/pull 请求体：对端当前速记本向量时钟。
+/// scratchpad/sync/pull 请求体：对端发来的页面摘要列表。
 #[derive(Debug, Deserialize)]
 pub struct ScratchpadPullReq {
+    #[serde(default)]
+    pub summaries: Vec<ScratchpadSummary>,
+}
+
+/// 单个速记本页面摘要。
+#[derive(Debug, Deserialize)]
+pub struct ScratchpadSummary {
+    pub id: String,
     #[serde(default)]
     pub vector_clock: HashMap<String, u64>,
 }
 
-/// scratchpad/sync/pull 响应体：本端认为对端需要吸收的速记本版本。
+/// scratchpad/sync/pull 响应体：本端需下发给对端的完整页面列表。
 #[derive(Debug, Serialize)]
 pub struct ScratchpadPullResp {
-    pub scratchpad: Option<ScratchpadRow>,
+    pub pages: Vec<ScratchpadRow>,
 }
 
-/// scratchpad/sync/push 请求体：对端推送的速记本版本。
+/// scratchpad/sync/push 请求体：对端推送的完整页面列表。
 #[derive(Debug, Deserialize)]
 pub struct ScratchpadPushReq {
-    pub scratchpad: ScratchpadRow,
+    #[serde(default)]
+    pub pages: Vec<ScratchpadRow>,
 }
 
-/// scratchpad/sync/push 响应体：是否实际落库。
+/// scratchpad/sync/push 响应体：实际落库条数。
 #[derive(Debug, Serialize)]
 pub struct ScratchpadPushResp {
-    pub accepted: bool,
+    pub accepted: usize,
 }
 
-/// POST /api/scratchpad/sync/pull：接收对端时钟，按需返回本端速记本版本。
+/// POST /api/scratchpad/sync/pull：接收对端摘要，返回本端需下发的页面。
 ///
-/// Business Logic: 若本端版本领先或与对端并发，对端需要拿到完整文本再合并；本端落后/相等则无需返回。
-/// Code Logic: get_or_init 保证本端存在单例；compare(local, remote_clock) 判断 After/Concurrent。
+/// Business Logic: 若本端某页对端没有、本端版本领先或双方并发，对端需要拿到完整页面再合并。
+/// Code Logic: get_all_for_sync 含 deleted；compare(local, remote_clock) 判断 After/Concurrent。
 pub async fn scratchpad_pull(
     State(state): State<AppState>,
     Json(req): Json<ScratchpadPullReq>,
 ) -> Result<Json<ScratchpadPullResp>, AppError> {
-    let local = state
-        .scratchpad_repo
-        .get_or_init(state.device_id.as_str())
-        .await?;
-    let relation = compare(&local.vector_clock, &req.vector_clock);
-    let scratchpad =
-        if matches!(relation, ClockOrder::After) || matches!(relation, ClockOrder::Concurrent) {
-            Some(local)
-        } else {
-            None
-        };
-    Ok(Json(ScratchpadPullResp { scratchpad }))
+    let remote_map: HashMap<&str, &HashMap<String, u64>> = req
+        .summaries
+        .iter()
+        .map(|s| (s.id.as_str(), &s.vector_clock))
+        .collect();
+    let local_all = state.scratchpad_repo.get_all_for_sync().await?;
+
+    let mut pages: Vec<ScratchpadRow> = Vec::new();
+    for page in &local_all {
+        match remote_map.get(page.id.as_str()) {
+            None => pages.push(page.clone()),
+            Some(remote_clock) => {
+                let relation = compare(&page.vector_clock, remote_clock);
+                if matches!(relation, ClockOrder::After)
+                    || matches!(relation, ClockOrder::Concurrent)
+                {
+                    pages.push(page.clone());
+                }
+            }
+        }
+    }
+
+    tracing::info!(
+        "scratchpad/sync/pull: 对端摘要 {} 条，本端 {} 条，返回 {} 条",
+        req.summaries.len(),
+        local_all.len(),
+        pages.len()
+    );
+    Ok(Json(ScratchpadPullResp { pages }))
 }
 
-/// POST /api/scratchpad/sync/push：接收对端版本，合并后按需落库。
+/// POST /api/scratchpad/sync/push：接收对端页面，逐条合并后按需落库。
 ///
 /// Business Logic: 对端推送可能是领先、落后或并发版本；本端必须用同一套 LWW 策略合并，保证最终一致。
-/// Code Logic: get_or_init 取本端单例，merge_scratchpad 后比较同步字段，有变化才 upsert。
+/// Code Logic: 本地没有则直接接收；本地已有则 merge_scratchpad，再用 scratchpad_changed 判断是否写库。
 pub async fn scratchpad_push(
     State(state): State<AppState>,
     Json(req): Json<ScratchpadPushReq>,
 ) -> Result<Json<ScratchpadPushResp>, AppError> {
-    let local = state
-        .scratchpad_repo
-        .get_or_init(state.device_id.as_str())
-        .await?;
-    let merged = merge_scratchpad(&local, &req.scratchpad);
-    let accepted = scratchpad_changed(&merged, &local);
-    if accepted {
-        state.scratchpad_repo.upsert(&merged).await?;
+    let mut to_upsert: Vec<ScratchpadRow> = Vec::new();
+
+    for remote in req.pages {
+        match state.scratchpad_repo.get(&remote.id).await? {
+            None => to_upsert.push(remote),
+            Some(local) => {
+                let merged = merge_scratchpad(&local, &remote);
+                if scratchpad_changed(&merged, &local) {
+                    to_upsert.push(merged);
+                }
+            }
+        }
     }
+
+    let accepted = to_upsert.len();
+    if !to_upsert.is_empty() {
+        state.scratchpad_repo.bulk_upsert(&to_upsert).await?;
+    }
+
+    tracing::info!("scratchpad/sync/push: 接收并落库 {} 个页面", accepted);
     Ok(Json(ScratchpadPushResp { accepted }))
 }

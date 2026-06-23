@@ -143,9 +143,10 @@ const SSH_TARGET_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS ssh_targets (
     deleted INTEGER DEFAULT 0
 )";
 
-/// 速记本单例表（全表仅一行，id 恒为 "scratchpad"）。
+/// 速记本页面表（旧默认页 id 恒为 "scratchpad"，新页用 UUID）。
 const SCRATCHPAD_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS scratchpad (
     id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '速记本',
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -210,8 +211,9 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
     sqlx::query(CLAUDE_MD_SCHEMA).execute(&pool).await?;
     // SSH 连接目标表（host 主键 + 端口 + 用户名 + 向量时钟，跨设备同步）
     sqlx::query(SSH_TARGET_SCHEMA).execute(&pool).await?;
-    // 速记本单例表（单个自动保存文本，跨设备/云同步）
+    // 速记本页面表（旧库缺 title 时补列，保证旧单例内容迁移为“速记本”页）
     sqlx::query(SCRATCHPAD_SCHEMA).execute(&pool).await?;
+    ScratchpadRepo::new(pool.clone()).ensure_schema().await?;
     // 健康提醒：活动采样表 + 喝水记录表（在 CLAUDE_MD_SCHEMA 之后执行）
     sqlx::query(HEALTH_SCHEMA).execute(&pool).await?;
     sqlx::query(WATER_SCHEMA).execute(&pool).await?;
@@ -426,8 +428,12 @@ pub fn run() {
             claude_md_cmd::get_claude_md,
             claude_md_cmd::update_claude_md,
             claude_md_cmd::push_claude_md,
-            scratchpad_cmd::get_scratchpad,
-            scratchpad_cmd::update_scratchpad,
+            scratchpad_cmd::list_scratchpad_pages,
+            scratchpad_cmd::get_scratchpad_page,
+            scratchpad_cmd::create_scratchpad_page,
+            scratchpad_cmd::update_scratchpad_page_content,
+            scratchpad_cmd::rename_scratchpad_page,
+            scratchpad_cmd::delete_scratchpad_page,
             scratchpad_cmd::sync_scratchpad,
             transfer_cmd::list_transfers,
             transfer_cmd::send_transfer,

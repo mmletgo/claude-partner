@@ -31,10 +31,11 @@ CREATE TABLE IF NOT EXISTS transfer_history (
     completed_at TEXT
 );
 
--- scratchpad 表：速记本单例文本
--- 全表仅一行，id 恒为 "scratchpad"；清空内容是 content=""，不是 deleted=1。
+-- scratchpad 表：速记本多页面文本
+-- 旧默认页 id 恒为 "scratchpad"，新页面使用 UUID；清空内容是 content=""，删除页面是 deleted=1。
 CREATE TABLE IF NOT EXISTS scratchpad (
     id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT '速记本',
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,

@@ -10,7 +10,7 @@
 - **区域截图** — 框选截图保存到剪贴板，可直接粘贴到 Claude Code
 - **Prompt 管理** — 记录 / 复制 / 打标签 / 跨设备同步
 - **Prompt 优化** — 调用本机 Claude Code CLI pure/headless 模式生成中英文优化版 Prompt
-- **速记本** — 单个自动保存文本，支持局域网与 GitHub 同步
+- **速记本** — 多页面自动保存文本，支持页面标题、局域网与 GitHub 同步
 - **P2P 自动互联** — 局域网内 mDNS 自动发现
 - **自动更新** — GitHub Releases 检测 / 下载 / 安装
 
@@ -400,7 +400,7 @@ Tauri 自动打包三平台本平台产物（macOS→dmg/app、Windows→nsis/ms
 | optimize_prompt | 调用本机 Claude Code CLI pure/headless 模式优化用户输入，返回中英文 Prompt |
 | trigger_sync | 触发全网 Prompt 同步，返回 {accepted, synced, note} |
 | get_claude_md / update_claude_md / push_claude_md | CLAUDE.md 读取 / 保存 / 主动推送本机配置到局域网设备和 GitHub 云端 |
-| get_scratchpad / update_scratchpad / sync_scratchpad | 速记本单例读取 / 自动保存 / 局域网同步 |
+| list_scratchpad_pages / get_scratchpad_page / create_scratchpad_page / update_scratchpad_page_content / rename_scratchpad_page / delete_scratchpad_page / sync_scratchpad | 速记本多页面 CRUD / 自动保存 / 同步 |
 | get_cloud_sync_config / get_default_cloud_sync_config / update_cloud_sync_config / trigger_cloud_sync_cmd / test_cloud_sync | GitHub 私有仓库云端同步配置 / 恢复默认 / 手动同步 / 连通性测试 |
 | list_transfers / send_transfer / cancel_transfer | 文件传输任务管理 |
 | check_permissions / request_permission | macOS 权限检查与申请（屏幕录制 / 输入监控） |
@@ -415,8 +415,8 @@ Tauri 自动打包三平台本平台产物（macOS→dmg/app、Windows→nsis/ms
 | /api/health | GET | {ok, device_id, device_name, http_port, ts} |
 | /api/sync/pull | POST | 接收对端摘要，返回对端需要的 prompt |
 | /api/sync/push | POST | 接收对端推送的 prompt |
-| /api/scratchpad/sync/pull | POST | 接收对端速记本向量时钟，返回本端速记本 |
-| /api/scratchpad/sync/push | POST | 接收对端推送的速记本并合并 |
+| /api/scratchpad/sync/pull | POST | 接收对端速记本页面摘要，返回本端需要推送的页面 |
+| /api/scratchpad/sync/push | POST | 接收对端推送的速记本页面并逐页合并 |
 | /api/transfer/init | POST | 初始化文件接收 |
 | /api/transfer/chunk/{id} | POST | 接收文件分块（header `X-Chunk-Offset`） |
 | /api/transfer/status/{id} | GET | 查询接收端传输状态 |

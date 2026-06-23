@@ -1,16 +1,17 @@
-//! sync/scratchpad.rs — 速记本单例同步合并与 P2P 流程
+//! sync/scratchpad.rs — 速记本多页面同步合并与 P2P 流程
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     Scratchpad 是单个自动保存文本，但仍可能在多设备并发编辑。需要与 Prompt/SSH 一致的
-//!     向量时钟 + LWW 策略，保证局域网和 GitHub 同步最终收敛。
+//!     Scratchpad 是多页面自动保存文本，同一页面可能在多设备并发编辑或重命名。需要与 Prompt/SSH
+//!     一致的向量时钟 + LWW 策略，保证局域网和 GitHub 同步最终收敛。
 //!
 //! Code Logic（这个模块做什么）:
 //!     `merge_scratchpad` 复用 vector_clock compare/merge；`scratchpad_sync_with_peer`
-//!     复用全局 trigger_sync 的设备遍历，由每个对端执行 pull + merge + push。
+//!     复用全局 trigger_sync 的设备遍历，由每个对端执行 summaries pull + merge + push。
 
 use crate::models::scratchpad::ScratchpadRow;
 use crate::state::AppState;
 use crate::sync::vector_clock::{compare, merge, ClockOrder};
+use std::collections::HashMap;
 
 /// 判断两条速记本行是否在同步相关字段上不同。
 ///
@@ -19,6 +20,7 @@ use crate::sync::vector_clock::{compare, merge, ClockOrder};
 pub fn scratchpad_changed(merged: &ScratchpadRow, local: &ScratchpadRow) -> bool {
     merged.vector_clock != local.vector_clock
         || merged.updated_at != local.updated_at
+        || merged.title != local.title
         || merged.content != local.content
         || merged.device_id != local.device_id
         || merged.deleted != local.deleted
@@ -77,16 +79,16 @@ pub fn merge_scratchpad(local: &ScratchpadRow, remote: &ScratchpadRow) -> Scratc
     }
 }
 
-/// 与单个对端同步速记本单例。
+/// 与单个对端同步全部速记本页面。
 ///
 /// Business Logic: 全局 `trigger_sync` 应自动纳入速记本。此函数在 prompt/cc/ssh 同步后执行，
 ///     对端不可达或旧版本无 scratchpad 路由时只记录告警，不影响主同步计数。
 ///
 /// Code Logic:
 ///     1. health 检查；
-///     2. 本端 get_or_init 得到单例，并把 vector_clock 发给对端 pull；
-///     3. 若对端返回版本，merge 后按需 upsert；
-///     4. 重新读取本端单例并 push 给对端，对端自行 merge/no-op。
+///     2. 本端 get_all_for_sync 投影 summaries 发给对端 pull；
+///     3. 对端返回本端缺少/落后/并发的 pages，本端逐条 merge 后 bulk_upsert；
+///     4. 重新读取本端全量，按远端 summaries 计算本端需 push 的页面。
 pub async fn scratchpad_sync_with_peer(
     state: &AppState,
     device: &crate::models::device::Device,
@@ -99,44 +101,85 @@ pub async fn scratchpad_sync_with_peer(
         return Ok(());
     }
 
-    let local = state
+    let local_all = state
         .scratchpad_repo
-        .get_or_init(state.device_id.as_str())
+        .get_all_for_sync()
         .await
         .map_err(|e| format!("读取本地速记本失败: {e}"))?;
+    let summaries: Vec<serde_json::Value> = local_all
+        .iter()
+        .map(|p| serde_json::json!({ "id": p.id, "vector_clock": p.vector_clock }))
+        .collect();
 
-    let remote = state
+    let remote_pages: Vec<ScratchpadRow> = state
         .peer_client
-        .scratchpad_pull(&base_url, &local.vector_clock)
+        .scratchpad_pull(&base_url, summaries.clone())
         .await;
 
-    if let Some(remote_row) = remote {
-        let current = state
+    let mut to_upsert: Vec<ScratchpadRow> = Vec::new();
+    for remote in &remote_pages {
+        let local = state
             .scratchpad_repo
-            .get_or_init(state.device_id.as_str())
+            .get(&remote.id)
             .await
-            .map_err(|e| format!("重新读取本地速记本失败: {e}"))?;
-        let merged = merge_scratchpad(&current, &remote_row);
-        if scratchpad_changed(&merged, &current) {
-            state
-                .scratchpad_repo
-                .upsert(&merged)
-                .await
-                .map_err(|e| format!("速记本 upsert 失败: {e}"))?;
+            .map_err(|e| format!("查询本地速记本页面 {} 失败: {e}", remote.id))?;
+        match local {
+            None => to_upsert.push(remote.clone()),
+            Some(local_row) => {
+                let merged = merge_scratchpad(&local_row, remote);
+                if scratchpad_changed(&merged, &local_row) {
+                    to_upsert.push(merged);
+                }
+            }
         }
     }
 
+    if !to_upsert.is_empty() {
+        let n = to_upsert.len();
+        state
+            .scratchpad_repo
+            .bulk_upsert(&to_upsert)
+            .await
+            .map_err(|e| format!("速记本 bulk_upsert 失败: {e}"))?;
+        tracing::info!("从 {} 拉取并更新了 {} 个速记本页面", device.name, n);
+    }
+
+    let remote_clock_map: HashMap<String, &HashMap<String, u64>> = remote_pages
+        .iter()
+        .map(|p| (p.id.clone(), &p.vector_clock))
+        .collect();
     let local_after = state
         .scratchpad_repo
-        .get_or_init(state.device_id.as_str())
+        .get_all_for_sync()
         .await
         .map_err(|e| format!("读取合并后速记本失败: {e}"))?;
-    if !state
-        .peer_client
-        .scratchpad_push(&base_url, &local_after)
-        .await
-    {
-        tracing::warn!("向 {} 推送速记本失败", device.name);
+
+    let mut push_pages: Vec<ScratchpadRow> = Vec::new();
+    for page in &local_after {
+        match remote_clock_map.get(&page.id).copied() {
+            None => push_pages.push(page.clone()),
+            Some(clock) => {
+                let relation = compare(&page.vector_clock, clock);
+                if (matches!(relation, ClockOrder::After)
+                    || matches!(relation, ClockOrder::Concurrent))
+                {
+                    push_pages.push(page.clone());
+                }
+            }
+        }
+    }
+
+    if !push_pages.is_empty() {
+        let n = push_pages.len();
+        if state
+            .peer_client
+            .scratchpad_push(&base_url, &push_pages)
+            .await
+        {
+            tracing::info!("向 {} 推送了 {} 个速记本页面", device.name, n);
+        } else {
+            tracing::warn!("向 {} 推送速记本失败", device.name);
+        }
     }
 
     tracing::info!("与设备 {} 速记本同步完成", device.name);
@@ -155,6 +198,7 @@ mod tests {
             vc.iter().map(|(k, v)| (k.to_string(), *v)).collect();
         ScratchpadRow {
             id: "scratchpad".to_string(),
+            title: format!("title-{device_id}"),
             content: content.to_string(),
             created_at: "2024-01-01T00:00:00+00:00".to_string(),
             updated_at: updated_at.to_string(),
@@ -204,5 +248,15 @@ mod tests {
         let merged = merge_scratchpad(&local, &remote);
 
         assert_eq!(merged.content, "remote");
+    }
+
+    /// 标题变化也属于同步字段变化，避免远端重命名无法落库。
+    #[test]
+    fn scratchpad_changed_detects_title_changes() {
+        let local = row("a", "2024-01-01T00:00:00+00:00", &[("a", 1)], "same");
+        let mut remote = local.clone();
+        remote.title = "renamed".to_string();
+
+        assert!(scratchpad_changed(&remote, &local));
     }
 }

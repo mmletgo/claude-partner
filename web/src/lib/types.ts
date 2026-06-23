@@ -14,16 +14,36 @@ export interface Prompt {
 }
 
 /**
- * 速记本单例文本（对齐 Rust ScratchpadDto）。
+ * 速记本页面完整内容（对齐 Rust ScratchpadPage）。
  */
-export interface Scratchpad {
+export interface ScratchpadPage {
   id: string;
+  title: string;
   content: string;
   createdAt: string;
   updatedAt: string;
   deviceId: string;
   vectorClock: Record<string, number>;
   deleted: boolean;
+}
+
+/**
+ * 速记本页面列表摘要（对齐 Rust ScratchpadPageSummary）。
+ */
+export interface ScratchpadPageSummary {
+  id: string;
+  title: string;
+  updatedAt: string;
+  deviceId: string;
+  deleted: boolean;
+}
+
+/**
+ * 速记本页面删除结果（对齐 Rust ScratchpadDeleteResult）。
+ */
+export interface ScratchpadDeleteResult {
+  ok: boolean;
+  pageId: string;
 }
 
 /**
