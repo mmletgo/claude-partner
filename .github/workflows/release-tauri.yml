@@ -103,7 +103,11 @@ jobs:
           prerelease: false
           # Windows 用 nsis 安装包（非 msi）作为 updater 的下载源
           updaterJsonPreferNsis: true
-          # 上传到 Release 的 asset 名加 平台_架构 前缀（[filename] 保留原文件名，避免双语 msi/安装包同名冲突）
-          assetNamePattern: '[platform]_[arch]_[filename]'
+          # 资产命名用 tauri-action 默认（不设 assetNamePattern）：
+          #   普通产物保留 Tauri CLI 原文件名（已含版本+架构，如 cc-partner_0.6.0_x64.dmg）；
+          #   macOS updater tarball（.app.tar.gz/.sig）自动追加 _版本_架构 后缀（如 cc-partner_0.6.0_x64.app.tar.gz），
+          #   全局唯一不冲突；上传前还会先删除同名资产兜底。
+          # 历史教训：曾用不存在的 [filename] 占位符 + 旧 input 名 assetNamePattern，导致同平台所有文件
+          #   映射到同一字面名（darwin_x64_[filename]），第二个起 already_exists，已移除。
           # 透传各平台的 build target 参数
           args: ${{ matrix.args }}
