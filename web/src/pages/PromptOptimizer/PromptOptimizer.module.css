@@ -8,8 +8,7 @@
 }
 
 .pageHeader,
-.inputSection,
-.resultCard {
+.inputSection {
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -105,7 +104,18 @@
   gap: var(--space-4);
 }
 
+.resultCard {
+  min-height: 100%;
+  overflow: hidden;
+}
+
+.resultBody {
+  display: flex;
+  min-height: 0;
+}
+
 .resultText {
+  flex: 1;
   min-height: 320px;
 }
 

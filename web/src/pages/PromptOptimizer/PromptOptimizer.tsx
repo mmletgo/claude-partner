@@ -116,7 +116,7 @@ export function PromptOptimizer() {
 
       <section className={styles.resultGrid} aria-label={t('promptOptimizer:resultsAriaLabel')}>
         <Card className={styles.resultCard}>
-          <div className={styles.resultHeader}>
+          <Card.Header className={styles.resultHeader}>
             <h2 className={styles.resultTitle}>{t('promptOptimizer:zhTitle')}</h2>
             <Button
               variant="secondary"
@@ -127,18 +127,20 @@ export function PromptOptimizer() {
             >
               {copiedTarget === 'zh' ? t('promptOptimizer:copied') : t('common:action.copy')}
             </Button>
-          </div>
-          <textarea
-            className={styles.resultText}
-            value={optimizedZh}
-            readOnly
-            placeholder={t('promptOptimizer:resultPlaceholder')}
-            aria-label={t('promptOptimizer:zhAriaLabel')}
-          />
+          </Card.Header>
+          <Card.Body className={styles.resultBody}>
+            <textarea
+              className={styles.resultText}
+              value={optimizedZh}
+              readOnly
+              placeholder={t('promptOptimizer:resultPlaceholder')}
+              aria-label={t('promptOptimizer:zhAriaLabel')}
+            />
+          </Card.Body>
         </Card>
 
         <Card className={styles.resultCard}>
-          <div className={styles.resultHeader}>
+          <Card.Header className={styles.resultHeader}>
             <h2 className={styles.resultTitle}>{t('promptOptimizer:enTitle')}</h2>
             <Button
               variant="secondary"
@@ -149,14 +151,16 @@ export function PromptOptimizer() {
             >
               {copiedTarget === 'en' ? t('promptOptimizer:copied') : t('common:action.copy')}
             </Button>
-          </div>
-          <textarea
-            className={styles.resultText}
-            value={optimizedEn}
-            readOnly
-            placeholder={t('promptOptimizer:resultPlaceholder')}
-            aria-label={t('promptOptimizer:enAriaLabel')}
-          />
+          </Card.Header>
+          <Card.Body className={styles.resultBody}>
+            <textarea
+              className={styles.resultText}
+              value={optimizedEn}
+              readOnly
+              placeholder={t('promptOptimizer:resultPlaceholder')}
+              aria-label={t('promptOptimizer:enAriaLabel')}
+            />
+          </Card.Body>
         </Card>
       </section>
     </div>
