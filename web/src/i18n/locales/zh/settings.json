@@ -49,7 +49,6 @@
     "claudeCliPath": { "label": "Claude CLI 路径", "helper": "可填写 claude，或完整路径如 /home/you/.local/bin/claude。" },
     "claudeModel": { "label": "模型", "helper": "Claude Code CLI 的模型别名或完整模型名，默认 sonnet。" },
     "cacheTtlHours": { "label": "缓存时长（小时）", "helper": "默认 24 小时；同一 UTC 日期内命中缓存时不会重新抓取或生成。" },
-    "maxBudgetUsd": { "label": "单次预算上限（USD）", "helper": "传给 claude --max-budget-usd，默认 0.50。" },
     "appliedConfig": "已应用配置",
     "testCli": "测试 Claude CLI",
     "testing": "测试中…",

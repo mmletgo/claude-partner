@@ -49,7 +49,6 @@
     "claudeCliPath": { "label": "Claude CLI path", "helper": "Use claude, or a full path such as /home/you/.local/bin/claude." },
     "claudeModel": { "label": "Model", "helper": "Claude Code CLI model alias or full model name. Defaults to sonnet." },
     "cacheTtlHours": { "label": "Cache TTL (hours)", "helper": "Defaults to 24 hours. Cached UTC-day results do not refetch or regenerate." },
-    "maxBudgetUsd": { "label": "Per-run budget (USD)", "helper": "Passed to claude --max-budget-usd. Defaults to 0.50." },
     "appliedConfig": "Applied config",
     "testCli": "Test Claude CLI",
     "testing": "Testing…",

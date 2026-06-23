@@ -14,6 +14,7 @@ import { Button } from '@/components/primitives';
 import { CheckIcon, XIcon } from '@/lib/icons';
 import type { ClaudeCodeAsset, ClaudeCodeAssetKind } from '@/lib/types';
 import { ClaudeAssetRow } from '../ClaudeAssetRow';
+import { remoteAssetKey } from './remoteAssetKey';
 import styles from './RemoteAssetPicker.module.css';
 
 export interface RemoteAssetPickerProps {
@@ -23,11 +24,6 @@ export interface RemoteAssetPickerProps {
   search: string;
   onSelect: (asset: ClaudeCodeAsset, checked: boolean) => void;
   onSelectMany: (assets: ClaudeCodeAsset[], checked: boolean) => void;
-}
-
-/** 生成远端选择 key。 */
-export function remoteAssetKey(asset: ClaudeCodeAsset): string {
-  return `${asset.kind}:${asset.id}`;
 }
 
 /**

@@ -118,11 +118,6 @@ fn default_claude_model() -> String {
     "sonnet".to_string()
 }
 
-/// GitHub Trending 单次 Claude CLI 调用默认预算上限（美元）。
-fn default_trending_max_budget_usd() -> f64 {
-    0.50
-}
-
 /// 平台相关默认截图快捷键：macOS 用 `<cmd>+<shift>+s`，其他平台 `<ctrl>+<shift>+s`
 fn default_screenshot_hotkey() -> String {
     if cfg!(target_os = "macos") {
@@ -145,7 +140,7 @@ fn default_device_name() -> String {
 ///
 /// Business Logic（为什么需要这个结构）:
 ///     首页需要每日抓取 GitHub Trending Weekly，并可选调用本地 Claude Code CLI 生成中英文解说。
-///     CLI 路径、模型、预算和缓存时长属于用户环境偏好，必须持久化，且旧配置升级时需安全回退默认值。
+///     CLI 路径、模型和缓存时长属于用户环境偏好，必须持久化，且旧配置升级时需安全回退默认值。
 ///
 /// Code Logic（这个结构做什么）:
 ///     纯配置载体，落盘在 AppConfig.github_trending 下。所有字段都有 serde default，
@@ -164,9 +159,6 @@ pub struct GithubTrendingConfig {
     /// 缓存有效期（小时），默认 24。
     #[serde(default = "default_trending_cache_ttl_hours")]
     pub cache_ttl_hours: i64,
-    /// 单次调用预算上限（美元），传给 `claude --max-budget-usd`。
-    #[serde(default = "default_trending_max_budget_usd")]
-    pub max_budget_usd: f64,
 }
 
 impl Default for GithubTrendingConfig {
@@ -176,7 +168,6 @@ impl Default for GithubTrendingConfig {
             claude_cli_path: default_claude_cli_path(),
             claude_model: default_claude_model(),
             cache_ttl_hours: default_trending_cache_ttl_hours(),
-            max_budget_usd: default_trending_max_budget_usd(),
         }
     }
 }

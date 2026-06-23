@@ -57,15 +57,16 @@ export function GithubRepoCard(props: GithubRepoCardProps) {
   return (
     <Card variant="elevated" padding="none" className={styles.card}>
       <Card.Body padding="lg" className={styles.body}>
-        <div className={styles.rank} aria-label={t('home:repoCard.rank', { rank: repo.rank })}>
-          #{repo.rank}
-        </div>
-
         <div className={styles.content}>
           <div className={styles.head}>
             <div className={styles.titleBlock}>
               <p className={styles.owner}>{repo.owner}</p>
-              <h2 className={styles.name}>{repo.name}</h2>
+              <div className={styles.titleLine}>
+                <span className={styles.rank} aria-label={t('home:repoCard.rank', { rank: repo.rank })}>
+                  #{repo.rank}
+                </span>
+                <h2 className={styles.name}>{repo.name}</h2>
+              </div>
             </div>
             <Button
               variant="secondary"

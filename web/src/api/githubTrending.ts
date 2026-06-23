@@ -20,7 +20,6 @@ export interface GithubTrendingConfigUpdate {
   claudeCliPath?: string;
   claudeModel?: string;
   cacheTtlHours?: number;
-  maxBudgetUsd?: number;
 }
 
 export const githubTrendingApi = {

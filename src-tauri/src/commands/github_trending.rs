@@ -7,7 +7,7 @@
 //!
 //! Code Logic（这个模块做什么）:
 //!     - `list_github_trending_repos`：读当天缓存；未命中则抓 GitHub、调用 Claude CLI、写缓存。
-//!     - `get/update_github_trending_config`：设置页读写 CLI 路径、模型、预算、缓存时长。
+//!     - `get/update_github_trending_config`：设置页读写 CLI 路径、模型、缓存时长。
 //!     - `test_claude_cli`：只执行 `claude --version` 验证本机 CLI 可用性。
 //!     - 私有 helper 负责 HTML 解析、SQLite cache、Claude CLI 结构化输出解析。
 
@@ -41,7 +41,6 @@ pub struct GithubTrendingConfigDto {
     pub claude_cli_path: String,
     pub claude_model: String,
     pub cache_ttl_hours: i64,
-    pub max_budget_usd: f64,
 }
 
 /// 单个 GitHub Trending 仓库 DTO。
@@ -93,6 +92,8 @@ struct GithubTrendingPayload {
     expires_at: String,
     ai_status: String,
     ai_error: Option<String>,
+    #[serde(default)]
+    ai_retry_attempted: bool,
 }
 
 /// Claude CLI 结构化输出外层。
@@ -117,7 +118,6 @@ fn config_to_dto(config: &GithubTrendingConfig) -> GithubTrendingConfigDto {
         claude_cli_path: config.claude_cli_path.clone(),
         claude_model: config.claude_model.clone(),
         cache_ttl_hours: config.cache_ttl_hours,
-        max_budget_usd: config.max_budget_usd,
     }
 }
 
@@ -143,7 +143,6 @@ pub async fn update_github_trending_config(
     claude_cli_path: Option<String>,
     claude_model: Option<String>,
     cache_ttl_hours: Option<i64>,
-    max_budget_usd: Option<f64>,
 ) -> Result<GithubTrendingConfigDto, AppError> {
     {
         let mut cfg = state.config.write().unwrap();
@@ -166,9 +165,6 @@ pub async fn update_github_trending_config(
         }
         if let Some(hours) = cache_ttl_hours {
             cfg.github_trending.cache_ttl_hours = hours.clamp(1, 168);
-        }
-        if let Some(budget) = max_budget_usd {
-            cfg.github_trending.max_budget_usd = budget.clamp(0.01, 10.0);
         }
         cfg.save()?;
     }
@@ -210,6 +206,9 @@ pub async fn list_github_trending_repos(
 
     if let Some(payload) = load_cache(&state.db, &key).await? {
         if !is_expired(&payload.expires_at, now) {
+            if should_retry_failed_ai_cache(&payload, &config) {
+                return refresh_cached_ai_cache(&state.db, &key, &config, payload).await;
+            }
             return Ok(payload_to_response(payload, true, false, None));
         }
     }
@@ -251,6 +250,7 @@ pub async fn list_github_trending_repos(
         expires_at,
         ai_status,
         ai_error,
+        ai_retry_attempted: false,
     };
     store_cache(&state.db, &key, &payload).await?;
     Ok(payload_to_response(payload, false, false, None))
@@ -284,6 +284,62 @@ fn payload_to_response(
         ai_status: payload.ai_status,
         ai_error: override_ai_error.or(payload.ai_error),
     }
+}
+
+/// 用缓存中的 GitHub 榜单重新生成 Claude 解说。
+///
+/// Business Logic（为什么需要这个函数）:
+///     旧版本在 Claude CLI 非零退出且 stderr 为空时会把当天缓存标记成泛化失败，用户修复配置或升级后
+///     仍会被未过期缓存挡住，所以需要对这类失败缓存做一次轻量重试。
+///
+/// Code Logic（这个函数做什么）:
+///     复用缓存中的 repo 列表调用 Claude CLI，保留原 fetched_at/expires_at，写回同一缓存 key，
+///     并以 fromCache=true 返回给前端，避免重新抓取 GitHub。
+async fn refresh_cached_ai_cache(
+    db: &SqlitePool,
+    key: &str,
+    config: &GithubTrendingConfig,
+    payload: GithubTrendingPayload,
+) -> Result<GithubTrendingResponseDto, AppError> {
+    let (repos, ai_status, ai_error) = match generate_explanations(config, &payload.repos).await {
+        Ok(explanations) => (
+            merge_explanations(payload.repos, explanations),
+            "ready".to_string(),
+            None,
+        ),
+        Err(err) => (payload.repos, "failed".to_string(), Some(err.to_string())),
+    };
+    let refreshed = GithubTrendingPayload {
+        repos,
+        fetched_at: payload.fetched_at,
+        expires_at: payload.expires_at,
+        ai_status,
+        ai_error,
+        ai_retry_attempted: true,
+    };
+    store_cache(db, key, &refreshed).await?;
+    Ok(payload_to_response(refreshed, true, false, None))
+}
+
+/// 判断未过期失败缓存是否应该重试 Claude 解说。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户遇到的旧泛化错误没有可操作信息，且可能已经由新版命令形态修复；继续返回旧缓存会让问题看似未解决。
+///
+/// Code Logic（这个函数做什么）:
+///     仅在 AI 仍启用、缓存状态为 failed、错误文本匹配旧的“命令返回非零状态”兜底文案时允许重试。
+fn should_retry_failed_ai_cache(
+    payload: &GithubTrendingPayload,
+    config: &GithubTrendingConfig,
+) -> bool {
+    config.ai_enabled
+        && payload.ai_status == "failed"
+        && !payload.ai_retry_attempted
+        && payload
+            .ai_error
+            .as_deref()
+            .map(|error| error.contains("命令返回非零状态"))
+            .unwrap_or(false)
 }
 
 /// 从 SQLite 读取指定 key 的缓存。
@@ -515,22 +571,7 @@ async fn generate_explanations(
     );
 
     let mut cmd = Command::new(cli);
-    cmd.arg("-p")
-        .arg("--output-format")
-        .arg("json")
-        .arg("--json-schema")
-        .arg(schema.to_string())
-        .arg("--no-session-persistence")
-        .arg("--tools")
-        .arg("")
-        .arg("--model")
-        .arg(if config.claude_model.trim().is_empty() {
-            "sonnet"
-        } else {
-            config.claude_model.trim()
-        })
-        .arg("--max-budget-usd")
-        .arg(format!("{:.2}", config.max_budget_usd.clamp(0.01, 10.0)))
+    cmd.args(claude_generation_args(config, &schema.to_string()))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -564,14 +605,9 @@ async fn generate_explanations(
     };
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(AppError::generic(format!(
             "Claude CLI 生成解说失败: {}",
-            if stderr.is_empty() {
-                "命令返回非零状态".to_string()
-            } else {
-                stderr
-            }
+            claude_failure_detail(&output.stderr, &output.stdout)
         )));
     }
 
@@ -579,11 +615,42 @@ async fn generate_explanations(
     parse_ai_output(&stdout)
 }
 
+/// 构造 Claude CLI 生成解说的参数列表。
+///
+/// Business Logic（为什么需要这个函数）:
+///     GitHub Trending 解说是用户主动开启的本机 Claude CLI 能力，不应再人为设置单次预算上限，
+///     避免长榜单生成时被预算参数中断。
+///
+/// Code Logic（这个函数做什么）:
+///     根据配置返回 `claude --bare -p ...` 后续参数，保留模型和结构化输出约束，
+///     但不包含 `--max-budget-usd`。
+fn claude_generation_args(config: &GithubTrendingConfig, schema: &str) -> Vec<String> {
+    vec![
+        "--bare".to_string(),
+        "-p".to_string(),
+        "--output-format".to_string(),
+        "json".to_string(),
+        "--json-schema".to_string(),
+        schema.to_string(),
+        "--no-session-persistence".to_string(),
+        "--tools".to_string(),
+        "".to_string(),
+        "--model".to_string(),
+        if config.claude_model.trim().is_empty() {
+            "sonnet".to_string()
+        } else {
+            config.claude_model.trim().to_string()
+        },
+    ]
+}
+
 /// 解析 Claude CLI 输出，兼容直接结构化 JSON 与 `--output-format json` 的 result 包装。
 fn parse_ai_output(stdout: &str) -> Result<HashMap<String, AiRepoExplanation>, AppError> {
     let value: serde_json::Value = serde_json::from_str(stdout.trim())?;
     let parsed = if value.get("repos").is_some() {
         serde_json::from_value::<AiOutput>(value)?
+    } else if let Some(structured_output) = value.get("structured_output") {
+        serde_json::from_value::<AiOutput>(structured_output.clone())?
     } else if let Some(result) = value.get("result") {
         if result.is_object() {
             serde_json::from_value::<AiOutput>(result.clone())?
@@ -604,6 +671,67 @@ fn parse_ai_output(stdout: &str) -> Result<HashMap<String, AiRepoExplanation>, A
         map.insert(item.full_name.clone(), item);
     }
     Ok(map)
+}
+
+/// 从 Claude CLI 非零退出的输出中提取用户可读错误。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Claude CLI 的 `--output-format json` 在预算不足等失败场景会把错误 JSON 写到 stdout，
+///     stderr 为空；只看 stderr 会让用户看不到真实原因。
+///
+/// Code Logic（这个函数做什么）:
+///     优先返回 stderr；否则解析 stdout JSON 的 errors/result/subtype 字段；仍无可读内容时回退到
+///     旧的“命令返回非零状态”兜底文案。
+fn claude_failure_detail(stderr: &[u8], stdout: &[u8]) -> String {
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+    if !stderr_text.is_empty() {
+        return stderr_text;
+    }
+
+    let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
+    if stdout_text.is_empty() {
+        return "命令返回非零状态".to_string();
+    }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&stdout_text) {
+        if let Some(errors) = value.get("errors").and_then(|v| v.as_array()) {
+            let joined = errors
+                .iter()
+                .filter_map(|item| item.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !joined.is_empty() {
+                return joined;
+            }
+        }
+        if let Some(result) = value.get("result").and_then(|v| v.as_str()) {
+            if !result.trim().is_empty() {
+                return result.trim().to_string();
+            }
+        }
+        if let Some(subtype) = value.get("subtype").and_then(|v| v.as_str()) {
+            return subtype.to_string();
+        }
+    }
+
+    truncate_error_text(&stdout_text)
+}
+
+/// 截断过长的 CLI 输出，避免错误提示塞入完整 JSON。
+///
+/// Business Logic（为什么需要这个函数）:
+///     首页错误横幅只需要显示诊断摘要，不能被长 stdout 或完整模型输出撑爆。
+///
+/// Code Logic（这个函数做什么）:
+///     保留前 500 个 Unicode scalar，超出时追加省略号；未超出则原样返回。
+fn truncate_error_text(text: &str) -> String {
+    const MAX_ERROR_CHARS: usize = 500;
+    let mut chars = text.chars();
+    let truncated = chars.by_ref().take(MAX_ERROR_CHARS).collect::<String>();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
 }
 
 /// 将 Claude 解说合并回仓库列表。
@@ -743,6 +871,61 @@ mod tests {
         assert_eq!(map["o/r"].explanation_zh, "中文");
     }
 
+    #[test]
+    fn parses_claude_structured_output_field() {
+        let stdout = r#"{"type":"result","result":"Generated explanations.","structured_output":{"repos":[{"fullName":"o/r","explanationZh":"结构化中文","explanationEn":"Structured English."}]}}"#;
+        let map = parse_ai_output(stdout).expect("parse");
+        assert_eq!(map["o/r"].explanation_zh, "结构化中文");
+        assert_eq!(map["o/r"].explanation_en, "Structured English.");
+    }
+
+    #[test]
+    fn extracts_claude_stdout_error_when_stderr_is_empty() {
+        let stdout = r#"{"type":"result","subtype":"error_max_budget_usd","is_error":true,"errors":["Reached maximum budget ($0.01)"]}"#;
+        assert_eq!(
+            claude_failure_detail(&[], stdout.as_bytes()),
+            "Reached maximum budget ($0.01)"
+        );
+    }
+
+    #[test]
+    fn claude_generation_args_do_not_include_budget_limit() {
+        let args = claude_generation_args(&GithubTrendingConfig::default(), "{}");
+
+        assert!(!args.iter().any(|arg| arg == "--max-budget-usd"));
+    }
+
+    #[test]
+    fn retries_legacy_generic_failed_ai_cache() {
+        let payload = GithubTrendingPayload {
+            repos: Vec::new(),
+            fetched_at: Utc::now().to_rfc3339(),
+            expires_at: (Utc::now() + ChronoDuration::hours(24)).to_rfc3339(),
+            ai_status: "failed".to_string(),
+            ai_error: Some("Claude CLI 生成解说失败: 命令返回非零状态".to_string()),
+            ai_retry_attempted: false,
+        };
+        let config = GithubTrendingConfig::default();
+
+        assert!(should_retry_failed_ai_cache(&payload, &config));
+    }
+
+    #[test]
+    fn does_not_retry_failed_ai_cache_after_retry_attempted() {
+        let mut payload = GithubTrendingPayload {
+            repos: Vec::new(),
+            fetched_at: Utc::now().to_rfc3339(),
+            expires_at: (Utc::now() + ChronoDuration::hours(24)).to_rfc3339(),
+            ai_status: "failed".to_string(),
+            ai_error: Some("Claude CLI 生成解说失败: 命令返回非零状态".to_string()),
+            ai_retry_attempted: false,
+        };
+        payload.ai_retry_attempted = true;
+        let config = GithubTrendingConfig::default();
+
+        assert!(!should_retry_failed_ai_cache(&payload, &config));
+    }
+
     #[tokio::test]
     async fn cache_round_trip_same_key() {
         let db = SqlitePoolOptions::new()
@@ -773,6 +956,7 @@ mod tests {
             expires_at: (Utc::now() + ChronoDuration::hours(24)).to_rfc3339(),
             ai_status: "ready".to_string(),
             ai_error: None,
+            ai_retry_attempted: false,
         };
         store_cache(&db, "weekly:any:25:2026-06-23", &payload)
             .await

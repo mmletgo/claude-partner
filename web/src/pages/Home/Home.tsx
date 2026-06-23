@@ -24,6 +24,10 @@ import type { GithubTrendingResponse } from '@/lib/types';
 import styles from './Home.module.css';
 
 type LoadState = 'loading' | 'ready' | 'error';
+const SKELETON_COLUMNS = [
+  [0, 2, 4],
+  [1, 3, 5],
+] as const;
 
 /**
  * 将 i18next 的语言字符串归一化为应用支持语言。
@@ -47,6 +51,19 @@ function formatDateTime(iso: string, language: AppLanguage): string {
 }
 
 /**
+ * 拉取 GitHub Trending 首页数据。
+ *
+ * Business Logic（为什么需要）:
+ *   首页初始加载和用户手动刷新都需要读取同一份后端缓存/实时榜单。
+ *
+ * Code Logic（做什么）:
+ *   调用 githubTrendingApi.list() 并返回类型化响应，让 effect 与刷新按钮复用同一数据入口。
+ */
+async function fetchGithubTrending(): Promise<GithubTrendingResponse> {
+  return githubTrendingApi.list();
+}
+
+/**
  * Home 页面根组件。
  */
 export function Home() {
@@ -57,23 +74,44 @@ export function Home() {
   const [error, setError] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
 
+  const applyTrendingResponse = useCallback((data: GithubTrendingResponse) => {
+    setResponse(data);
+    setState('ready');
+  }, []);
+
   const loadTrending = useCallback(async () => {
     setState('loading');
     setError(null);
     setOpenError(null);
     try {
-      const data = await githubTrendingApi.list();
-      setResponse(data);
-      setState('ready');
+      const data = await fetchGithubTrending();
+      applyTrendingResponse(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : t('home:unknownError'));
       setState('error');
     }
-  }, [t]);
+  }, [applyTrendingResponse, t]);
 
   useEffect(() => {
-    void loadTrending();
-  }, [loadTrending]);
+    let cancelled = false;
+
+    async function loadInitialTrending(): Promise<void> {
+      try {
+        const data = await fetchGithubTrending();
+        if (cancelled) return;
+        applyTrendingResponse(data);
+      } catch (err) {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : t('home:unknownError'));
+        setState('error');
+      }
+    }
+
+    void loadInitialTrending();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyTrendingResponse, t]);
 
   const handleOpen = useCallback(
     (url: string) => {
@@ -102,6 +140,13 @@ export function Home() {
       },
     ];
   }, [language, response, t]);
+  const repoColumns = useMemo(() => {
+    const repos = response?.repos ?? [];
+    return [
+      repos.filter((_, index) => index % 2 === 0),
+      repos.filter((_, index) => index % 2 === 1),
+    ] as const;
+  }, [response?.repos]);
 
   const aiTone = response?.aiStatus === 'failed' ? 'warn' : response?.aiStatus === 'ready' ? 'success' : 'neutral';
   const aiStatusText = response?.aiStatus === 'ready'
@@ -172,9 +217,22 @@ export function Home() {
 
         <main className={styles.list} aria-label={t('home:listAria')}>
           {state === 'loading' ? (
-            Array.from({ length: 5 }).map((_, index) => (
-              <div key={index} className={styles.skeleton} aria-hidden="true" />
-            ))
+            <>
+              <div className={styles.masonryList}>
+                {SKELETON_COLUMNS.map((column, columnIndex) => (
+                  <div key={columnIndex} className={styles.masonryColumn}>
+                    {column.map((index) => (
+                      <div key={index} className={styles.skeleton} aria-hidden="true" />
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className={styles.singleList}>
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className={styles.skeleton} aria-hidden="true" />
+                ))}
+              </div>
+            </>
           ) : state === 'error' ? (
             <div className={styles.empty} role="alert">
               <p className={styles.emptyTitle}>{t('home:loadFailed')}</p>
@@ -189,14 +247,32 @@ export function Home() {
               <p className={styles.emptyDesc}>{t('home:emptyDesc')}</p>
             </div>
           ) : (
-            response.repos.map((repo) => (
-              <GithubRepoCard
-                key={repo.fullName}
-                repo={repo}
-                language={language}
-                onOpen={handleOpen}
-              />
-            ))
+            <>
+              <div className={styles.masonryList}>
+                {repoColumns.map((column, columnIndex) => (
+                  <div key={columnIndex} className={styles.masonryColumn}>
+                    {column.map((repo) => (
+                      <GithubRepoCard
+                        key={repo.fullName}
+                        repo={repo}
+                        language={language}
+                        onOpen={handleOpen}
+                      />
+                    ))}
+                  </div>
+                ))}
+              </div>
+              <div className={styles.singleList}>
+                {response.repos.map((repo) => (
+                  <GithubRepoCard
+                    key={repo.fullName}
+                    repo={repo}
+                    language={language}
+                    onOpen={handleOpen}
+                  />
+                ))}
+              </div>
+            </>
           )}
         </main>
       </div>

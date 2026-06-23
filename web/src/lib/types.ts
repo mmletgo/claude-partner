@@ -139,7 +139,6 @@ export interface GithubTrendingConfig {
   claudeCliPath: string;
   claudeModel: string;
   cacheTtlHours: number;
-  maxBudgetUsd: number;
 }
 
 /**

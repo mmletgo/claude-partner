@@ -69,7 +69,6 @@ interface GithubTrendingForm {
   claudeCliPath: string;
   claudeModel: string;
   cacheTtlHours: number;
-  maxBudgetUsd: number;
 }
 
 /** 快捷键字段定义（值本地化，文案走 t） */
@@ -128,7 +127,6 @@ const DEFAULT_GITHUB_TRENDING_FORM: GithubTrendingForm = {
   claudeCliPath: 'claude',
   claudeModel: 'sonnet',
   cacheTtlHours: 24,
-  maxBudgetUsd: 0.5,
 };
 
 /**
@@ -158,7 +156,6 @@ function githubTrendingConfigToForm(config: GithubTrendingConfig | null): Github
     claudeCliPath: config.claudeCliPath || 'claude',
     claudeModel: config.claudeModel || 'sonnet',
     cacheTtlHours: config.cacheTtlHours,
-    maxBudgetUsd: config.maxBudgetUsd,
   };
 }
 
@@ -566,7 +563,7 @@ export function Settings() {
   }, []);
 
   /**
-   * GitHub Trending「应用配置」：保存 Claude CLI 路径、模型、缓存与预算设置
+   * GitHub Trending「应用配置」：保存 Claude CLI 路径、模型与缓存设置
    */
   const handleApplyGithubTrending = async () => {
     setApplyingGithubTrending(true);
@@ -577,7 +574,6 @@ export function Settings() {
         claudeCliPath: githubTrendingForm.claudeCliPath.trim() || 'claude',
         claudeModel: githubTrendingForm.claudeModel.trim() || 'sonnet',
         cacheTtlHours: githubTrendingForm.cacheTtlHours,
-        maxBudgetUsd: githubTrendingForm.maxBudgetUsd,
       });
       setGithubTrendingConfig(updated);
       setGithubTrendingForm(githubTrendingConfigToForm(updated));
@@ -1034,42 +1030,22 @@ export function Settings() {
               <p className={styles.helper}>{t('settings:githubTrending.claudeModel.helper')}</p>
             </div>
 
-            <div className={styles.twoColumnFields}>
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="settings-github-cache-ttl">
-                  {t('settings:githubTrending.cacheTtlHours.label')}
-                </label>
-                <Input
-                  id="settings-github-cache-ttl"
-                  type="number"
-                  value={githubTrendingForm.cacheTtlHours}
-                  onChange={(e) =>
-                    patchGithubTrendingForm({ cacheTtlHours: Number(e.target.value) || 24 })
-                  }
-                  min={1}
-                  max={168}
-                  mono
-                />
-                <p className={styles.helper}>{t('settings:githubTrending.cacheTtlHours.helper')}</p>
-              </div>
-
-              <div className={styles.field}>
-                <label className={styles.label} htmlFor="settings-github-budget">
-                  {t('settings:githubTrending.maxBudgetUsd.label')}
-                </label>
-                <Input
-                  id="settings-github-budget"
-                  type="number"
-                  value={githubTrendingForm.maxBudgetUsd}
-                  onChange={(e) =>
-                    patchGithubTrendingForm({ maxBudgetUsd: Number(e.target.value) || 0.5 })
-                  }
-                  min={0.01}
-                  step={0.01}
-                  mono
-                />
-                <p className={styles.helper}>{t('settings:githubTrending.maxBudgetUsd.helper')}</p>
-              </div>
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="settings-github-cache-ttl">
+                {t('settings:githubTrending.cacheTtlHours.label')}
+              </label>
+              <Input
+                id="settings-github-cache-ttl"
+                type="number"
+                value={githubTrendingForm.cacheTtlHours}
+                onChange={(e) =>
+                  patchGithubTrendingForm({ cacheTtlHours: Number(e.target.value) || 24 })
+                }
+                min={1}
+                max={168}
+                mono
+              />
+              <p className={styles.helper}>{t('settings:githubTrending.cacheTtlHours.helper')}</p>
             </div>
 
             {githubTrendingConfig ? (
