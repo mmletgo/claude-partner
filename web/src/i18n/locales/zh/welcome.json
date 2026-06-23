@@ -12,9 +12,13 @@
       "title": "屏幕录制",
       "description": "允许截取屏幕内容"
     },
+    "accessibility": {
+      "title": "辅助功能",
+      "description": "健康提醒读取前台应用需要"
+    },
     "inputMonitoring": {
       "title": "输入监控",
-      "description": "允许全局快捷键"
+      "description": "健康提醒检测键盘活动需要"
     }
   },
   "permissionCard": {

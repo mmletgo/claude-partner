@@ -50,21 +50,16 @@ function OnboardingGuard() {
       try {
         const s = await configApi.permissions();
         if (cancelled) return;
-        const all = s.screenCapture.granted && s.inputMonitoring.granted;
+        const all =
+          s.screenCapture.granted &&
+          s.accessibility.granted &&
+          s.inputMonitoring.granted;
         if (all) {
           localStorage.setItem(PERMISSION_ONBOARDED_KEY, '1');
           setState('pass');
         } else {
-          // 启动主动引导：screenCapture 弹系统框（openSettings=false），
-          // inputMonitoring 只能靠开设置面板引导（openSettings=true）。
-          const reqs: Promise<unknown>[] = [];
-          if (!s.screenCapture.granted) {
-            reqs.push(configApi.requestPermission('screenCapture', false));
-          }
-          if (!s.inputMonitoring.granted) {
-            reqs.push(configApi.requestPermission('inputMonitoring', true));
-          }
-          await Promise.all(reqs);
+          // 首启不主动 request/openSettings（避免自动弹出系统设置面板打扰用户），
+          // 仅跳转 Welcome 页，由用户主动点「去设置」逐项引导授权。
           if (!cancelled) setState('redirect');
         }
       } catch {

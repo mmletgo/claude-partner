@@ -2,7 +2,7 @@
  * usePermissions - macOS 权限状态轮询与请求
  *
  * Business Logic（为什么需要这个 hook）:
- *   Welcome 引导页和侧栏底部授权徽标都需要：持续获取屏幕录制/输入监控权限
+ *   Welcome 引导页和侧栏底部授权徽标都需要：持续获取屏幕录制/辅助功能/输入监控权限
  *   状态、并在用户点击「请求授权」时触发后端弹系统授权框 + 打开设置面板。
  *   把轮询、请求、就绪判定收敛到一个 hook，避免 Welcome 与徽标各写一套重复逻辑。
  *
@@ -68,7 +68,10 @@ export function usePermissions(
       await refresh();
       const current = statusRef.current;
       if (!current) return;
-      const done = current.screenCapture.granted && current.inputMonitoring.granted;
+      const done =
+        current.screenCapture.granted &&
+        current.accessibility.granted &&
+        current.inputMonitoring.granted;
       if (done && stopWhenGranted && !stopped) {
         stopped = true;
         if (timer) {
@@ -94,6 +97,7 @@ export function usePermissions(
     const current = statusRef.current;
     const types: PermissionType[] = [];
     if (current && !current.screenCapture.granted) types.push('screenCapture');
+    if (current && !current.accessibility.granted) types.push('accessibility');
     if (current && !current.inputMonitoring.granted) types.push('inputMonitoring');
     if (types.length === 0) return;
     await Promise.all(types.map((t) => configApi.requestPermission(t)));
@@ -101,7 +105,10 @@ export function usePermissions(
   }, [refresh]);
 
   const allGranted =
-    !!status && status.screenCapture.granted && status.inputMonitoring.granted;
+    !!status &&
+    status.screenCapture.granted &&
+    status.accessibility.granted &&
+    status.inputMonitoring.granted;
 
   return { status, loading: status === null, allGranted, requestMissing, refresh };
 }

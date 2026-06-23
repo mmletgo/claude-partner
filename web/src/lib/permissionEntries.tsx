@@ -13,7 +13,7 @@
 
 import type { ReactElement } from 'react';
 import type { TFunction } from 'i18next';
-import { InfoIcon, KeyboardIcon } from '@/lib/icons';
+import { HealthIcon, InfoIcon, KeyboardIcon } from '@/lib/icons';
 import type { PermissionsStatus } from '@/lib/types';
 
 /** 单条权限条目的展示格式（供 PermissionCard 渲染） */
@@ -26,11 +26,17 @@ export interface PermissionEntry {
 }
 
 /**
- * 将后端 PermissionsStatus 转换为 PermissionEntry 列表（屏幕录制 + 输入监控）
+ * 将后端 PermissionsStatus 转换为 PermissionEntry 列表（三条）
+ *
+ * Business Logic（三条权限的真实消费者）:
+ *   - 屏幕录制：区域截图（xcap 抓屏）
+ *   - 辅助功能：健康提醒读取前台活动窗口标题（active-win-pos-rs 走 AX API）
+ *   - 输入监控：健康提醒键鼠活跃采样（device_query 走 IOHIDManager）
+ *   全局快捷键基于 RegisterEventHotKey，无需任何 TCC 权限，故不在引导之列。
  *
  * @param status - 后端返回的权限状态
- * @param t - i18next 翻译函数（welcome ns，复用 permission.screenRecording/inputMonitoring 文案）
- * @returns 用于渲染的权限条目数组
+ * @param t - i18next 翻译函数（welcome ns，复用 permission.* 文案）
+ * @returns 用于渲染的权限条目数组（屏幕录制 → 辅助功能 → 输入监控）
  */
 export function mapPermissions(
   status: PermissionsStatus,
@@ -43,6 +49,13 @@ export function mapPermissions(
       title: t('permission.screenRecording.title'),
       description: t('permission.screenRecording.description'),
       granted: status.screenCapture.granted,
+    },
+    {
+      id: 'accessibility',
+      icon: <HealthIcon />,
+      title: t('permission.accessibility.title'),
+      description: t('permission.accessibility.description'),
+      granted: status.accessibility.granted,
     },
     {
       id: 'inputMonitoring',

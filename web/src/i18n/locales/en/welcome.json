@@ -12,9 +12,13 @@
       "title": "Screen Recording",
       "description": "Allow capturing screen content"
     },
+    "accessibility": {
+      "title": "Accessibility",
+      "description": "Health reminder reads the foreground app"
+    },
     "inputMonitoring": {
       "title": "Input Monitoring",
-      "description": "Allow global keyboard shortcuts"
+      "description": "Health reminder detects keyboard activity"
     }
   },
   "permissionCard": {

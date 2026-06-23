@@ -243,7 +243,7 @@ export interface PermissionsStatus {
   accessibility: { granted: boolean };
 }
 
-export type PermissionType = 'screenCapture' | 'inputMonitoring';
+export type PermissionType = 'screenCapture' | 'inputMonitoring' | 'accessibility';
 
 export interface PermissionRequestResult {
   ok: boolean;

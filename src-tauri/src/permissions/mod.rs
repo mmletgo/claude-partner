@@ -1,9 +1,11 @@
 //! permissions — macOS 权限检测/请求（对照 Python `ui/permissions.py`）
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     截图功能依赖「屏幕录制」权限，全局快捷键依赖「输入监控」权限。前端设置页需要
-//!     展示当前授权状态并引导用户前往系统设置开启。本模块提供与 Python `permissions.py`
-//!     四个函数等价的 Rust 实现：检测屏幕录制 / 检测输入监控 / 请求屏幕录制 / 打开设置面板。
+//!     三条 macOS 权限的真实消费者：截图依赖「屏幕录制」；健康提醒键鼠采样（device_query，
+//!     走 IOHIDManager）依赖「输入监控」；健康提醒活动窗口标题采样（active-win-pos-rs，走 AX
+//!     API）依赖「辅助功能」。全局快捷键基于 RegisterEventHotKey，无需任何 TCC 权限。前端设置
+//!     页需展示授权状态并引导前往系统设置开启。本模块提供检测（屏幕录制/输入监控/辅助功能）
+//!     + 请求（弹系统框/打开设置面板）的 Rust 实现。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - macOS 下通过 FFI 调 CoreGraphics 的 `CGPreflightScreenCaptureAccess` /
@@ -144,7 +146,7 @@ pub fn check_screen_capture_access() -> bool {
 
 /// 检测输入监控权限（macOS 尝试创建 CGEventTap，NULL 即无权限；非 macOS 一律 true）。
 ///
-/// Business Logic: 全局快捷键依赖输入监控；用「能否创建事件 tap」作为最准确的判定。对照 Python `check_input_monitoring_access`。
+/// Business Logic: 健康提醒键鼠采样（device_query，底层 IOHIDManager）依赖输入监控权限；用「能否创建事件 tap」作为最准确的判定。对照 Python `check_input_monitoring_access`。
 #[cfg(target_os = "macos")]
 pub fn check_input_monitoring_access() -> bool {
     unsafe {
