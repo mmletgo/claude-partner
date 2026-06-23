@@ -22,7 +22,7 @@
     },
     "notification": {
       "title": "Notifications",
-      "description": "Receive system notifications like health reminders"
+      "description": "Receive notifications like health reminders; if disabled, enable in System Settings → Notifications"
     }
   },
   "permissionCard": {

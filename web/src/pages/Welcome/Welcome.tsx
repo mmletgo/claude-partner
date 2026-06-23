@@ -8,7 +8,7 @@
  *
  * Code Logic（这个页面做什么）:
  *   - 全屏深色背景模拟 macOS 权限弹窗，居中 Window 容器展示 logo/标题/权限卡/CTA
- *   - 两条权限卡：屏幕录制 / 输入监控（通知权限已移除，本项目无系统通知功能）
+ *   - 权限卡由 mapPermissions 渲染（屏幕录制 / 辅助功能 / 输入监控 / 通知）；通知权限为第 4 项，由前端 JS API 检测（lib/notification.ts），不阻塞「继续使用」
  *   - 用 usePermissions({ stopWhenGranted: true }) 轮询，全部授权后自动停止
  *   - PermissionCard 的「去设置」点击 → requestMissing()（弹系统授权框 + 打开设置面板）
  *   - 「继续使用」/「暂时跳过」都会写入 PERMISSION_ONBOARDED_KEY 后导航到首页，

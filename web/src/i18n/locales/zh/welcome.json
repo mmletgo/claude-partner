@@ -22,7 +22,7 @@
     },
     "notification": {
       "title": "通知",
-      "description": "接收健康提醒等系统通知"
+      "description": "接收健康提醒等通知；如已关闭，可在「系统设置 → 通知」中开启"
     }
   },
   "permissionCard": {

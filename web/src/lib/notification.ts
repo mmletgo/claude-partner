@@ -30,6 +30,7 @@ export async function checkNotificationGranted(): Promise<boolean> {
   try {
     return await isPermissionGranted();
   } catch {
+    // 探测失败保守视为已授权，不阻断主流程
     return true;
   }
 }

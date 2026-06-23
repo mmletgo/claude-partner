@@ -17,7 +17,7 @@
  * Code Logic: navigator.platform 含 'mac'（MacIntel/Macintosh）即 true；接受可选 platform
  *   参数便于单测注入，缺省读 globalThis.navigator?.platform。
  *
- * @param platform 平台字符串，缺省读 globalThis.navigator.platform
+ * @param platform 平台字符串，缺省读 globalThis.navigator?.platform ?? ''
  * @returns 是否 macOS
  */
 export function isMacos(platform: string = globalThis.navigator?.platform ?? ''): boolean {
