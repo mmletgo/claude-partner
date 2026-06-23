@@ -91,7 +91,9 @@ pub async fn claude_md_push(
     Json(req): Json<ClaudeMdPushReq>,
 ) -> Result<Json<ClaudeMdPushResp>, AppError> {
     let local = state.claude_md_repo.get().await?;
-    let accepted = local.as_ref().is_none_or(|local_row| {
+    // 用 `Option::map_or` 而非 `Option::is_none_or`（后者 1.82 才 stable），
+    // 项目 MSRV 是 1.77.2，clippy 的 `-D warnings` 会阻断。
+    let accepted = local.as_ref().map_or(true, |local_row| {
         local_row.content != req.claude_md.content
             || local_row.vector_clock != req.claude_md.vector_clock
             || local_row.updated_at != req.claude_md.updated_at

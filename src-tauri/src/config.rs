@@ -22,6 +22,34 @@ const CONFIG_DIR_NAME: &str = ".cc-partner";
 const LEGACY_CONFIG_DIR_NAME: &str = ".claude-partner";
 const APP_NAME: &str = "cc-partner";
 
+/// 把 cfg.db_path 中残留的旧 `~/.claude-partner/` 前缀改写为 `~/.cc-partner/`。
+///
+/// Business Logic: `config_dir()` 用 `fs::rename` 把整个旧目录搬到新目录，**不会**
+///     改写任何文件内容——而 `db_path` 是绝对路径字段，旧 config.json 里残留
+///     `~/.claude-partner/data.db` 会让 `init_db` 找不到文件触发 SQLITE_CANTOPEN
+///     panic。必须在 load 时按 home 目录做一次字段级迁移并 save。
+/// Code Logic: 仅当 `db_path` 以 `{home}/.claude-partner/` 开头时，把前缀替换成
+///     `{home}/.cc-partner/`；其它情况（含新路径、第三方目录）原样保留。
+///     返回 `true` 表示发生改写。
+fn migrate_legacy_db_path(cfg: &mut AppConfig) -> bool {
+    let Some(home) = dirs::home_dir() else {
+        return false;
+    };
+    migrate_legacy_db_path_with_home(cfg, &home)
+}
+
+/// 同 `migrate_legacy_db_path`，但 home 由调用方传入，便于单测。
+pub(crate) fn migrate_legacy_db_path_with_home(cfg: &mut AppConfig, home: &Path) -> bool {
+    let legacy_prefix = format!("{}/{}", home.to_string_lossy(), LEGACY_CONFIG_DIR_NAME);
+    if !cfg.db_path.starts_with(&legacy_prefix) {
+        return false;
+    }
+    let new_prefix = format!("{}/{}", home.to_string_lossy(), CONFIG_DIR_NAME);
+    let old = std::mem::take(&mut cfg.db_path);
+    cfg.db_path = old.replacen(&legacy_prefix, &new_prefix, 1);
+    true
+}
+
 /// 配置文件和数据文件的根目录：`~/.cc-partner`。
 ///
 /// pub 供 cloud_sync 等模块复用同一根目录派生子路径（如 `~/.cc-partner/cloud-sync/`）。
@@ -308,7 +336,10 @@ impl AppConfig {
     /// 加载配置；文件不存在则生成默认配置并保存。
     ///
     /// Business Logic: 启动时读取上次配置；首次运行初始化默认值并落盘。
-    /// Code Logic: 读 JSON 反序列化；若 macOS 旧配置含 `<ctrl>` 则迁移为 `<cmd>` 并保存；
+    /// Code Logic: 读 JSON 反序列化；做两步迁移修复后 save()：
+    ///             1) macOS 旧配置中 `<ctrl>` 快捷键替换为 `<cmd>`（对照 config.py）；
+    ///             2) `db_path` 字段若仍指向已废弃的 `~/.claude-partner/`（目录迁移只
+    ///                重命名目录、不改 JSON 字段），改写为 `~/.cc-partner/`。
     ///             文件缺失则用默认值构造并 save()。
     pub fn load() -> Result<Self, AppError> {
         let path = config_file_path();
@@ -318,6 +349,13 @@ impl AppConfig {
             // macOS 迁移：旧配置中 <ctrl> 快捷键自动替换为 <cmd>（对照 config.py）
             if cfg!(target_os = "macos") && cfg.screenshot_hotkey.contains("<ctrl>") {
                 cfg.screenshot_hotkey = cfg.screenshot_hotkey.replace("<ctrl>", "<cmd>");
+                cfg.save()?;
+            }
+            // 目录迁移补丁：config_dir() 把 ~/.claude-partner 整目录重命名成 ~/.cc-partner，
+            // 但 config.json 里的 db_path 是绝对路径，目录迁移不会改 JSON 字段内容。
+            // 残留的旧路径会让 init_db 找不到文件而 panic (SQLITE_CANTOPEN)。
+            if migrate_legacy_db_path(&mut cfg) {
+                tracing::info!("已迁移 db_path 字段到新配置目录: {}", cfg.db_path);
                 cfg.save()?;
             }
             Ok(cfg)
@@ -441,5 +479,62 @@ mod tests {
             back.health.reminder_fullscreen,
             "reminder_fullscreen 应随配置 roundtrip"
         );
+    }
+
+    /// 最小可用 cfg 工厂：db_path 由调用方指定，其余字段填空字符串/默认值。
+    /// 仅供 `migrate_legacy_db_path_with_home` 系列单测使用。
+    fn cfg_with_db_path(db_path: &str) -> AppConfig {
+        AppConfig {
+            device_id: "dev-test".into(),
+            device_name: "n".into(),
+            http_port: 0,
+            receive_dir: "/r".into(),
+            db_path: db_path.into(),
+            screenshot_hotkey: "<cmd>+<shift>+s".into(),
+            cloud_sync_repo_url: None,
+            cloud_sync_enabled: false,
+            cloud_sync_auto: false,
+            cloud_sync_interval_secs: default_cloud_sync_interval(),
+            cloud_sync_branch: None,
+            health: HealthConfig::default(),
+            github_trending: GithubTrendingConfig::default(),
+        }
+    }
+
+    #[test]
+    fn test_migrate_legacy_db_path_rewrites_old_prefix() {
+        // 旧 config.json 残留 ~/.claude-partner/ 绝对路径时，迁移函数应改写为 ~/.cc-partner/
+        let home = Path::new("/tmp/fake-home");
+        let mut cfg = cfg_with_db_path("/tmp/fake-home/.claude-partner/data.db");
+        assert!(migrate_legacy_db_path_with_home(&mut cfg, home));
+        assert_eq!(cfg.db_path, "/tmp/fake-home/.cc-partner/data.db");
+    }
+
+    #[test]
+    fn test_migrate_legacy_db_path_noop_when_already_new() {
+        // 已是新路径时不应改写
+        let home = Path::new("/tmp/fake-home");
+        let mut cfg = cfg_with_db_path("/tmp/fake-home/.cc-partner/data.db");
+        assert!(!migrate_legacy_db_path_with_home(&mut cfg, home));
+        assert_eq!(cfg.db_path, "/tmp/fake-home/.cc-partner/data.db");
+    }
+
+    #[test]
+    fn test_migrate_legacy_db_path_noop_when_unrelated_dir() {
+        // 用户自定义 db_path（如外接 SSD）不应被改写
+        let home = Path::new("/tmp/fake-home");
+        let mut cfg = cfg_with_db_path("/Volumes/external/cc-partner.db");
+        assert!(!migrate_legacy_db_path_with_home(&mut cfg, home));
+        assert_eq!(cfg.db_path, "/Volumes/external/cc-partner.db");
+    }
+
+    #[test]
+    fn test_migrate_legacy_db_path_does_not_match_substring_only() {
+        // 仅含 `.claude-partner` 子串但不在 home 下时不应改写
+        // （避免误伤路径里恰好出现该字符串的合法目录）
+        let home = Path::new("/tmp/fake-home");
+        let mut cfg = cfg_with_db_path("/data/.claude-partner-backup/data.db");
+        assert!(!migrate_legacy_db_path_with_home(&mut cfg, home));
+        assert_eq!(cfg.db_path, "/data/.claude-partner-backup/data.db");
     }
 }

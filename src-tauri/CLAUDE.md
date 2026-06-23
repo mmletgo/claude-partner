@@ -17,7 +17,7 @@ src/
 ├── main.rs / lib.rs   — Tauri Builder + 命令注册 + setup 装配（load config → init_db → AppState）
 ├── state.rs           — AppState（config: RwLock + db pool + prompt_repo + device_id）[已实现]
 ├── error.rs           — AppError（thiserror + serde 成 {error:"msg"}）              [已实现]
-├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认，并从旧 ~/.claude-partner 迁移 [已实现]
+├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认；目录首次启动从旧 ~/.claude-partner 重命名迁移；load() 额外做字段级迁移——把 config.json 残留的 db_path 绝对路径前缀 `~/.claude-partner/` 改写为 `~/.cc-partner/`（fs::rename 不改文件内容，必须在 load 时修补否则 init_db 找不到文件 panic）；macOS 旧 `<ctrl>` 快捷键自动替换 `<cmd>` [已实现]
 ├── cc/                — Claude Code 历史采集（collector）+ 合并（merger，复用 sync/vector_clock）+ 同步（engine）+ 模型 [已实现]
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
 ├── commands/          — #[tauri::command]：prompts + cc_history + cloud_sync + github_trending + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health [已实现]
@@ -291,7 +291,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## 关键约定
 
-- **数据兼容**：直接读写 `~/.cc-partner/data.db`，首次更名后从旧 `~/.claude-partner` 目录迁移；迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
+- **数据兼容**：直接读写 `~/.cc-partner/data.db`。两阶段迁移——(1) 首次启动目录级 `config_dir()` 用 `fs::rename` 把 `~/.claude-partner` 整目录搬到 `~/.cc-partner`（**只动目录、不动文件内容**）；(2) 之后 `AppConfig::load()` 检测到 config.json 里残留的旧绝对路径（`db_path` 字段仍指向 `~/.claude-partner/data.db`），按 home 目录做字段级前缀替换并 save——否则 `init_db` 找不到文件会 SQLITE_CANTOPEN panic。迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
 - **版本号单一来源**：`tauri.conf.json` 的 `version`；Rust 用 `env!("CARGO_PKG_VERSION")`；前端 `useAppVersion` 经 invoke 获取，禁止硬编码。发版时统一用 `scripts/bump-version.mjs` 同步三处（tauri.conf.json / Cargo.toml / web/package.json），详见 M9 节。
 - **serde 对齐前端**：所有返回给前端的 struct 用 `#[serde(rename_all = "camelCase")]`。
 - **迁移参照**：各模块移植自 Python 版（M10 已删除），算法逻辑（向量时钟、选区、分块协议）逐字等价；各 M1–M8 节的"对照 Python xxx"注释是迁移期的行为基线说明，保留作设计意图记录。
