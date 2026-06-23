@@ -15,11 +15,44 @@
  */
 import { useTranslation } from 'react-i18next';
 import { Bar, BarChart, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import type { TooltipContentProps } from 'recharts';
 import type { ActivityDetail } from '@/lib/types';
+import styles from './StatsChart.module.css';
 
 interface StatsChartProps {
   /** 活动明细（app 排行 + 24 小时分布），来自 get_activity_detail */
   detail: ActivityDetail;
+}
+
+interface ChartTooltipProps extends TooltipContentProps {
+  /** tooltip 数值单位 */
+  unit: string;
+}
+
+/**
+ * 渲染健康统计图表 tooltip
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   默认 Recharts tooltip 视觉与项目设计系统不一致,且没有统一展示分钟单位。
+ *
+ * Code Logic（这个函数做什么）:
+ *   接收 Recharts tooltip props,在 active 且有 payload 时渲染 token 化 tooltip;
+ *   非激活状态返回 null。
+ */
+function ChartTooltip(props: ChartTooltipProps) {
+  const { active, payload, label, unit } = props;
+
+  if (!active || !payload?.length) return null;
+
+  return (
+    <div className={styles.tooltip}>
+      <div className={styles.tooltipLabel}>{label}</div>
+      <div className={styles.tooltipRow}>
+        <span>{payload[0]?.name}</span>
+        <strong>{Number(payload[0]?.value ?? 0)} {unit}</strong>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -29,35 +62,55 @@ export function StatsChart({ detail }: StatsChartProps) {
   const { t } = useTranslation(['health', 'common']);
   const appData = detail.appUsage.slice(0, 8).map((a) => ({ name: a.name, minutes: a.minutes }));
   const hourData = detail.hourly.map((mins, h) => ({ h: `${h}`, mins }));
+  const minuteUnit = t('health:minutesUnit');
 
   return (
-    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-      <div style={{ flex: '1 1 320px' }}>
-        <h4>{t('health:appUsageTitle')}</h4>
+    <div className={styles.grid}>
+      <section className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h3 className={styles.title}>{t('health:appUsageTitle')}</h3>
+          <p className={styles.caption}>{t('health:topAppsCaption')}</p>
+        </div>
         {appData.length === 0 ? (
-          <p>{t('health:noData')}</p>
+          <p className={styles.empty}>{t('health:noData')}</p>
         ) : (
           <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={appData} layout="vertical" margin={{ left: 20 }}>
-              <XAxis type="number" />
-              <YAxis type="category" dataKey="name" width={100} />
-              <Tooltip />
-              <Bar dataKey="minutes" fill="#34C759" />
+            <BarChart data={appData} layout="vertical" margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+              <XAxis type="number" stroke="var(--meta)" tick={{ fill: 'var(--muted)', fontSize: 12 }} />
+              <YAxis
+                type="category"
+                dataKey="name"
+                width={112}
+                stroke="var(--meta)"
+                tick={{ fill: 'var(--muted)', fontSize: 12 }}
+              />
+              <Tooltip
+                content={(props) => <ChartTooltip {...props} unit={minuteUnit} />}
+                cursor={{ fill: 'var(--accent-soft)' }}
+              />
+              <Bar dataKey="minutes" name={t('health:activeToday')} fill="var(--success)" radius={[0, 6, 6, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         )}
-      </div>
-      <div style={{ flex: '1 1 320px' }}>
-        <h4>{t('health:hourlyTitle')}</h4>
+      </section>
+
+      <section className={styles.panel}>
+        <div className={styles.panelHeader}>
+          <h3 className={styles.title}>{t('health:hourlyTitle')}</h3>
+          <p className={styles.caption}>{t('health:hourlyCaption')}</p>
+        </div>
         <ResponsiveContainer width="100%" height={240}>
-          <BarChart data={hourData}>
-            <XAxis dataKey="h" />
-            <YAxis />
-            <Tooltip />
-            <Bar dataKey="mins" fill="#007AFF" />
+          <BarChart data={hourData} margin={{ top: 8, right: 8, bottom: 8, left: 0 }}>
+            <XAxis dataKey="h" stroke="var(--meta)" tick={{ fill: 'var(--muted)', fontSize: 12 }} />
+            <YAxis stroke="var(--meta)" tick={{ fill: 'var(--muted)', fontSize: 12 }} />
+            <Tooltip
+              content={(props) => <ChartTooltip {...props} unit={minuteUnit} />}
+              cursor={{ fill: 'var(--accent-soft)' }}
+            />
+            <Bar dataKey="mins" name={t('health:activeToday')} fill="var(--accent)" radius={[6, 6, 0, 0]} isAnimationActive={false} />
           </BarChart>
         </ResponsiveContainer>
-      </div>
+      </section>
     </div>
   );
 }

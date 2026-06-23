@@ -1,0 +1,88 @@
+/* 健康统计图表样式
+ * 让 Recharts 面板、空态和 tooltip 与项目 Card/Token 视觉一致
+ */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-5);
+}
+
+.panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.panelHeader {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-medium);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-normal);
+  color: var(--fg);
+}
+
+.caption {
+  margin: 0;
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  color: var(--muted);
+}
+
+.empty {
+  min-height: 240px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  color: var(--meta);
+  border: 1px dashed var(--border-soft);
+  border-radius: var(--radius-md);
+  background: color-mix(in oklab, var(--surface) 78%, transparent);
+}
+
+.tooltip {
+  min-width: 140px;
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  color: var(--fg);
+}
+
+.tooltipLabel {
+  margin-bottom: var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--fg);
+}
+
+.tooltipRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+
+.tooltipRow strong {
+  font-weight: var(--weight-semibold);
+  color: var(--fg);
+}
+
+@media (max-width: 880px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

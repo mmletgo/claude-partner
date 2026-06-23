@@ -15,12 +15,138 @@
  *   - dndStart/dndEnd 用 `<input type="time">`,空串 ↔ null
  *   - hooks 全部在 early return 之前(项目规则 20)
  */
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Card } from '@/components/primitives';
+import type { ChangeEvent } from 'react';
+import { Card, Input } from '@/components/primitives';
 import { healthApi } from '@/api/health';
 import type { HealthConfig } from '@/lib/types';
 import styles from './Settings.module.css';
+
+interface ToggleFieldProps {
+  /** 字段标题 */
+  label: string;
+  /** 字段说明 */
+  description: string;
+  /** 当前开关状态 */
+  checked: boolean;
+  /** 状态变更回调 */
+  onChange: (checked: boolean) => void;
+}
+
+interface NumberFieldProps {
+  /** 字段标题 */
+  label: string;
+  /** 字段说明 */
+  description: string;
+  /** 当前数字值 */
+  value: number;
+  /** 最小值 */
+  min: number;
+  /** 最大值 */
+  max?: number;
+  /** 数字变更回调 */
+  onChange: (value: number) => void;
+}
+
+interface TimeFieldProps {
+  /** 字段标题 */
+  label: string;
+  /** 当前时间值，null 表示未设置 */
+  value: string | null;
+  /** 时间变更回调 */
+  onChange: (value: string | null) => void;
+}
+
+/**
+ * 渲染设置页开关行
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   健康配置中大部分布尔项都是“标题 + 说明 + 开关”的同构结构,复用行组件可让配置表单
+ *   与项目设置页风格统一。
+ *
+ * Code Logic（这个函数做什么）:
+ *   接收 label/description/checked/onChange,渲染可点击 label 和自定义 switch。
+ */
+function ToggleField(props: ToggleFieldProps) {
+  const { label, description, checked, onChange } = props;
+
+  return (
+    <label className={styles.toggleRow}>
+      <span className={styles.fieldCopy}>
+        <span className={styles.labelText}>{label}</span>
+        <span className={styles.description}>{description}</span>
+      </span>
+      <span className={styles.switch} data-checked={checked || undefined}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event: ChangeEvent<HTMLInputElement>) => onChange(event.target.checked)}
+        />
+        <span className={styles.switchTrack} aria-hidden="true">
+          <span className={styles.switchThumb} />
+        </span>
+      </span>
+    </label>
+  );
+}
+
+/**
+ * 渲染分钟/天数数字配置行
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   工作窗口、休息判定、喝水间隔和保留天数都是数字配置,需要保持一致输入宽度与说明层级。
+ *
+ * Code Logic（这个函数做什么）:
+ *   使用 primitives/Input 渲染 number 输入,把原生 change 事件转换为 number 回调。
+ */
+function NumberField(props: NumberFieldProps) {
+  const { label, description, value, min, max, onChange } = props;
+
+  return (
+    <label className={styles.compactRow}>
+      <span className={styles.fieldCopy}>
+        <span className={styles.labelText}>{label}</span>
+        <span className={styles.description}>{description}</span>
+      </span>
+      <Input
+        type="number"
+        size="sm"
+        mono
+        min={min}
+        max={max}
+        value={value}
+        className={styles.compactInput}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+/**
+ * 渲染免打扰时间配置行
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   免打扰起止时间可以为空,用户需要能直接清空或选择本地时间。
+ *
+ * Code Logic（这个函数做什么）:
+ *   渲染原生 time input,把空串转换为 null,保持后端 HealthConfig 语义。
+ */
+function TimeField(props: TimeFieldProps) {
+  const { label, value, onChange } = props;
+
+  return (
+    <label className={styles.timeRow}>
+      <span className={styles.labelText}>{label}</span>
+      <input
+        type="time"
+        className={styles.timeInput}
+        value={value ?? ''}
+        onChange={(event) => onChange(event.target.value || null)}
+      />
+    </label>
+  );
+}
 
 /**
  * Health 配置表单组件
@@ -35,15 +161,13 @@ export function Settings() {
     void healthApi.getConfig().then(setCfg);
   }, []);
 
-  // hooks 已在 early return 之前调用完毕(规则 20),下方可安全 early return
-  if (!cfg) return null;
-
   /**
    * 提交一次配置变更:用「当前完整 cfg + 本次 patch」合成新对象,
    * 乐观更新本地状态后再整体回写后端,确保未变更字段不被清零。
    * 后端回写失败时回滚到 prev 并记录错误,避免本地状态与后端不一致。
    */
-  const update = async (patch: Partial<HealthConfig>) => {
+  const update = useCallback(async (patch: Partial<HealthConfig>) => {
+    if (!cfg) return;
     const prev = cfg;
     const next = { ...cfg, ...patch };
     setCfg(next);
@@ -53,127 +177,108 @@ export function Settings() {
       console.error('update_health_config failed, rolling back', e);
       setCfg(prev);
     }
-  };
+  }, [cfg]);
+
+  // hooks 已在 early return 之前调用完毕(规则 20),下方可安全 early return
+  if (!cfg) return null;
 
   return (
-    <Card variant="outlined" padding="md" className={styles.section}>
-      <h3 className={styles.subtitle}>{t('health:settingsTitle')}</h3>
+    <Card variant="outlined" padding="md" className={styles.settingsCard}>
+      <Card.Header className={styles.header}>
+        <div className={styles.titleGroup}>
+          <h2 className={styles.subtitle}>{t('health:settingsTitle')}</h2>
+          <p className={styles.lead}>{t('health:settingsLead')}</p>
+        </div>
+      </Card.Header>
 
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:enabled')}</span>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={cfg.enabled}
-          onChange={(e) => update({ enabled: e.target.checked })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:workWindowMinutes')}</span>
-        <input
-          type="number"
-          min={1}
-          max={120}
-          className={styles.numberInput}
-          value={Math.round(cfg.workWindowSeconds / 60)}
-          onChange={(e) => update({ workWindowSeconds: Number(e.target.value) * 60 })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:breakMinutes')}</span>
-        <input
-          type="number"
-          min={1}
-          className={styles.numberInput}
-          value={Math.round(cfg.breakSeconds / 60)}
-          onChange={(e) => update({ breakSeconds: Number(e.target.value) * 60 })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:notifyEnabled')}</span>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={cfg.notifyEnabled}
-          onChange={(e) => update({ notifyEnabled: e.target.checked })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:reminderFullscreen')}</span>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={cfg.reminderFullscreen}
-          onChange={(e) => update({ reminderFullscreen: e.target.checked })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:recordWindowTitle')}</span>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={cfg.recordWindowTitle}
-          onChange={(e) => update({ recordWindowTitle: e.target.checked })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:waterEnabled')}</span>
-        <input
-          type="checkbox"
-          className={styles.checkbox}
-          checked={cfg.waterEnabled}
-          onChange={(e) => update({ waterEnabled: e.target.checked })}
-        />
-      </label>
-
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:waterIntervalMinutes')}</span>
-        <input
-          type="number"
-          min={1}
-          className={styles.numberInput}
-          value={Math.round(cfg.waterIntervalSeconds / 60)}
-          onChange={(e) => update({ waterIntervalSeconds: Number(e.target.value) * 60 })}
-        />
-      </label>
-
-      <div className={styles.dndRow}>
-        <label className={styles.field}>
-          <span className={styles.labelText}>{t('health:dndStart')}</span>
-          <input
-            type="time"
-            className={styles.timeInput}
-            value={cfg.dndStart ?? ''}
-            onChange={(e) => update({ dndStart: e.target.value || null })}
+      <Card.Body className={styles.body}>
+        <section className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('health:monitoringGroup')}</h3>
+          <ToggleField
+            label={t('health:enabled')}
+            description={t('health:enabledDescription')}
+            checked={cfg.enabled}
+            onChange={(checked) => { void update({ enabled: checked }); }}
           />
-        </label>
-        <label className={styles.field}>
-          <span className={styles.labelText}>{t('health:dndEnd')}</span>
-          <input
-            type="time"
-            className={styles.timeInput}
-            value={cfg.dndEnd ?? ''}
-            onChange={(e) => update({ dndEnd: e.target.value || null })}
+          <NumberField
+            label={t('health:workWindowMinutes')}
+            description={t('health:workWindowDescription')}
+            min={1}
+            max={120}
+            value={Math.round(cfg.workWindowSeconds / 60)}
+            onChange={(value) => { void update({ workWindowSeconds: value * 60 }); }}
           />
-        </label>
-      </div>
+          <NumberField
+            label={t('health:breakMinutes')}
+            description={t('health:breakDescription')}
+            min={1}
+            value={Math.round(cfg.breakSeconds / 60)}
+            onChange={(value) => { void update({ breakSeconds: value * 60 }); }}
+          />
+        </section>
 
-      <label className={styles.field}>
-        <span className={styles.labelText}>{t('health:retainDays')}</span>
-        <input
-          type="number"
-          min={1}
-          className={styles.numberInput}
-          value={cfg.retainDays}
-          onChange={(e) => update({ retainDays: Number(e.target.value) })}
-        />
-      </label>
+        <section className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('health:reminderGroup')}</h3>
+          <ToggleField
+            label={t('health:notifyEnabled')}
+            description={t('health:notifyDescription')}
+            checked={cfg.notifyEnabled}
+            onChange={(checked) => { void update({ notifyEnabled: checked }); }}
+          />
+          <ToggleField
+            label={t('health:reminderFullscreen')}
+            description={t('health:fullscreenDescription')}
+            checked={cfg.reminderFullscreen}
+            onChange={(checked) => { void update({ reminderFullscreen: checked }); }}
+          />
+          <ToggleField
+            label={t('health:waterEnabled')}
+            description={t('health:waterDescription')}
+            checked={cfg.waterEnabled}
+            onChange={(checked) => { void update({ waterEnabled: checked }); }}
+          />
+          <NumberField
+            label={t('health:waterIntervalMinutes')}
+            description={t('health:waterIntervalDescription')}
+            min={1}
+            value={Math.round(cfg.waterIntervalSeconds / 60)}
+            onChange={(value) => { void update({ waterIntervalSeconds: value * 60 }); }}
+          />
+        </section>
+
+        <section className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('health:quietHoursGroup')}</h3>
+          <div className={styles.twoColumn}>
+            <TimeField
+              label={t('health:dndStart')}
+              value={cfg.dndStart}
+              onChange={(value) => { void update({ dndStart: value }); }}
+            />
+            <TimeField
+              label={t('health:dndEnd')}
+              value={cfg.dndEnd}
+              onChange={(value) => { void update({ dndEnd: value }); }}
+            />
+          </div>
+        </section>
+
+        <section className={styles.group}>
+          <h3 className={styles.groupTitle}>{t('health:privacyGroup')}</h3>
+          <ToggleField
+            label={t('health:recordWindowTitle')}
+            description={t('health:recordWindowTitleDescription')}
+            checked={cfg.recordWindowTitle}
+            onChange={(checked) => { void update({ recordWindowTitle: checked }); }}
+          />
+          <NumberField
+            label={t('health:retainDays')}
+            description={t('health:retainDaysDescription')}
+            min={1}
+            value={cfg.retainDays}
+            onChange={(value) => { void update({ retainDays: value }); }}
+          />
+        </section>
+      </Card.Body>
     </Card>
   );
 }
