@@ -24,6 +24,7 @@ import { Card, Button, Input, Pill } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
+import { requestNotificationPermission } from '@/lib/notification';
 import { githubTrendingApi } from '@/api/githubTrending';
 import { usePermissions } from '@/hooks/usePermissions';
 import { mapPermissions } from '@/lib/permissionEntries';
@@ -190,12 +191,16 @@ export function Settings() {
   /**
    * 单项权限「去设置」：请求该项权限（默认弹框 + 开面板）后刷新状态
    *
-   * @param type 权限类型 screenCapture / inputMonitoring
+   * @param type 权限类型 screenCapture / accessibility / inputMonitoring / notification（notification 走前端 JS API）
    */
   const handleRequestAccess = useCallback(
     async (type: PermissionType) => {
       try {
-        await configApi.requestPermission(type);
+        if (type === 'notification') {
+          await requestNotificationPermission();
+        } else {
+          await configApi.requestPermission(type);
+        }
         await refreshPermissions();
       } catch {
         // 请求失败静默，轮询会持续反映真实状态
