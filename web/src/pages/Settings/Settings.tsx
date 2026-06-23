@@ -27,6 +27,11 @@ import { configApi } from '@/api/config';
 import { githubTrendingApi } from '@/api/githubTrending';
 import { usePermissions } from '@/hooks/usePermissions';
 import { mapPermissions } from '@/lib/permissionEntries';
+import {
+  formatShortcutForDisplay,
+  getDefaultShortcutValue,
+  resolveShortcutRecording,
+} from './shortcutRecorder';
 import type {
   VersionInfo,
   UpdateCheckResult,
@@ -89,13 +94,24 @@ const SETTINGS_TABS: SettingsTab[] = [
   { id: 'about', labelKey: 'about' },
 ];
 
-/** 快捷键字段定义（值本地化，文案走 t） */
-const SHORTCUT_FIELDS: ShortcutField[] = [
-  { id: 'screenshot', labelKey: 'screenshot', value: 'Cmd+Shift+S' },
+/** 快捷键字段定义（值由运行平台决定，文案走 t） */
+const SHORTCUT_FIELDS: Pick<ShortcutField, 'id' | 'labelKey'>[] = [
+  { id: 'screenshot', labelKey: 'screenshot' },
 ];
 
-/** 默认快捷键字段（深拷贝，避免污染常量） */
-const DEFAULT_SHORTCUTS: ShortcutField[] = SHORTCUT_FIELDS.map((s) => ({ ...s }));
+/**
+ * 生成默认快捷键字段
+ *
+ * Business Logic（为什么需要）:
+ *   用户点击“恢复默认”时，设置页必须写回后端可注册的 pynput 格式，
+ *   而不是仅用于 UI 展示的快捷键文本。
+ *
+ * Code Logic（做什么）:
+ *   基于平台默认快捷键生成每个快捷键字段的新对象，避免复用常量对象导致状态污染。
+ */
+function createDefaultShortcuts(): ShortcutField[] {
+  return SHORTCUT_FIELDS.map((s) => ({ ...s, value: getDefaultShortcutValue() }));
+}
 
 /**
  * 生成默认状态
@@ -106,7 +122,7 @@ function createDefaultState(): SettingsState {
   return {
     deviceName: '',
     receiveDir: '',
-    shortcuts: DEFAULT_SHORTCUTS.map((s) => ({ ...s })),
+    shortcuts: createDefaultShortcuts(),
   };
 }
 
@@ -211,6 +227,7 @@ export function Settings() {
   const [saving, setSaving] = useState(false);
   const [choosingDir, setChoosingDir] = useState(false);
   const [activeTab, setActiveTab] = useState<SettingsTabId>('general');
+  const [recordingShortcutId, setRecordingShortcutId] = useState<string | null>(null);
 
   // 云端同步（GitHub 私有仓库）独立操作块：表单值 / 已应用配置 / 上次同步结果 / 测试结果 / 各动作 loading
   const [cloudSyncForm, setCloudSyncForm] = useState<CloudSyncForm>({ ...DEFAULT_CLOUD_SYNC_FORM });
@@ -332,6 +349,69 @@ export function Settings() {
   }, []);
 
   /**
+   * 激活快捷键录制态
+   *
+   * Business Logic（为什么需要）:
+   *   用户点进快捷键输入框后应直接按键录制，不需要手动输入格式化字符串。
+   *
+   * Code Logic（做什么）:
+   *   记录当前正在录制的快捷键 id，渲染层据此切换提示文案与激活样式。
+   *
+   * @param id 快捷键 id
+   */
+  const handleShortcutFocus = useCallback((id: string) => {
+    setRecordingShortcutId(id);
+  }, []);
+
+  /**
+   * 快捷键输入失焦时退出录制态
+   *
+   * Business Logic（为什么需要）:
+   *   用户离开输入框时应停止捕获按键，避免后续键盘操作继续改写快捷键。
+   *
+   * Code Logic（做什么）:
+   *   仅当失焦字段仍是当前录制字段时清空 recordingShortcutId。
+   *
+   * @param id 快捷键 id
+   */
+  const handleShortcutBlur = useCallback((id: string) => {
+    setRecordingShortcutId((prev) => (prev === id ? null : prev));
+  }, []);
+
+  /**
+   * 录制快捷键按键：阻止文本输入并按结果更新字段
+   *
+   * Business Logic（为什么需要）:
+   *   快捷键设置应由用户按下组合键自动生成，Esc 可取消，Delete/Backspace 可清空。
+   *
+   * Code Logic（做什么）:
+   *   阻止 input 默认输入，把 React 键盘事件交给 shortcutRecorder 解析；
+   *   record/clear 更新 state，cancel 只退出录制态，pending 保持等待。
+   *
+   * @param e 键盘事件
+   * @param id 快捷键 id
+   */
+  const handleShortcutKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLInputElement>, id: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      const result = resolveShortcutRecording(e);
+      if (result.type === 'pending') return;
+      if (result.type === 'cancel') {
+        setRecordingShortcutId(null);
+        e.currentTarget.blur();
+        return;
+      }
+
+      handleShortcutChange(id, result.value);
+      setRecordingShortcutId(null);
+      e.currentTarget.blur();
+    },
+    [handleShortcutChange],
+  );
+
+  /**
    * 恢复默认：重置 state 到默认值
    */
   const handleResetDefaults = () => {
@@ -415,7 +495,7 @@ export function Settings() {
         const loaded: SettingsState = {
           deviceName: config.deviceName,
           receiveDir: config.receiveDir,
-          shortcuts: DEFAULT_SHORTCUTS.map((s) => {
+          shortcuts: createDefaultShortcuts().map((s) => {
             if (s.id === 'screenshot') {
               return { ...s, value: config.screenshotHotkey || s.value };
             }
@@ -794,27 +874,40 @@ export function Settings() {
           </Card.Header>
           <Card.Body padding="md">
             <div className={styles.shortcutList}>
-              {state.shortcuts.map((s) => (
-                <div key={s.id} className={styles.shortcutRow}>
-                  <div className={styles.shortcutText}>
-                    <span className={styles.shortcutLabel}>
-                      {t(`settings:shortcut.${s.labelKey}.label`)}
-                    </span>
-                    <span className={styles.shortcutHelper}>
-                      {t(`settings:shortcut.${s.labelKey}.helper`)}
-                    </span>
+              {state.shortcuts.map((s) => {
+                const isRecording = recordingShortcutId === s.id;
+                const label = t(`settings:shortcut.${s.labelKey}.label`);
+                return (
+                  <div key={s.id} className={styles.shortcutRow}>
+                    <div className={styles.shortcutText}>
+                      <span className={styles.shortcutLabel}>{label}</span>
+                      <span className={styles.shortcutHelper}>
+                        {isRecording
+                          ? t('settings:shortcut.recordingHelper')
+                          : t(`settings:shortcut.${s.labelKey}.helper`)}
+                      </span>
+                    </div>
+                    <div className={styles.shortcutInput}>
+                      <Input
+                        id={`settings-shortcut-${s.id}`}
+                        type="text"
+                        value={isRecording ? t('settings:shortcut.recording') : formatShortcutForDisplay(s.value)}
+                        placeholder={t('settings:shortcut.placeholder')}
+                        onChange={() => undefined}
+                        onFocus={() => handleShortcutFocus(s.id)}
+                        onClick={() => handleShortcutFocus(s.id)}
+                        onBlur={() => handleShortcutBlur(s.id)}
+                        onKeyDown={(e) => handleShortcutKeyDown(e, s.id)}
+                        icon={<KeyboardIcon />}
+                        className={isRecording ? styles.shortcutRecorderActive : undefined}
+                        aria-label={label}
+                        readOnly
+                        mono
+                      />
+                    </div>
                   </div>
-                  <div className={styles.shortcutInput}>
-                    <Input
-                      type="text"
-                      value={s.value}
-                      onChange={(e) => handleShortcutChange(s.id, e.target.value)}
-                      icon={<KeyboardIcon />}
-                      mono
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card.Body>
         </Card>

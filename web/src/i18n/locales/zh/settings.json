@@ -21,6 +21,9 @@
   },
   "shortcut": {
     "title": "快捷键",
+    "placeholder": "点击后按下快捷键",
+    "recording": "按下新的快捷键…",
+    "recordingHelper": "正在记录按键；Esc 取消，Delete 清空。",
     "screenshot": { "label": "截图快捷键", "helper": "框选区域并复制到剪贴板。" }
   },
   "sync": {

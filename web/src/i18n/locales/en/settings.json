@@ -21,6 +21,9 @@
   },
   "shortcut": {
     "title": "Shortcuts",
+    "placeholder": "Click, then press a shortcut",
+    "recording": "Press a new shortcut…",
+    "recordingHelper": "Recording keys; Esc cancels, Delete clears.",
     "screenshot": { "label": "Screenshot shortcut", "helper": "Select an area and copy it to the clipboard." }
   },
   "sync": {

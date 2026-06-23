@@ -6,7 +6,8 @@
  *   警告与操作按钮，便于用户快速扫描和管理。
  *
  * Code Logic（这个组件做什么）:
- *   接收一个 ClaudeCodeAsset DTO，渲染元信息、状态 Pill、警告列表，并把启停/卸载操作委托给父页面。
+ *   接收一个 ClaudeCodeAsset DTO，渲染元信息、状态 Pill、警告列表；本机资产把启停/卸载操作放在标题行内，
+ *   远端可选资产则渲染勾选框，并把交互委托给父页面。
  */
 
 import { useTranslation } from 'react-i18next';
@@ -55,11 +56,37 @@ export function ClaudeAssetRow({
       ) : null}
       <div className={styles.main}>
         <div className={styles.titleLine}>
-          <span className={styles.name}>{asset.name}</span>
-          <Pill tone="neutral">{t(`claudeCodeAssets:kinds.${asset.kind}`)}</Pill>
-          <Pill tone={asset.enabled ? 'success' : 'neutral'} dot>
-            {asset.enabled ? t('claudeCodeAssets:enabled') : t('claudeCodeAssets:disabled')}
-          </Pill>
+          <div className={styles.titleMeta}>
+            <span className={styles.name}>{asset.name}</span>
+            <Pill tone="neutral">{t(`claudeCodeAssets:kinds.${asset.kind}`)}</Pill>
+            <Pill tone={asset.enabled ? 'success' : 'neutral'} dot>
+              {asset.enabled ? t('claudeCodeAssets:enabled') : t('claudeCodeAssets:disabled')}
+            </Pill>
+          </div>
+          {!selectable ? (
+            <div className={styles.actions}>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon={asset.enabled ? <PauseIcon /> : <PlayIcon />}
+                disabled={!asset.canEnable}
+                loading={busy}
+                onClick={() => onToggle?.(asset)}
+              >
+                {asset.enabled ? t('claudeCodeAssets:disable') : t('claudeCodeAssets:enable')}
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<TrashIcon />}
+                disabled={!asset.canUninstall}
+                loading={busy}
+                onClick={() => onRemove?.(asset)}
+              >
+                {t('claudeCodeAssets:uninstall')}
+              </Button>
+            </div>
+          ) : null}
         </div>
         {asset.description ? <p className={styles.description}>{asset.description}</p> : null}
         <div className={styles.metaLine}>
@@ -81,30 +108,6 @@ export function ClaudeAssetRow({
           </div>
         ) : null}
       </div>
-      {!selectable ? (
-        <div className={styles.actions}>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon={asset.enabled ? <PauseIcon /> : <PlayIcon />}
-            disabled={!asset.canEnable}
-            loading={busy}
-            onClick={() => onToggle?.(asset)}
-          >
-            {asset.enabled ? t('claudeCodeAssets:disable') : t('claudeCodeAssets:enable')}
-          </Button>
-          <Button
-            variant="danger"
-            size="sm"
-            icon={<TrashIcon />}
-            disabled={!asset.canUninstall}
-            loading={busy}
-            onClick={() => onRemove?.(asset)}
-          >
-            {t('claudeCodeAssets:uninstall')}
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }

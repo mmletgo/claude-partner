@@ -218,6 +218,13 @@
   width: 100%;
 }
 
+.shortcutRecorderActive {
+  border-color: var(--accent);
+  background-color: var(--accent-soft);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  cursor: pointer;
+}
+
 /* ── Toggle 列表 ── */
 .toggleList {
   display: flex;
