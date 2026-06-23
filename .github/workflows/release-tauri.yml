@@ -44,12 +44,12 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - name: Set up Node 20
-        uses: actions/setup-node@v4
+      - name: Set up Node 22
+        uses: actions/setup-node@v5
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
 
@@ -98,6 +98,6 @@ jobs:
           releaseDraft: false
           prerelease: false
           # Windows 用 nsis 安装包（非 msi）作为 updater 的下载源
-          updaterJsonPreferNnis: true
+          updaterJsonPreferNsis: true
           # 透传各平台的 build target 参数
           args: ${{ matrix.args }}
