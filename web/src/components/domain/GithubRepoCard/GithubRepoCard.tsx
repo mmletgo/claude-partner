@@ -72,6 +72,7 @@ export function GithubRepoCard(props: GithubRepoCardProps) {
               variant="secondary"
               size="sm"
               icon={<ExternalLinkIcon />}
+              className={styles.openButton}
               onClick={() => onOpen(repo.url)}
             >
               {t('home:repoCard.open')}

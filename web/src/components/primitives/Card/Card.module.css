@@ -56,6 +56,30 @@
   padding: var(--space-6) var(--space-6);
 }
 
+.body.padding-none,
+.header.padding-none,
+.footer.padding-none {
+  padding: 0;
+}
+
+.body.padding-sm,
+.header.padding-sm,
+.footer.padding-sm {
+  padding: var(--space-3) var(--space-4);
+}
+
+.body.padding-md,
+.header.padding-md,
+.footer.padding-md {
+  padding: var(--space-4) var(--space-5);
+}
+
+.body.padding-lg,
+.header.padding-lg,
+.footer.padding-lg {
+  padding: var(--space-6) var(--space-6);
+}
+
 /* ── header 区域样式 ── */
 .header {
   display: flex;
