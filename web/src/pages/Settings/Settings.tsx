@@ -23,6 +23,7 @@ import { Card, Button, Input, Pill } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
+import { githubTrendingApi } from '@/api/githubTrending';
 import { usePermissions } from '@/hooks/usePermissions';
 import { mapPermissions } from '@/lib/permissionEntries';
 import type {
@@ -33,6 +34,8 @@ import type {
   CloudSyncConfig,
   CloudSyncResult,
   TestCloudSyncResult,
+  ClaudeCliTestResult,
+  GithubTrendingConfig,
 } from '@/lib/types';
 import styles from './Settings.module.css';
 
@@ -58,6 +61,15 @@ interface CloudSyncForm {
   enabled: boolean;
   auto: boolean;
   intervalSecs: number;
+}
+
+/** GitHub Trending / Claude CLI 解说 Card 的受控表单值 */
+interface GithubTrendingForm {
+  aiEnabled: boolean;
+  claudeCliPath: string;
+  claudeModel: string;
+  cacheTtlHours: number;
+  maxBudgetUsd: number;
 }
 
 /** 快捷键字段定义（值本地化，文案走 t） */
@@ -110,6 +122,15 @@ const DEFAULT_CLOUD_SYNC_FORM: CloudSyncForm = {
   intervalSecs: 300,
 };
 
+/** GitHub Trending 表单默认值（加载后会被后端配置覆盖） */
+const DEFAULT_GITHUB_TRENDING_FORM: GithubTrendingForm = {
+  aiEnabled: true,
+  claudeCliPath: 'claude',
+  claudeModel: 'sonnet',
+  cacheTtlHours: 24,
+  maxBudgetUsd: 0.5,
+};
+
 /**
  * 将后端返回的 CloudSyncConfig 映射为受控表单值
  *
@@ -124,6 +145,20 @@ function cloudSyncConfigToForm(config: CloudSyncConfig | null): CloudSyncForm {
     enabled: config.enabled,
     auto: config.auto,
     intervalSecs: config.intervalSecs,
+  };
+}
+
+/**
+ * 将后端返回的 GithubTrendingConfig 映射为受控表单值
+ */
+function githubTrendingConfigToForm(config: GithubTrendingConfig | null): GithubTrendingForm {
+  if (!config) return { ...DEFAULT_GITHUB_TRENDING_FORM };
+  return {
+    aiEnabled: config.aiEnabled,
+    claudeCliPath: config.claudeCliPath || 'claude',
+    claudeModel: config.claudeModel || 'sonnet',
+    cacheTtlHours: config.cacheTtlHours,
+    maxBudgetUsd: config.maxBudgetUsd,
   };
 }
 
@@ -170,6 +205,16 @@ export function Settings() {
   const [testing, setTesting] = useState(false);
   const [applying, setApplying] = useState(false);
   const [syncing, setSyncing] = useState(false);
+
+  // GitHub Trending / Claude CLI 解说配置：独立于底部统一 Save，即时应用。
+  const [githubTrendingForm, setGithubTrendingForm] = useState<GithubTrendingForm>({
+    ...DEFAULT_GITHUB_TRENDING_FORM,
+  });
+  const [githubTrendingConfig, setGithubTrendingConfig] = useState<GithubTrendingConfig | null>(null);
+  const [claudeCliTest, setClaudeCliTest] = useState<ClaudeCliTestResult | null>(null);
+  const [githubTrendingError, setGithubTrendingError] = useState<string | null>(null);
+  const [testingClaudeCli, setTestingClaudeCli] = useState(false);
+  const [applyingGithubTrending, setApplyingGithubTrending] = useState(false);
 
   // macOS 权限状态（设置页手动授权入口，持续轮询以反映用户在系统设置的变更）
   const [tWelcome] = useTranslation('welcome');
@@ -316,10 +361,11 @@ export function Settings() {
 
     async function loadConfig() {
       try {
-        const [config, version, cloudSyncConfig] = await Promise.all([
+        const [config, version, cloudSyncConfig, githubTrendingLoaded] = await Promise.all([
           configApi.get(),
           configApi.version(),
           configApi.getCloudSyncConfig(),
+          githubTrendingApi.getConfig(),
         ]);
         if (cancelled) return;
 
@@ -340,6 +386,9 @@ export function Settings() {
         // 云端同步：初始化已应用配置与受控表单值
         setCloudSync(cloudSyncConfig);
         setCloudSyncForm(cloudSyncConfigToForm(cloudSyncConfig));
+        // GitHub Trending：初始化已应用配置与受控表单值
+        setGithubTrendingConfig(githubTrendingLoaded);
+        setGithubTrendingForm(githubTrendingConfigToForm(githubTrendingLoaded));
       } catch (err) {
         if (cancelled) return;
         setLoadError(err instanceof Error ? err.message : t('error.loadConfigFailed'));
@@ -509,6 +558,57 @@ export function Settings() {
     }
   };
 
+  /**
+   * 更新 GitHub Trending 表单字段
+   */
+  const patchGithubTrendingForm = useCallback((partial: Partial<GithubTrendingForm>) => {
+    setGithubTrendingForm((prev) => ({ ...prev, ...partial }));
+  }, []);
+
+  /**
+   * GitHub Trending「应用配置」：保存 Claude CLI 路径、模型、缓存与预算设置
+   */
+  const handleApplyGithubTrending = async () => {
+    setApplyingGithubTrending(true);
+    setGithubTrendingError(null);
+    try {
+      const updated = await githubTrendingApi.updateConfig({
+        aiEnabled: githubTrendingForm.aiEnabled,
+        claudeCliPath: githubTrendingForm.claudeCliPath.trim() || 'claude',
+        claudeModel: githubTrendingForm.claudeModel.trim() || 'sonnet',
+        cacheTtlHours: githubTrendingForm.cacheTtlHours,
+        maxBudgetUsd: githubTrendingForm.maxBudgetUsd,
+      });
+      setGithubTrendingConfig(updated);
+      setGithubTrendingForm(githubTrendingConfigToForm(updated));
+    } catch (err) {
+      setGithubTrendingError(err instanceof Error ? err.message : t('githubTrending.applyFailed'));
+    } finally {
+      setApplyingGithubTrending(false);
+    }
+  };
+
+  /**
+   * GitHub Trending「测试 Claude CLI」：只跑 --version，不触发 AI 生成
+   */
+  const handleTestClaudeCli = async () => {
+    setTestingClaudeCli(true);
+    setGithubTrendingError(null);
+    setClaudeCliTest(null);
+    try {
+      const result = await githubTrendingApi.testClaudeCli(githubTrendingForm.claudeCliPath);
+      setClaudeCliTest(result);
+    } catch (err) {
+      setClaudeCliTest({
+        ok: false,
+        version: null,
+        error: err instanceof Error ? err.message : t('githubTrending.testFailed', { error: '' }).trim(),
+      });
+    } finally {
+      setTestingClaudeCli(false);
+    }
+  };
+
   // 加载状态
   if (loading) {
     return (
@@ -532,7 +632,7 @@ export function Settings() {
           <header className={styles.header}>
             <span className={styles.eyebrow}>PREFERENCES</span>
             <h1 className={styles.title}>{t('settings:title')}</h1>
-            <p className={styles.lead} style={{ color: 'var(--color-danger)' }}>
+            <p className={styles.lead} style={{ color: 'var(--danger)' }}>
               {t('settings:loadFailed', { error: loadError })}
             </p>
           </header>
@@ -818,7 +918,7 @@ export function Settings() {
             {testResult ? (
               <span
                 className={styles.aboutHint}
-                style={testResult.ok ? {} : { color: 'var(--color-danger)' }}
+                style={testResult.ok ? {} : { color: 'var(--danger)' }}
               >
                 <InfoIcon size={14} />
                 <span>
@@ -840,7 +940,7 @@ export function Settings() {
                 <span className={styles.metaKey}>{t('settings:cloudSync.lastSync')}</span>
                 <span
                   className={styles.metaValue}
-                  style={syncResult.ok ? {} : { color: 'var(--color-danger)' }}
+                  style={syncResult.ok ? {} : { color: 'var(--danger)' }}
                 >
                   {syncResult.ok
                     ? t('settings:cloudSync.syncSuccess', {
@@ -859,6 +959,180 @@ export function Settings() {
             {/* 应用配置 / 同步失败错误提示 */}
             {cloudSyncError ? (
               <span className={styles.updateError}>{cloudSyncError}</span>
+            ) : null}
+          </Card.Body>
+        </Card>
+
+        {/* Card: GitHub Trending / Claude 解说 */}
+        <Card variant="flat" padding="md">
+          <Card.Header>
+            <h2 className={styles.sectionTitle}>{t('settings:githubTrending.title')}</h2>
+          </Card.Header>
+          <Card.Body padding="md">
+            <p className={styles.helper}>{t('settings:githubTrending.subtitle')}</p>
+
+            <div className={styles.toggleList}>
+              <button
+                type="button"
+                className={styles.toggleRow}
+                onClick={() =>
+                  patchGithubTrendingForm({ aiEnabled: !githubTrendingForm.aiEnabled })
+                }
+                role="switch"
+                aria-checked={githubTrendingForm.aiEnabled}
+                aria-label={t('settings:githubTrending.aiEnabled.label')}
+              >
+                <div className={styles.toggleText}>
+                  <span className={styles.toggleLabel}>
+                    {t('settings:githubTrending.aiEnabled.label')}
+                  </span>
+                  <span className={styles.toggleHelper}>
+                    {t('settings:githubTrending.aiEnabled.helper')}
+                  </span>
+                </div>
+                <span className={styles.toggleState}>
+                  {githubTrendingForm.aiEnabled ? (
+                    <Pill tone="success" dot>
+                      <CheckIcon size={12} />
+                      {t('settings:sync.enabled')}
+                    </Pill>
+                  ) : (
+                    <Pill tone="neutral" dot>
+                      <XIcon size={12} />
+                      {t('settings:sync.disabled')}
+                    </Pill>
+                  )}
+                </span>
+              </button>
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="settings-github-claude-path">
+                {t('settings:githubTrending.claudeCliPath.label')}
+              </label>
+              <Input
+                id="settings-github-claude-path"
+                type="text"
+                value={githubTrendingForm.claudeCliPath}
+                onChange={(e) => patchGithubTrendingForm({ claudeCliPath: e.target.value })}
+                mono
+              />
+              <p className={styles.helper}>{t('settings:githubTrending.claudeCliPath.helper')}</p>
+            </div>
+
+            <div className={styles.field}>
+              <label className={styles.label} htmlFor="settings-github-claude-model">
+                {t('settings:githubTrending.claudeModel.label')}
+              </label>
+              <Input
+                id="settings-github-claude-model"
+                type="text"
+                value={githubTrendingForm.claudeModel}
+                onChange={(e) => patchGithubTrendingForm({ claudeModel: e.target.value })}
+                mono
+              />
+              <p className={styles.helper}>{t('settings:githubTrending.claudeModel.helper')}</p>
+            </div>
+
+            <div className={styles.twoColumnFields}>
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="settings-github-cache-ttl">
+                  {t('settings:githubTrending.cacheTtlHours.label')}
+                </label>
+                <Input
+                  id="settings-github-cache-ttl"
+                  type="number"
+                  value={githubTrendingForm.cacheTtlHours}
+                  onChange={(e) =>
+                    patchGithubTrendingForm({ cacheTtlHours: Number(e.target.value) || 24 })
+                  }
+                  min={1}
+                  max={168}
+                  mono
+                />
+                <p className={styles.helper}>{t('settings:githubTrending.cacheTtlHours.helper')}</p>
+              </div>
+
+              <div className={styles.field}>
+                <label className={styles.label} htmlFor="settings-github-budget">
+                  {t('settings:githubTrending.maxBudgetUsd.label')}
+                </label>
+                <Input
+                  id="settings-github-budget"
+                  type="number"
+                  value={githubTrendingForm.maxBudgetUsd}
+                  onChange={(e) =>
+                    patchGithubTrendingForm({ maxBudgetUsd: Number(e.target.value) || 0.5 })
+                  }
+                  min={0.01}
+                  step={0.01}
+                  mono
+                />
+                <p className={styles.helper}>{t('settings:githubTrending.maxBudgetUsd.helper')}</p>
+              </div>
+            </div>
+
+            {githubTrendingConfig ? (
+              <div className={styles.metaRow}>
+                <span className={styles.metaKey}>
+                  {t('settings:githubTrending.appliedConfig')}
+                </span>
+                <span className={styles.metaValue}>
+                  {githubTrendingConfig.aiEnabled
+                    ? t('settings:sync.enabled')
+                    : t('settings:sync.disabled')}
+                  {' · '}
+                  {githubTrendingConfig.claudeCliPath || 'claude'}
+                  {' · '}
+                  {githubTrendingConfig.claudeModel || 'sonnet'}
+                </span>
+              </div>
+            ) : null}
+
+            <div className={styles.aboutActions}>
+              <Button
+                variant="secondary"
+                size="md"
+                icon={<InfoIcon />}
+                onClick={handleTestClaudeCli}
+                disabled={testingClaudeCli}
+              >
+                {testingClaudeCli
+                  ? t('settings:githubTrending.testing')
+                  : t('settings:githubTrending.testCli')}
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleApplyGithubTrending}
+                disabled={applyingGithubTrending}
+              >
+                {applyingGithubTrending
+                  ? t('settings:githubTrending.applying')
+                  : t('settings:githubTrending.apply')}
+              </Button>
+            </div>
+
+            {claudeCliTest ? (
+              <span
+                className={styles.aboutHint}
+                style={claudeCliTest.ok ? {} : { color: 'var(--danger)' }}
+              >
+                <InfoIcon size={14} />
+                <span>
+                  {claudeCliTest.ok
+                    ? t('settings:githubTrending.testOk', {
+                        version: claudeCliTest.version ?? '—',
+                      })
+                    : t('settings:githubTrending.testFailed', {
+                        error: claudeCliTest.error ?? '',
+                      })}
+                </span>
+              </span>
+            ) : null}
+
+            {githubTrendingError ? (
+              <span className={styles.updateError}>{githubTrendingError}</span>
             ) : null}
           </Card.Body>
         </Card>

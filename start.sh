@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Claude Partner 一键启动脚本
+# cc-partner 一键启动脚本
 #
 # 用法:
 #   ./start.sh           开发模式(默认):Tauri + Vite + 热重载
@@ -74,7 +74,7 @@ run_clean() {
 
 show_help() {
   cat <<EOF
-Claude Partner 启动脚本
+cc-partner 启动脚本
 
 用法: ./start.sh [命令]
 

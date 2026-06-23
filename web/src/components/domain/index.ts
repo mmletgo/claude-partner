@@ -33,3 +33,12 @@ export { PermissionStatusBadge } from './PermissionStatusBadge';
 
 export { CcHistoryCard } from './CcHistoryCard';
 export type { CcHistoryCardProps } from './CcHistoryCard';
+
+export { GithubRepoCard } from './GithubRepoCard';
+export type { GithubRepoCardProps } from './GithubRepoCard';
+
+export { ClaudeAssetRow } from './ClaudeAssetRow';
+export type { ClaudeAssetRowProps } from './ClaudeAssetRow';
+
+export { RemoteAssetPicker, remoteAssetKey } from './RemoteAssetPicker';
+export type { RemoteAssetPickerProps } from './RemoteAssetPicker';

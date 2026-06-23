@@ -65,6 +65,9 @@ struct ClaudeMdPushResp {
     accepted: bool,
 }
 
+/// Claude Code assets inventory 响应体：直接是 DTO 数组。
+type ClaudeAssetsInventoryResp = Vec<crate::claude_code_assets::ClaudeCodeAsset>;
+
 /// 对端 HTTP 客户端，封装 reqwest::Client。
 ///
 /// Business Logic: 所有对端调用复用同一 Client（内部连接池），提升效率。
@@ -216,6 +219,62 @@ impl PeerClient {
             crate::error::AppError::generic(format!("claude_md_push 响应解析失败: {e}"))
         })?;
         Ok(data.accepted)
+    }
+
+    /// 获取对端 Claude Code assets inventory。
+    ///
+    /// Business Logic: 前端从某个局域网设备拉取前，先展示远端可选清单，让用户逐项勾选。
+    ///
+    /// Code Logic: GET `{base_url}/api/claude-code/assets/inventory`，响应为 ClaudeCodeAsset DTO 数组。
+    pub async fn claude_assets_inventory(
+        &self,
+        base_url: &str,
+    ) -> Result<Vec<crate::claude_code_assets::ClaudeCodeAsset>, crate::error::AppError> {
+        let url = format!("{base_url}/api/claude-code/assets/inventory");
+        let resp = self.client.get(&url).send().await.map_err(|e| {
+            crate::error::AppError::generic(format!("assets inventory 请求失败: {e}"))
+        })?;
+        if resp.status().as_u16() != 200 {
+            return Err(crate::error::AppError::generic(format!(
+                "assets inventory 失败: HTTP {}",
+                resp.status()
+            )));
+        }
+        resp.json::<ClaudeAssetsInventoryResp>().await.map_err(|e| {
+            crate::error::AppError::generic(format!("assets inventory 响应解析失败: {e}"))
+        })
+    }
+
+    /// 请求对端按 selectors 生成 Claude Code assets bundle。
+    ///
+    /// Business Logic: 只下载用户勾选的 assets，避免全量拉取覆盖不想要的本机配置。
+    ///
+    /// Code Logic: POST selectors 到 `/api/claude-code/assets/bundle`，返回 zip 原始字节。
+    pub async fn claude_assets_bundle(
+        &self,
+        base_url: &str,
+        items: &[crate::claude_code_assets::ClaudeCodeAssetSelector],
+    ) -> Result<Vec<u8>, crate::error::AppError> {
+        let url = format!("{base_url}/api/claude-code/assets/bundle");
+        let body = serde_json::json!({ "items": items });
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| crate::error::AppError::generic(format!("assets bundle 请求失败: {e}")))?;
+        if resp.status().as_u16() != 200 {
+            return Err(crate::error::AppError::generic(format!(
+                "assets bundle 失败: HTTP {}",
+                resp.status()
+            )));
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| crate::error::AppError::generic(format!("assets bundle 读取失败: {e}")))?;
+        Ok(bytes.to_vec())
     }
 
     /// 文件传输初始化：向对端发送文件元数据，获取 accepted 与 resume_offset。

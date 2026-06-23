@@ -1,13 +1,13 @@
 //! net/discovery.rs — mDNS 设备发现（mdns-sd）
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     P2P 局域网协作需要零配置自动发现同一网络中的其他 Claude Partner 实例，
+//!     P2P 局域网协作需要零配置自动发现同一网络中的其他 cc-partner 实例，
 //!     无需用户手动输入 IP/端口。通过 mDNS（multicast DNS）协议注册本机服务并
 //!     浏览对端服务。对照 Python `network/discovery.py`（zeroconf 实现）。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - `start_discovery`：创建 ServiceDaemon → 注册本机服务
-//!       （service type `_claude-partner._tcp.local.`，TXT 含 device_id/device_name，
+//!       （service type `_cc-partner._tcp.local.`，TXT 含 device_id/device_name，
 //!       SRV record 的 port 为 axum 实际监听端口）→ spawn 后台任务消费 browse 事件流
 //!       更新 AppState 的 devices 表。
 //!     - `stop_discovery`：shutdown daemon，清空 devices 表。
@@ -25,9 +25,9 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use tauri::async_runtime;
 
-/// TXT 记录 key：设备 ID（与 Python `discovery.py` 完全一致）。
+/// TXT 记录 key：设备 ID。
 const TXT_KEY_DEVICE_ID: &str = "device_id";
-/// TXT 记录 key：设备名（与 Python `discovery.py` 完全一致）。
+/// TXT 记录 key：设备名。
 const TXT_KEY_DEVICE_NAME: &str = "device_name";
 
 /// 启动 mDNS 发现：注册本机服务 + 后台消费 browse 事件流。
@@ -56,16 +56,16 @@ pub async fn start_discovery(state: &AppState, port: u16) -> Result<(), String> 
     // mdns-sd 仍会通过 SRV/TXT 宣告，对端可经 hostname 解析（部分环境仍可达）。
     let local_ip = local_lan_ip();
 
-    // 构造 TXT 记录（与 Python discovery.py 字段命名完全一致：device_id、device_name）
+    // 构造 TXT 记录：device_id、device_name。
     let mut properties = HashMap::new();
     properties.insert(TXT_KEY_DEVICE_ID.to_string(), device_id.clone());
     properties.insert(TXT_KEY_DEVICE_NAME.to_string(), device_name.clone());
 
-    // host_name 对照 Python server_name：用 device_id 专用主机名，避免系统 hostname 解析到
+    // host_name 使用 device_id 专用主机名，避免系统 hostname 解析到
     // 多个 IP（含 VPN/Docker 虚拟接口）。
-    let host_name = format!("cp-{device_id}.local.");
+    let host_name = format!("cc-{device_id}.local.");
 
-    // 服务实例名用 device_id（对照 Python name=f"{device_id}.{SERVICE_TYPE}"，my_name 不含 type 后缀）
+    // 服务实例名用 device_id，my_name 不含 type 后缀。
     let service_info = match &local_ip {
         Some(ip) => ServiceInfo::new(SERVICE_TYPE, &device_id, &host_name, *ip, port, properties),
         None => ServiceInfo::new(SERVICE_TYPE, &device_id, &host_name, "", port, properties)
@@ -208,7 +208,7 @@ fn handle_resolved(state: &AppState, info: ServiceInfo, my_device_id: &str) {
 /// Business Logic: 对端下线（注销服务或超时）时移除其条目。
 /// Code Logic: fullname 格式为 `{device_id}.{SERVICE_TYPE}`，去掉 type 后缀得到 device_id。
 fn handle_removed(state: &AppState, fullname: &str, my_device_id: &str) {
-    // fullname 形如 "{device_id}._claude-partner._tcp.local."，去掉 ".{SERVICE_TYPE}" 后缀
+    // fullname 形如 "{device_id}._cc-partner._tcp.local."，去掉 ".{SERVICE_TYPE}" 后缀
     let suffix = format!(".{SERVICE_TYPE}");
     let device_id = fullname.strip_suffix(&suffix).unwrap_or(fullname);
 

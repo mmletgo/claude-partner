@@ -1,10 +1,10 @@
-# Claude Partner — 项目开发指南
+# cc-partner — 项目开发指南
 
 > 面向 AI Agent / 新加入开发者的项目说明。修改代码前请先通读本文档。
 
 ## 1. 项目概述
 
-**Claude Partner** 是一款跨平台局域网协作桌面应用（macOS / Windows / Ubuntu），核心功能：
+**cc-partner** 是一款跨平台局域网协作桌面应用（macOS / Windows / Ubuntu），核心功能：
 
 - **局域网文件传输** — 任意大小分块传输，支持断点续传
 - **区域截图** — 框选截图保存到剪贴板，可直接粘贴到 Claude Code
@@ -23,7 +23,7 @@
 ## 2. 目录结构
 
 ```
-claude-partner/
+cc-partner/
 ├── web/                          # 前端子项目（独立 npm 工程）
 │   ├── src/
 │   │   ├── main.tsx              # React 入口
@@ -52,6 +52,7 @@ claude-partner/
 │   │   │       ├── PromptCard/
 │   │   │       ├── DeviceCard/
 │   │   │       ├── TransferItem/
+│   │   │       ├── GithubRepoCard/
 │   │   │       └── PermissionCard/
 │   │   ├── pages/                # 页面（每个一个文件夹）
 │   │   │   ├── Home/             # 01-main.html
@@ -241,6 +242,9 @@ function Button({ prompt, onDelete }) { /* ❌ prompt 是业务数据 */ }
 | DeviceCard | device, onClick | 设备卡片 |
 | TransferItem | task, onPause, onCancel, onRetry | 传输项 |
 | PermissionCard | icon, title, description, granted | 权限卡片 |
+| GithubRepoCard | repo, language, onOpen | GitHub 周热门项目卡片 |
+| ClaudeAssetRow | asset, onToggle, onRemove, onSelect | Claude Code 资产行 |
+| RemoteAssetPicker | assets, selectedKeys, kind, search, onSelectMany | 局域网远端资产选择器 |
 
 ## 5. 开发规范
 
@@ -395,6 +399,7 @@ Tauri 自动打包三平台本平台产物（macOS→dmg/app、Windows→nsis/ms
 | check_permissions / request_permission | macOS 权限检查与申请（屏幕录制 / 输入监控） |
 | check_update / download_update / get_download_status / cancel_download / install_update | 自动更新 5 命令 |
 | start_region_capture / get_display_snapshot / crop_and_copy / cancel_region_capture | 区域截图 |
+| list_github_trending_repos / get_github_trending_config / update_github_trending_config / test_claude_cli | GitHub 周热门项目 + Claude CLI 双语解说配置 |
 
 ### 8.3 P2P HTTP 端点（对端调用，由 `src-tauri/src/net/routes/` 注册）
 

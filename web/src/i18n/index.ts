@@ -22,6 +22,7 @@ import enTransfer from './locales/en/transfer.json';
 import enDevices from './locales/en/devices.json';
 import enScratchpad from './locales/en/scratchpad.json';
 import enClaudeMd from './locales/en/claudeMd.json';
+import enClaudeCodeAssets from './locales/en/claudeCodeAssets.json';
 import enWelcome from './locales/en/welcome.json';
 import enSettings from './locales/en/settings.json';
 import enCcHistory from './locales/en/ccHistory.json';
@@ -36,6 +37,7 @@ import zhTransfer from './locales/zh/transfer.json';
 import zhDevices from './locales/zh/devices.json';
 import zhScratchpad from './locales/zh/scratchpad.json';
 import zhClaudeMd from './locales/zh/claudeMd.json';
+import zhClaudeCodeAssets from './locales/zh/claudeCodeAssets.json';
 import zhWelcome from './locales/zh/welcome.json';
 import zhSettings from './locales/zh/settings.json';
 import zhCcHistory from './locales/zh/ccHistory.json';
@@ -74,6 +76,7 @@ export const resources = {
     devices: enDevices,
     scratchpad: enScratchpad,
     claudeMd: enClaudeMd,
+    claudeCodeAssets: enClaudeCodeAssets,
     welcome: enWelcome,
     settings: enSettings,
     ccHistory: enCcHistory,
@@ -89,6 +92,7 @@ export const resources = {
     devices: zhDevices,
     scratchpad: zhScratchpad,
     claudeMd: zhClaudeMd,
+    claudeCodeAssets: zhClaudeCodeAssets,
     welcome: zhWelcome,
     settings: zhSettings,
     ccHistory: zhCcHistory,

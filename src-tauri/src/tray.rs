@@ -56,7 +56,7 @@ pub fn build_tray(app: &AppHandle) -> Result<(), AppError> {
         )
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("Claude Partner")
+        .tooltip("cc-partner")
         .on_menu_event(|app, event| match event.id().as_ref() {
             MENU_SHOW => show_main_window(app),
             MENU_SCREENSHOT => {

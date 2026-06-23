@@ -12,6 +12,7 @@ pub mod claude_md;
 pub mod cloud_sync;
 pub mod config;
 pub mod devices;
+pub mod github_trending;
 pub mod health;
 pub mod permissions;
 pub mod prompts;

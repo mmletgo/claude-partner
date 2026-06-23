@@ -2,7 +2,7 @@
  * Prompts 页面 - Prompt 库管理
  *
  * Business Logic（为什么需要这个页面）:
- *   Prompt 是 Claude Partner 的核心资产之一：用户在日常工作中沉淀的指令模板。
+ *   Prompt 是 cc-partner 的核心资产之一：用户在日常工作中沉淀的指令模板。
  *   该页面是 /prompts 路由下的主视图，集中提供：搜索 / 标签筛选 / 同步 / 新建 / 卡片浏览 / inline 编辑 / 删除。
  *   同时让用户一眼看到自己收藏与最近使用的 Prompt。
  *

@@ -101,6 +101,21 @@
   flex: 1 1 auto;
 }
 
+.twoColumnFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
+}
+
+.twoColumnFields .field {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: none;
+}
+
 /* ── 快捷键 ── */
 .shortcutList {
   display: flex;
@@ -178,6 +193,12 @@
 
 .toggleRow:last-child {
   border-bottom: none;
+}
+
+.toggleList + .field {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
 }
 
 .toggleText {
@@ -314,7 +335,7 @@
 
 .updateError {
   font-size: var(--text-sm);
-  color: var(--color-danger);
+  color: var(--danger);
 }
 
 /* ── 底部按钮组 ── */
@@ -360,4 +381,25 @@
   display: flex;
   align-items: center;
   gap: var(--space-3);
+}
+
+@media (max-width: 680px) {
+  .inputRow,
+  .aboutActions,
+  .footer,
+  .footerActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .shortcutRow,
+  .twoColumnFields {
+    grid-template-columns: 1fr;
+  }
+
+  .metaRow,
+  .toggleRow {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }

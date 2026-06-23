@@ -2,7 +2,7 @@
  * AppShell（整个应用外壳）
  *
  * Business Logic（为什么需要这个组件）:
- *   Claude Partner 是一个三端（macOS / Windows / Linux）桌面工具，
+ *   cc-partner 是一个三端（macOS / Windows / Linux）桌面工具，
  *   Web 端需要提供侧边导航 + 主内容区的基本布局骨架，
  *   窗口标题栏由 PyQt6 原生提供，无需 Web 端自绘。
  *   侧边栏 footer 区域集中展示版本号和主题切换。
@@ -24,6 +24,7 @@ import {
   HistoryIcon,
   ScratchpadIcon,
   ClaudeMdIcon,
+  TerminalIcon,
   DevicesIcon,
   SettingsIcon,
   HealthIcon,
@@ -50,13 +51,14 @@ export function AppShell({ children }: AppShellProps) {
   // 传入命名空间数组,让 react-i18next v17 的 t() 类型校验 ns:key 形式
   // (无参时 t() 只接受 defaultNS 即 common 的扁平 key,'nav:*' 会类型报错)
   const { t } = useTranslation(['common', 'nav']);
+  const appName = t('common:app.name');
   return (
     <div className={styles.layout}>
       <Sidebar
         footer={
           <div className={styles.footer}>
             <span className={styles.footerVersion}>v{version ?? '—'}</span>
-            <span>Claude Partner</span>
+            <span>{appName}</span>
             <div className={styles.footerToggle}>
               <LanguageSwitcher />
               <ThemeToggle />
@@ -66,9 +68,9 @@ export function AppShell({ children }: AppShellProps) {
       >
         <div className={styles.logo}>
           <span className={styles.logoMark} aria-hidden="true">
-            CP
+            cc
           </span>
-          <span className={styles.logoText}>Claude Partner</span>
+          <span className={styles.logoText}>{appName}</span>
         </div>
         <nav className={styles.navList} aria-label="primary">
           <NavItem to="/" label={t('nav:home')} icon={<HomeIcon />} />
@@ -77,6 +79,7 @@ export function AppShell({ children }: AppShellProps) {
           <NavItem to="/cc-history" label={t('nav:ccHistory')} icon={<HistoryIcon />} />
           <NavItem to="/scratchpad" label={t('nav:scratchpad')} icon={<ScratchpadIcon />} />
           <NavItem to="/claude-md" label={t('nav:claudeMd')} icon={<ClaudeMdIcon />} />
+          <NavItem to="/claude-code" label={t('nav:claudeCode')} icon={<TerminalIcon />} />
           <NavItem to="/devices" label={t('nav:devices')} icon={<DevicesIcon />} />
           <NavItem to="/settings" label={t('nav:settings')} icon={<SettingsIcon />} />
           <NavItem to="/health" label={t('nav:health')} icon={<HealthIcon />} />

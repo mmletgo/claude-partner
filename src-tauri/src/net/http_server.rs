@@ -1,7 +1,7 @@
 //! net/http_server.rs — axum HTTP server（供对端调用）
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     每个 Claude Partner 实例既是客户端也是服务端，需监听 HTTP 端口接收对端的
+//!     每个 cc-partner 实例既是客户端也是服务端，需监听 HTTP 端口接收对端的
 //!     同步/传输/健康检查请求。对照 Python `network/server.py`（aiohttp 实现）。
 //!     M3 仅注册 `/api/health`；sync/transfer 路由留待 M4/M5 追加到 Router。
 //!

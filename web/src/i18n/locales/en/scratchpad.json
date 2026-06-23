@@ -1,6 +1,6 @@
 {
   "title": "Scratchpad",
-  "desc": "Jot down quick thoughts—nothing is saved, and it clears automatically when the page closes.",
+  "desc": "Jot down quick thoughts. Content is saved locally and restored when you reopen the app.",
   "copyAll": "Copy all",
   "clear": "Clear",
   "charCount": "{{n}} chars",

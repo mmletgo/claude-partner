@@ -1,5 +1,5 @@
 /**
- * bump-version.mjs — Claude Partner 版本号统一升级脚本（M9 发版流程）
+ * bump-version.mjs — cc-partner 版本号统一升级脚本（M9 发版流程）
  *
  * Business Logic（为什么需要这个脚本）:
  *   发版时需要把应用版本号同步更新到三处文件，避免不同地方版本号不一致导致的

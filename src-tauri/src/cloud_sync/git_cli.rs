@@ -158,19 +158,19 @@ pub async fn clone(git: &Path, url: &str, workdir: &Path) -> Result<(), AppError
 ///
 /// Business Logic: 同步产生的 commit 需有 author。复用一个固定的应用身份，避免依赖
 ///     用户全局 git user.name/user.email 是否已配置（CI/全新机器可能未配）。
-/// Code Logic: `git config --local user.name "Claude Partner"` + `user.email`，30s 超时。
+/// Code Logic: `git config --local user.name "cc-partner"` + `user.email`，30s 超时。
 pub async fn set_local_identity(git: &Path, workdir: &Path) -> Result<(), AppError> {
     run(
         git,
         workdir,
-        &["config", "user.name", "Claude Partner"],
+        &["config", "user.name", "cc-partner"],
         Duration::from_secs(LOCAL_TIMEOUT_SECS),
     )
     .await?;
     run(
         git,
         workdir,
-        &["config", "user.email", "claude-partner@local"],
+        &["config", "user.email", "cc-partner@local"],
         Duration::from_secs(LOCAL_TIMEOUT_SECS),
     )
     .await?;

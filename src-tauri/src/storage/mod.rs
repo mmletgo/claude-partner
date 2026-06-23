@@ -1,7 +1,7 @@
 //! storage — SQLite 持久化层
 //!
 //! Business Logic: 封装所有数据库访问，单连接语义（与 Python aiosqlite 单连接一致），
-//!     原地读写旧 `~/.claude-partner/data.db`。Prompt / 传输历史 / Claude Code 历史 三类仓库。
+//!     原地读写 `~/.cc-partner/data.db`。Prompt / 传输历史 / Claude Code 历史 三类仓库。
 //!
 //! Code Logic: 用 sqlx 0.8 的 SqlitePool（max_connections(1)），
 //!     运行期 `sqlx::query`（非宏）规避编译期 DATABASE_URL 要求。

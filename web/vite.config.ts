@@ -6,7 +6,7 @@ import path from 'path';
  * Vite 配置（Tauri 版本）
  *
  * 迁移到 Tauri 后前端不再有任何本地 HTTP 调用：全部走 invoke() IPC，
- * 因此删除了 dynamicApiProxy 插件与读取 ~/.claude-partner/backend.port 的逻辑。
+ * 因此删除了 dynamicApiProxy 插件与读取 ~/.cc-partner/backend.port 的逻辑。
  */
 export default defineConfig({
   plugins: [react()],

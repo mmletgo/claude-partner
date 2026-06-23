@@ -91,7 +91,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # updater 签名私钥（空密码，无需 TAURI_SIGNING_PRIVATE_KEY_PASSWORD）。
-          # 需把 ~/.tauri/claude-partner.updater.key 的内容配到 repo secret
+          # 需把 ~/.tauri/cc-partner.updater.key 的内容配到 repo secret
           # TAURI_SIGNING_PRIVATE_KEY。tauri-action 检测到该 env 即对安装包签名，
           # 并把签名信息写进 latest.json 供 updater 校验。未配则不签名、latest.json 无 signature。
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}

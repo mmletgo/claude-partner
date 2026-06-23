@@ -1,8 +1,8 @@
-# Claude Partner - 产品需求文档 (PRD)
+# cc-partner - 产品需求文档 (PRD)
 
 ## 1. 产品概述
 
-Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计用于 Claude Code 用户在局域网环境下的多设备协作。
+cc-partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计用于 Claude Code 用户在局域网环境下的多设备协作。
 
 ### 1.1 目标用户
 使用 Claude Code 进行开发的程序员，拥有多台局域网设备。
@@ -56,7 +56,7 @@ Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计
 
 ### 2.4 设备自动发现与互联
 
-**描述**：局域网内的 Claude Partner 实例自动发现彼此并建立连接。
+**描述**：局域网内的 cc-partner 实例自动发现彼此并建立连接。
 
 **功能点**：
 - 启动时自动注册 mDNS 服务
@@ -174,7 +174,7 @@ Claude Partner 是一款支持 Mac/Windows/Ubuntu 三端的桌面工具，设计
 ### 4.3 网络协议
 
 #### mDNS 服务
-- 类型：`_claude-partner._tcp.local.`
+- 类型：`_cc-partner._tcp.local.`
 - TXT 记录：device_id, device_name
 
 #### HTTP API

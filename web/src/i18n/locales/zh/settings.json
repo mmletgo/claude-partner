@@ -42,6 +42,23 @@
     "applyFailed": "应用配置失败",
     "appliedConfig": "已应用配置"
   },
+  "githubTrending": {
+    "title": "GitHub Trending / Claude 解说",
+    "subtitle": "首页每天抓取一次 GitHub 周热门项目。启用后会调用本地 Claude Code CLI 批量生成中英文解说，并缓存到本地数据库。",
+    "aiEnabled": { "label": "启用 Claude 解说", "helper": "关闭后首页仍展示 GitHub 原始简介，但不调用 Claude CLI。" },
+    "claudeCliPath": { "label": "Claude CLI 路径", "helper": "可填写 claude，或完整路径如 /home/you/.local/bin/claude。" },
+    "claudeModel": { "label": "模型", "helper": "Claude Code CLI 的模型别名或完整模型名，默认 sonnet。" },
+    "cacheTtlHours": { "label": "缓存时长（小时）", "helper": "默认 24 小时；同一 UTC 日期内命中缓存时不会重新抓取或生成。" },
+    "maxBudgetUsd": { "label": "单次预算上限（USD）", "helper": "传给 claude --max-budget-usd，默认 0.50。" },
+    "appliedConfig": "已应用配置",
+    "testCli": "测试 Claude CLI",
+    "testing": "测试中…",
+    "apply": "应用配置",
+    "applying": "应用中…",
+    "testOk": "Claude CLI 可用：{{version}}",
+    "testFailed": "Claude CLI 测试失败：{{error}}",
+    "applyFailed": "应用 GitHub Trending 配置失败"
+  },
   "about": {
     "title": "关于",
     "versionLabel": "版本号",

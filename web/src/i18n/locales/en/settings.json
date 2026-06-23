@@ -42,6 +42,23 @@
     "applyFailed": "Failed to apply configuration",
     "appliedConfig": "Applied config"
   },
+  "githubTrending": {
+    "title": "GitHub Trending / Claude explanations",
+    "subtitle": "The homepage fetches GitHub weekly trending repositories once per day. When enabled, the local Claude Code CLI generates bilingual explanations and caches them locally.",
+    "aiEnabled": { "label": "Enable Claude explanations", "helper": "When off, the homepage still shows GitHub descriptions but does not call Claude CLI." },
+    "claudeCliPath": { "label": "Claude CLI path", "helper": "Use claude, or a full path such as /home/you/.local/bin/claude." },
+    "claudeModel": { "label": "Model", "helper": "Claude Code CLI model alias or full model name. Defaults to sonnet." },
+    "cacheTtlHours": { "label": "Cache TTL (hours)", "helper": "Defaults to 24 hours. Cached UTC-day results do not refetch or regenerate." },
+    "maxBudgetUsd": { "label": "Per-run budget (USD)", "helper": "Passed to claude --max-budget-usd. Defaults to 0.50." },
+    "appliedConfig": "Applied config",
+    "testCli": "Test Claude CLI",
+    "testing": "Testing…",
+    "apply": "Apply",
+    "applying": "Applying…",
+    "testOk": "Claude CLI is available: {{version}}",
+    "testFailed": "Claude CLI test failed: {{error}}",
+    "applyFailed": "Failed to apply GitHub Trending config"
+  },
   "about": {
     "title": "About",
     "versionLabel": "Version",

@@ -98,6 +98,59 @@ export interface TestCloudSyncResult {
   error: string | null;
 }
 
+/**
+ * GitHub 周热门仓库卡片数据（对齐后端 list_github_trending_repos 返回）。
+ */
+export interface GithubTrendingRepo {
+  rank: number;
+  owner: string;
+  name: string;
+  fullName: string;
+  url: string;
+  description: string;
+  language?: string | null;
+  stars: number;
+  forks: number;
+  starsThisWeek: number;
+  explanationZh: string;
+  explanationEn: string;
+}
+
+export type GithubTrendingAiStatus = 'ready' | 'disabled' | 'failed';
+
+/**
+ * GitHub 周热门首页响应。
+ */
+export interface GithubTrendingResponse {
+  repos: GithubTrendingRepo[];
+  fetchedAt: string;
+  expiresAt: string;
+  fromCache: boolean;
+  stale: boolean;
+  aiStatus: GithubTrendingAiStatus;
+  aiError?: string | null;
+}
+
+/**
+ * GitHub Trending / Claude CLI 解说配置。
+ */
+export interface GithubTrendingConfig {
+  aiEnabled: boolean;
+  claudeCliPath: string;
+  claudeModel: string;
+  cacheTtlHours: number;
+  maxBudgetUsd: number;
+}
+
+/**
+ * Claude CLI 可用性测试结果。
+ */
+export interface ClaudeCliTestResult {
+  ok: boolean;
+  version?: string | null;
+  error?: string | null;
+}
+
 export interface VersionInfo {
   version: string;
   buildDate: string;
@@ -234,6 +287,62 @@ export interface OsInfo {
   platform: 'mac' | 'windows' | 'ubuntu';
   /** 原始 OS 字符串 */
   raw: string;
+}
+
+/** Claude Code 资产类型：个人 skills / commands / plugins / user-scope MCP */
+export type ClaudeCodeAssetKind = 'skill' | 'command' | 'plugin' | 'mcp';
+
+/** Claude Code 资产展示 DTO（对齐后端 ClaudeCodeAsset，camelCase）。 */
+export interface ClaudeCodeAsset {
+  kind: ClaudeCodeAssetKind;
+  id: string;
+  name: string;
+  scope: string;
+  enabled: boolean;
+  source: string;
+  version?: string | null;
+  description?: string | null;
+  path?: string | null;
+  sizeBytes?: number | null;
+  updatedAt?: string | null;
+  canEnable: boolean;
+  canUninstall: boolean;
+  canExport: boolean;
+  warnings: string[];
+}
+
+/** Claude Code 资产选择器：局域网拉取只传用户勾选的项。 */
+export interface ClaudeCodeAssetSelector {
+  kind: ClaudeCodeAssetKind;
+  id: string;
+}
+
+/** Claude Code 本地安装来源。 */
+export interface ClaudeCodeInstallSource {
+  kind: ClaudeCodeAssetKind;
+  path?: string | null;
+  name?: string | null;
+  config?: unknown;
+  overwrite: boolean;
+}
+
+/** Claude Code 资产安装/拉取的单项结果。 */
+export interface ClaudeCodeAssetInstallItem {
+  kind: ClaudeCodeAssetKind;
+  id: string;
+  name: string;
+  status: 'installed' | 'skipped' | 'failed' | string;
+  message: string;
+}
+
+/** Claude Code 资产安装/拉取结果。 */
+export interface ClaudeCodeAssetInstallReport {
+  ok: boolean;
+  installed: number;
+  skipped: number;
+  failed: number;
+  note: string;
+  items: ClaudeCodeAssetInstallItem[];
 }
 
 /**

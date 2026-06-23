@@ -1,5 +1,5 @@
 {
-  "app": { "name": "Claude Partner" },
+  "app": { "name": "cc-partner" },
   "action": {
     "copy": "Copy",
     "delete": "Delete",

@@ -1,7 +1,7 @@
 [package]
 name = "app"
 version = "0.5.0"
-description = "A Tauri App"
+description = "cc-partner desktop app"
 authors = ["you"]
 license = ""
 repository = ""
@@ -37,6 +37,8 @@ axum = { version = "0.7", features = ["macros"] }
 tower = "0.5"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 mdns-sd = "0.11"
+# GitHub Trending 首页：解析 github.com/trending HTML（GitHub 无官方 Trending JSON API）
+scraper = "0.27"
 # M5 文件传输：tokio-util 提供 CancellationToken（每块发送前检查取消标志）
 tokio-util = { version = "0.7", features = ["rt"] }
 # M5 文件传输：SHA256 完整性校验（对照 Python hashlib.sha256）
@@ -57,6 +59,7 @@ rdev = "0.5"
 active-win-pos-rs = "0.10"
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-opener = "2"
 # Claude Code Assets: portable LAN bundles + safe directory walking
 zip = { version = "0.6", default-features = false, features = ["deflate"] }
 walkdir = "2"

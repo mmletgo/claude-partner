@@ -2,7 +2,7 @@
  * CLAUDE.md 编辑页
  *
  * Business Logic（为什么需要这个页面）:
- *   用户希望在 Claude Partner 内直接编辑 user 级全局指令文件（~/.claude/CLAUDE.md），
+ *   用户希望在 cc-partner 内直接编辑 user 级全局指令文件（~/.claude/CLAUDE.md），
  *   避免每次手动开编辑器。编辑后保存即可写回磁盘，并能一键推送到局域网设备和 GitHub 云端，
  *   让多台机器共享同一份全局指令。
  *

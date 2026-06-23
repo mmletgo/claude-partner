@@ -14,14 +14,13 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::Response;
 
 /// 返回本机可导出的 Claude Code assets inventory。
-pub async fn assets_inventory() -> Result<Json<Vec<crate::claude_code_assets::ClaudeCodeAsset>>, AppError> {
+pub async fn assets_inventory(
+) -> Result<Json<Vec<crate::claude_code_assets::ClaudeCodeAsset>>, AppError> {
     Ok(Json(claude_code_assets::list_assets().await?))
 }
 
 /// 按 selectors 生成 zip bundle。bundle 中 MCP 配置已脱敏。
-pub async fn assets_bundle(
-    Json(req): Json<AssetsBundleReq>,
-) -> Result<Response<Body>, AppError> {
+pub async fn assets_bundle(Json(req): Json<AssetsBundleReq>) -> Result<Response<Body>, AppError> {
     let bytes = claude_code_assets::build_bundle(req.items).await?;
     let mut resp = Response::new(Body::from(bytes));
     *resp.status_mut() = StatusCode::OK;

@@ -1,7 +1,7 @@
 //! claude_code_assets.rs — Claude Code 本地资产管理与局域网选择性拉取
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     用户已经在 Claude Code 中沉淀了 skills、plugins、MCP 配置。Claude Partner 需要提供一个
+//!     用户已经在 Claude Code 中沉淀了 skills、plugins、MCP 配置。cc-partner 需要提供一个
 //!     图形化入口来查看、启用/禁用、安装/卸载这些个人级资产，并能从局域网其它设备中选择性拉取。
 //!
 //! Code Logic（这个模块做什么）:
@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::io::{Cursor, Read, Seek, Write};
+use std::io::{Cursor, Seek, Write};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 use tokio::process::Command;
@@ -203,15 +203,39 @@ pub async fn set_asset_enabled(
         ClaudeCodeAssetKind::Plugin => {
             let action = if enabled { "enable" } else { "disable" };
             run_claude(&["plugin", action, &id, "--scope", "user"]).await?;
-            Ok(single_report(kind, &id, &id, "installed", "plugin 状态已更新"))
+            Ok(single_report(
+                kind,
+                &id,
+                &id,
+                "installed",
+                "plugin 状态已更新",
+            ))
         }
         ClaudeCodeAssetKind::Skill => {
-            set_tree_enabled(kind, &id, enabled, &claude_skills_dir(), &disabled_skills_dir())?;
-            Ok(single_report(kind, &id, &id, "installed", "skill 状态已更新"))
+            set_tree_enabled(
+                kind,
+                &id,
+                enabled,
+                &claude_skills_dir(),
+                &disabled_skills_dir(),
+            )?;
+            Ok(single_report(
+                kind,
+                &id,
+                &id,
+                "installed",
+                "skill 状态已更新",
+            ))
         }
         ClaudeCodeAssetKind::Command => {
             set_command_enabled(&id, enabled)?;
-            Ok(single_report(kind, &id, &id, "installed", "command 状态已更新"))
+            Ok(single_report(
+                kind,
+                &id,
+                &id,
+                "installed",
+                "command 状态已更新",
+            ))
         }
         ClaudeCodeAssetKind::Mcp => {
             set_mcp_enabled(&id, enabled).await?;
@@ -233,7 +257,7 @@ pub async fn install_asset(
     Ok(report_from_items(vec![item]))
 }
 
-/// 卸载一个本机资产。卸载前会备份到 Claude Partner 自己的备份目录。
+/// 卸载一个本机资产。卸载前会备份到 cc-partner 自己的备份目录。
 pub async fn uninstall_asset(
     kind: ClaudeCodeAssetKind,
     id: String,
@@ -249,7 +273,14 @@ pub async fn uninstall_asset(
             Ok(single_report(kind, &id, &id, "installed", "plugin 已卸载"))
         }
         ClaudeCodeAssetKind::Skill => {
-            remove_tree_with_backup(kind, &id, &[claude_skills_dir().join(&id), disabled_skills_dir().join(&id)])?;
+            remove_tree_with_backup(
+                kind,
+                &id,
+                &[
+                    claude_skills_dir().join(&id),
+                    disabled_skills_dir().join(&id),
+                ],
+            )?;
             Ok(single_report(kind, &id, &id, "installed", "skill 已卸载"))
         }
         ClaudeCodeAssetKind::Command => {
@@ -257,7 +288,10 @@ pub async fn uninstall_asset(
             remove_tree_with_backup(
                 kind,
                 &id,
-                &[claude_commands_dir().join(&file), disabled_commands_dir().join(&file)],
+                &[
+                    claude_commands_dir().join(&file),
+                    disabled_commands_dir().join(&file),
+                ],
             )?;
             Ok(single_report(kind, &id, &id, "installed", "command 已卸载"))
         }
@@ -467,7 +501,7 @@ async fn install_manifest_item(
 
 fn plugin_item_to_asset(item: PluginListItem) -> ClaudeCodeAsset {
     let path = item.install_path.clone().map(PathBuf::from);
-    let manifest = path.as_deref().and_then(read_plugin_manifest).ok();
+    let manifest = path.as_deref().and_then(|p| read_plugin_manifest(p).ok());
     let warnings = manifest
         .as_ref()
         .map(|_| Vec::new())
@@ -502,19 +536,17 @@ async fn list_plugins_from_cli() -> Result<Vec<PluginListItem>, AppError> {
 async fn run_claude(args: &[&str]) -> Result<String, AppError> {
     let mut command = Command::new("claude");
     command.args(args);
-    let output = tokio::time::timeout(
-        Duration::from_secs(CLI_TIMEOUT_SECS),
-        command.output(),
-    )
-    .await
-    .map_err(|_| AppError::generic("Claude Code CLI 执行超时"))?
-    .map_err(|e| AppError::generic(format!("无法执行 claude CLI: {e}")))?;
+    let output = tokio::time::timeout(Duration::from_secs(CLI_TIMEOUT_SECS), command.output())
+        .await
+        .map_err(|_| AppError::generic("Claude Code CLI 执行超时"))?
+        .map_err(|e| AppError::generic(format!("无法执行 claude CLI: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
         let msg = if stderr.is_empty() { stdout } else { stderr };
-        return Err(AppError::generic(format!("claude {} 失败: {msg}", args.join(" "))));
+        let safe_args = args.iter().take(2).copied().collect::<Vec<_>>().join(" ");
+        return Err(AppError::generic(format!("claude {safe_args} 失败: {msg}")));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -566,7 +598,12 @@ fn scan_skill_dir(
             name: front_name.unwrap_or(name),
             scope: "user".to_string(),
             enabled,
-            source: if enabled { "personal-skill" } else { "disabled-skill" }.to_string(),
+            source: if enabled {
+                "personal-skill"
+            } else {
+                "disabled-skill"
+            }
+            .to_string(),
             version: None,
             description,
             path: Some(path.to_string_lossy().to_string()),
@@ -609,7 +646,12 @@ fn scan_command_dir(
             name,
             scope: "user".to_string(),
             enabled,
-            source: if enabled { "personal-command" } else { "disabled-command" }.to_string(),
+            source: if enabled {
+                "personal-command"
+            } else {
+                "disabled-command"
+            }
+            .to_string(),
             version: None,
             description,
             path: Some(path.to_string_lossy().to_string()),
@@ -665,7 +707,9 @@ fn scan_skills_dir_plugins(
             can_enable: true,
             can_uninstall: true,
             can_export: true,
-            warnings: vec!["此 plugin 来自 ~/.claude/skills，未出现在 plugin CLI 列表中".to_string()],
+            warnings: vec![
+                "此 plugin 来自 ~/.claude/skills，未出现在 plugin CLI 列表中".to_string(),
+            ],
         });
     }
     Ok(())
@@ -686,7 +730,12 @@ fn scan_mcp_servers(assets: &mut Vec<ClaudeCodeAsset>) -> Result<(), AppError> {
             name: server.name,
             scope: "user".to_string(),
             enabled: server.enabled,
-            source: if server.enabled { "user-mcp" } else { "disabled-mcp" }.to_string(),
+            source: if server.enabled {
+                "user-mcp"
+            } else {
+                "disabled-mcp"
+            }
+            .to_string(),
             version: None,
             description: describe_mcp(&server.config),
             path: server.path.map(|p| p.to_string_lossy().to_string()),
@@ -704,10 +753,7 @@ fn scan_mcp_servers(assets: &mut Vec<ClaudeCodeAsset>) -> Result<(), AppError> {
 fn read_all_mcp_servers() -> Result<Vec<LocalMcpServer>, AppError> {
     let mut servers = Vec::new();
     let config = read_claude_json()?;
-    if let Some(map) = config
-        .get("mcpServers")
-        .and_then(|v| v.as_object())
-    {
+    if let Some(map) = config.get("mcpServers").and_then(|v| v.as_object()) {
         for (name, value) in map {
             servers.push(LocalMcpServer {
                 name: name.clone(),
@@ -767,9 +813,11 @@ async fn set_mcp_enabled(name: &str, enabled: bool) -> Result<(), AppError> {
         install_mcp_config(name, config, true).await?;
         fs::remove_file(disabled_path)?;
     } else {
-        let config = read_mcp_config(name)?
-            .ok_or_else(|| AppError::not_found("MCP 配置不存在"))?;
+        let config = read_mcp_config(name)?.ok_or_else(|| AppError::not_found("MCP 配置不存在"))?;
         fs::create_dir_all(disabled_mcp_dir())?;
+        if disabled_path.exists() {
+            backup_path(ClaudeCodeAssetKind::Mcp, name, &disabled_path)?;
+        }
         fs::write(&disabled_path, serde_json::to_vec_pretty(&config)?)?;
         run_claude(&["mcp", "remove", name, "--scope", "user"]).await?;
     }
@@ -817,20 +865,34 @@ fn set_command_enabled(id: &str, enabled: bool) -> Result<(), AppError> {
             return Ok(());
         }
         fs::create_dir_all(claude_commands_dir())?;
+        if active.exists() {
+            backup_path(ClaudeCodeAssetKind::Command, id, &active)?;
+            remove_path(&active)?;
+        }
         move_path(&disabled, &active)?;
     } else {
         fs::create_dir_all(disabled_commands_dir())?;
+        if disabled.exists() {
+            backup_path(ClaudeCodeAssetKind::Command, id, &disabled)?;
+            remove_path(&disabled)?;
+        }
         move_path(&active, &disabled)?;
     }
     Ok(())
 }
 
-fn install_skill_from_source(source: &ClaudeCodeInstallSource) -> Result<ClaudeCodeAssetInstallItem, AppError> {
+fn install_skill_from_source(
+    source: &ClaudeCodeInstallSource,
+) -> Result<ClaudeCodeAssetInstallItem, AppError> {
     let path = source_path(source)?;
     let name = source
         .name
         .clone()
-        .or_else(|| path.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            path.file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
         .ok_or_else(|| AppError::generic("缺少 skill 名称"))?;
     install_tree(
         ClaudeCodeAssetKind::Skill,
@@ -841,17 +903,25 @@ fn install_skill_from_source(source: &ClaudeCodeInstallSource) -> Result<ClaudeC
     )
 }
 
-fn install_command_from_source(source: &ClaudeCodeInstallSource) -> Result<ClaudeCodeAssetInstallItem, AppError> {
+fn install_command_from_source(
+    source: &ClaudeCodeInstallSource,
+) -> Result<ClaudeCodeAssetInstallItem, AppError> {
     let path = source_path(source)?;
     let name = source
         .name
         .clone()
-        .or_else(|| path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
         .ok_or_else(|| AppError::generic("缺少 command 名称"))?;
     install_command_file(&name, &path, source.overwrite)
 }
 
-fn install_plugin_from_source(source: &ClaudeCodeInstallSource) -> Result<ClaudeCodeAssetInstallItem, AppError> {
+fn install_plugin_from_source(
+    source: &ClaudeCodeInstallSource,
+) -> Result<ClaudeCodeAssetInstallItem, AppError> {
     let path = source_path(source)?;
     let source_dir = if path.extension().and_then(|s| s.to_str()) == Some("zip") {
         let staging = incoming_dir().join(format!("plugin-{}", Utc::now().timestamp_millis()));
@@ -867,7 +937,12 @@ fn install_plugin_from_source(source: &ClaudeCodeInstallSource) -> Result<Claude
         .name
         .clone()
         .or_else(|| manifest.as_ref().and_then(|m| m.name.clone()))
-        .or_else(|| source_dir.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()))
+        .or_else(|| {
+            source_dir
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+        })
         .ok_or_else(|| AppError::generic("缺少 plugin 名称"))?;
     install_tree(
         ClaudeCodeAssetKind::Plugin,
@@ -878,7 +953,9 @@ fn install_plugin_from_source(source: &ClaudeCodeInstallSource) -> Result<Claude
     )
 }
 
-async fn install_mcp_from_source(source: &ClaudeCodeInstallSource) -> Result<ClaudeCodeAssetInstallItem, AppError> {
+async fn install_mcp_from_source(
+    source: &ClaudeCodeInstallSource,
+) -> Result<ClaudeCodeAssetInstallItem, AppError> {
     let (name, config) = match (&source.name, &source.config, &source.path) {
         (Some(name), Some(config), _) => (name.clone(), config.clone()),
         (_, Some(config), _) => mcp_name_and_config(source.name.as_deref(), config.clone())?,
@@ -965,7 +1042,9 @@ fn install_tree(
         backup_path(kind, name, dst)?;
         remove_path(dst)?;
     }
-    let parent = dst.parent().ok_or_else(|| AppError::generic("目标路径无父目录"))?;
+    let parent = dst
+        .parent()
+        .ok_or_else(|| AppError::generic("目标路径无父目录"))?;
     fs::create_dir_all(parent)?;
     copy_dir_all(src, dst)?;
     Ok(ClaudeCodeAssetInstallItem {
@@ -1156,7 +1235,10 @@ fn first_non_empty_markdown_line(text: &str) -> Option<String> {
 }
 
 fn describe_mcp(config: &Value) -> Option<String> {
-    let typ = config.get("type").and_then(|v| v.as_str()).unwrap_or("stdio");
+    let typ = config
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stdio");
     if let Some(url) = config.get("url").and_then(|v| v.as_str()) {
         Some(format!("{typ} · {url}"))
     } else if let Some(command) = config.get("command").and_then(|v| v.as_str()) {
@@ -1300,7 +1382,7 @@ fn extract_zip_safe(bytes: &[u8], dst: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn is_zip_symlink<R: Read>(file: &zip::read::ZipFile<'_, R>) -> bool {
+fn is_zip_symlink(file: &zip::read::ZipFile<'_>) -> bool {
     file.unix_mode()
         .map(|mode| mode & 0o170000 == 0o120000)
         .unwrap_or(false)
@@ -1417,6 +1499,9 @@ fn validate_asset_name(name: &str) -> Result<(), AppError> {
     if name.trim().is_empty()
         || name.contains('/')
         || name.contains('\\')
+        || name
+            .chars()
+            .any(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
         || name == "."
         || name == ".."
     {
@@ -1541,10 +1626,7 @@ mod tests {
 
     #[test]
     fn path_to_zip_name_rejects_parent_components() {
-        assert_eq!(
-            path_to_zip_name(Path::new("a/b.txt")).unwrap(),
-            "a/b.txt"
-        );
+        assert_eq!(path_to_zip_name(Path::new("a/b.txt")).unwrap(), "a/b.txt");
         assert!(path_to_zip_name(Path::new("../b.txt")).is_err());
     }
 }

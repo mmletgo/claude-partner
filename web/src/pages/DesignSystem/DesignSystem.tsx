@@ -2,7 +2,7 @@
  * DesignSystem 设计系统预览页
  *
  * Business Logic（为什么需要这个页面）:
- *   仅在 dev 模式下可访问，作为 Claude Partner 全部 UI 组件与 design token 的"对照表"。
+ *   仅在 dev 模式下可访问，作为 cc-partner 全部 UI 组件与 design token 的"对照表"。
  *   开发者/设计师打开 /design-system 即可一眼验证：
  *     1. 颜色 / 字体 / 间距 / 圆角 / 阴影 token 是否符合预期
  *     2. 原子组件 (Button/Card/Input/Tag/Pill/StatusDot/ProgressBar) 视觉与交互
@@ -337,7 +337,7 @@ function SectionHeader({ eyebrow, title, desc }: SectionHeaderProps) {
  */
 export function DesignSystem() {
   // hooks 全部放在顶部；本组件无 early-return，但保留风格一致
-  const [inputValue, setInputValue] = useState<string>('claude-partner-7842');
+  const [inputValue, setInputValue] = useState<string>('cc-partner-7842');
   const [searchValue, setSearchValue] = useState<string>('搜索 prompt...');
   const [inputPassword, setInputPassword] = useState<string>('a-very-secret-token');
   // 应用版本号来自后端 __version__（与 AppShell / Settings 同源），用于页头与页脚展示
@@ -362,7 +362,7 @@ export function DesignSystem() {
           <div className={styles.headerText}>
             <h1 className={styles.title}>设计系统</h1>
             <p className={styles.subtitle}>
-              Claude Partner 设计系统 v{version ?? '—'} · 仅开发环境可见
+              cc-partner 设计系统 v{version ?? '—'} · 仅开发环境可见
             </p>
           </div>
           <ThemeToggle className={styles.themeToggle} />
@@ -823,7 +823,7 @@ export function DesignSystem() {
 
           {/* ───────── 11. 页脚 ───────── */}
           <footer className={styles.pageFooter}>
-            <span>Claude Partner Design System v{version ?? '—'}</span>
+            <span>cc-partner Design System v{version ?? '—'}</span>
             <span>{ICON_LIBRARY.length} icons · 15 colors · 10 spacing · 4 radius · 4 shadow</span>
           </footer>
         </main>

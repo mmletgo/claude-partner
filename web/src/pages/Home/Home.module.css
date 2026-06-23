@@ -1,6 +1,5 @@
 /* Home 页面样式
- * 布局：appShell main 区域内一个 max-width: 880px 的垂直居中容器
- * 颜色/间距/圆角/字体 全部走 var(--xxx) token
+ * GitHub 周热门列表页面，颜色/间距/圆角/字体全部走 var(--xxx) token。
  */
 
 .page {
@@ -11,19 +10,18 @@
 }
 
 .container {
-  max-width: 880px;
+  width: min(1040px, 100%);
   margin: 0 auto;
   padding: 0 var(--space-10);
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: var(--space-10);
+  gap: var(--space-6);
 }
 
-/* ── Hero ── */
-.hero {
+.header {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
   gap: var(--space-4);
 }
 
@@ -47,20 +45,34 @@
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.titleRow {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-6);
+}
+
+.titleBlock {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .title {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-5xl);
+  font-size: var(--text-4xl);
   font-weight: var(--weight-medium);
-  line-height: 1.1;
+  line-height: var(--leading-tight);
   letter-spacing: var(--tracking-tight);
   color: var(--fg);
 }
 
 .lede {
   margin: 0;
-  max-width: 720px;
-  font-size: var(--text-xl);
+  max-width: 760px;
+  font-size: var(--text-lg);
   line-height: var(--leading-relaxed);
   color: var(--fg-2);
 }
@@ -68,154 +80,62 @@
 .metaRow {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
   flex-wrap: wrap;
-  margin-top: var(--space-2);
+  gap: var(--space-3);
 }
 
 .metaItem {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  font-size: var(--text-md);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
 }
 
 .metaLabel {
+  color: var(--meta);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
-  letter-spacing: var(--tracking-wide);
+  font-weight: var(--weight-medium);
   text-transform: uppercase;
-  color: var(--meta);
 }
 
 .metaValue {
+  color: var(--fg);
   font-family: var(--font-mono);
-  font-size: var(--text-md);
+  font-size: var(--text-sm);
   font-weight: var(--weight-medium);
-  color: var(--fg);
-  font-variant-numeric: tabular-nums;
 }
 
-.metaDivider {
-  width: 1px;
-  height: 14px;
-  background: var(--border);
-}
-
-/* ── Quick Actions ── */
-.quickActions {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-4);
-}
-
-.qaLink {
-  text-decoration: none;
-  color: inherit;
-  display: block;
-  border-radius: var(--radius-lg);
-  transition: transform var(--motion-fast) var(--ease-standard);
-}
-
-.qaLink:hover {
-  transform: translateY(-1px);
-}
-
-.qaCard {
-  height: 100%;
-  cursor: pointer;
-  border-radius: var(--radius-lg);
-}
-
-.qaCard:hover {
-  background: var(--surface-warm);
-}
-
-.qaBody {
+.notice {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-  height: 100%;
-}
-
-.qaIcon {
-  width: 36px;
-  height: 36px;
-  border-radius: 50%;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--fg-2);
-}
-
-.qaTitle {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
-  color: var(--fg);
-  letter-spacing: var(--tracking-tight);
-}
-
-.qaDesc {
-  margin: 0;
-  font-size: var(--text-base);
-  line-height: var(--leading-relaxed);
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
   color: var(--muted);
-  margin-top: auto;
-}
-
-/* ── 最近的 Prompts ── */
-.recent {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-5);
-}
-
-.recentHead {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-4);
-}
-
-.recentTitle {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--text-2xl);
-  font-weight: var(--weight-medium);
-  letter-spacing: var(--tracking-tight);
-  color: var(--fg);
-}
-
-.viewAll {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
   font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  color: var(--fg-2);
-  text-decoration: none;
-  padding: var(--space-1) var(--space-2);
-  border-radius: var(--radius-sm);
-  transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
+  line-height: var(--leading-relaxed);
 }
 
-.viewAll:hover {
-  background: var(--surface-warm);
+.notice svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
   color: var(--accent);
 }
 
 .list {
   display: flex;
   flex-direction: column;
-  gap: var(--space-3);
+  gap: var(--space-4);
 }
 
 .skeleton {
-  height: 120px;
+  height: 190px;
   border-radius: var(--radius-lg);
   background: var(--surface);
   border: 1px solid var(--border-soft);
@@ -236,10 +156,11 @@
 
 .empty {
   display: flex;
+  min-height: 240px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: var(--space-2);
+  gap: var(--space-3);
   padding: var(--space-12) var(--space-6);
   background: var(--surface);
   border: 1px dashed var(--border);
@@ -250,33 +171,33 @@
 .emptyTitle {
   margin: 0;
   font-family: var(--font-display);
-  font-size: var(--text-lg);
+  font-size: var(--text-xl);
   font-weight: var(--weight-medium);
   color: var(--fg);
 }
 
 .emptyDesc {
   margin: 0;
+  max-width: 560px;
   font-size: var(--text-md);
   color: var(--muted);
   line-height: var(--leading-relaxed);
 }
 
-.emptyCta {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  margin-top: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  background: var(--accent);
-  color: var(--accent-on);
-  border-radius: var(--radius-md);
-  font-size: var(--text-md);
-  font-weight: var(--weight-medium);
-  text-decoration: none;
-  transition: background var(--motion-fast) var(--ease-standard);
-}
+@media (max-width: 760px) {
+  .page {
+    padding-top: var(--space-6);
+  }
 
-.emptyCta:hover {
-  background: var(--accent-hover);
+  .container {
+    padding: 0 var(--space-4);
+  }
+
+  .titleRow {
+    flex-direction: column;
+  }
+
+  .title {
+    font-size: var(--text-3xl);
+  }
 }

@@ -3,7 +3,8 @@
 //! Business Logic（为什么需要这个模块）:
 //!     应用需在多次运行间保持一致的设备标识（device_id）和用户偏好（设备名、端口、
 //!     接收目录、快捷键）。首次运行要生成默认配置并持久化。此模块对照 Python
-//!     `config.py`，直接读写旧的 `~/.claude-partner/config.json`，保证旧用户配置不丢失。
+//!     `config.py`，直接读写 `~/.cc-partner/config.json`，并在首次更名后从旧
+//!     `~/.claude-partner` 目录迁移，保证旧用户配置不丢失。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - 用 `dirs` crate 定位 home 目录，拼接配置文件路径。
@@ -17,32 +18,48 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-/// 配置文件和数据文件的根目录：`~/.claude-partner`。
+const CONFIG_DIR_NAME: &str = ".cc-partner";
+const LEGACY_CONFIG_DIR_NAME: &str = ".claude-partner";
+const APP_NAME: &str = "cc-partner";
+
+/// 配置文件和数据文件的根目录：`~/.cc-partner`。
 ///
-/// pub 供 cloud_sync 等模块复用同一根目录派生子路径（如 `~/.claude-partner/cloud-sync/`）。
+/// pub 供 cloud_sync 等模块复用同一根目录派生子路径（如 `~/.cc-partner/cloud-sync/`）。
 pub fn config_dir() -> PathBuf {
-    // dirs::config_dir 在各平台指向用户配置目录；但 Python 用的是 home/.claude-partner
-    // 为与旧数据兼容，这里统一用 home_dir 拼接，与 Python 完全一致
-    dirs::home_dir()
-        .expect("无法定位用户 home 目录，环境异常")
-        .join(".claude-partner")
+    // dirs::config_dir 在各平台指向用户配置目录；历史 Python 版用的是 home 下的隐藏目录。
+    // 更名后优先使用 ~/.cc-partner；若新目录不存在但旧 ~/.claude-partner 存在，首次启动时重命名迁移。
+    let home = dirs::home_dir().expect("无法定位用户 home 目录，环境异常");
+    let dir = home.join(CONFIG_DIR_NAME);
+    let legacy = home.join(LEGACY_CONFIG_DIR_NAME);
+
+    if !dir.exists() && legacy.exists() {
+        match fs::rename(&legacy, &dir) {
+            Ok(()) => tracing::info!("已迁移配置目录: {:?} -> {:?}", legacy, dir),
+            Err(e) => {
+                tracing::warn!("迁移配置目录失败，将继续使用旧目录 {:?}: {e}", legacy);
+                return legacy;
+            }
+        }
+    }
+
+    dir
 }
 
-/// 配置文件完整路径：`~/.claude-partner/config.json`
+/// 配置文件完整路径：`~/.cc-partner/config.json`
 fn config_file_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
-/// 默认数据库路径：`~/.claude-partner/data.db`
+/// 默认数据库路径：`~/.cc-partner/data.db`
 pub fn default_db_path() -> PathBuf {
     config_dir().join("data.db")
 }
 
-/// 默认文件接收目录：`~/ClaudePartnerFiles`
+/// 默认文件接收目录：`~/cc-partner-files`
 fn default_receive_dir() -> PathBuf {
     dirs::home_dir()
         .expect("无法定位用户 home 目录，环境异常")
-        .join("ClaudePartnerFiles")
+        .join("cc-partner-files")
 }
 
 /// 云端同步（GitHub 私有仓库）的默认轮询间隔（秒）= 10 分钟。
@@ -51,6 +68,31 @@ fn default_receive_dir() -> PathBuf {
 ///     也不至于太慢（用户切设备后等待过久）。10 分钟是一个保守默认，用户可在设置页调小。
 fn default_cloud_sync_interval() -> u64 {
     600
+}
+
+/// GitHub Trending 缓存默认有效期（小时）= 24 小时。
+///
+/// Business Logic: 首页周热门每天刷新一次即可，避免用户频繁打开首页时重复抓取 GitHub
+///     或反复调用本地 Claude Code CLI 生成解说。
+fn default_trending_cache_ttl_hours() -> i64 {
+    24
+}
+
+/// GitHub Trending 解说默认 Claude CLI 命令。
+///
+/// Business Logic: 大多数用户会把 Claude Code CLI 放入 PATH，默认使用 `claude` 最通用。
+fn default_claude_cli_path() -> String {
+    "claude".to_string()
+}
+
+/// GitHub Trending 解说默认 Claude 模型别名。
+fn default_claude_model() -> String {
+    "sonnet".to_string()
+}
+
+/// GitHub Trending 单次 Claude CLI 调用默认预算上限（美元）。
+fn default_trending_max_budget_usd() -> f64 {
+    0.50
 }
 
 /// 平台相关默认截图快捷键：macOS 用 `<cmd>+<shift>+s`，其他平台 `<ctrl>+<shift>+s`
@@ -64,11 +106,51 @@ fn default_screenshot_hotkey() -> String {
 
 /// 获取本机 hostname 作为默认设备名（对应 Python 的 socket.gethostname()）
 fn default_device_name() -> String {
-    // 优先用系统 hostname；失败则回退到 "Claude Partner"
+    // 优先用系统 hostname；失败则回退到应用名。
     hostname::get()
         .ok()
         .and_then(|h| h.into_string().ok())
-        .unwrap_or_else(|| "Claude Partner".to_string())
+        .unwrap_or_else(|| APP_NAME.to_string())
+}
+
+/// GitHub 周热门首页配置。
+///
+/// Business Logic（为什么需要这个结构）:
+///     首页需要每日抓取 GitHub Trending Weekly，并可选调用本地 Claude Code CLI 生成中英文解说。
+///     CLI 路径、模型、预算和缓存时长属于用户环境偏好，必须持久化，且旧配置升级时需安全回退默认值。
+///
+/// Code Logic（这个结构做什么）:
+///     纯配置载体，落盘在 AppConfig.github_trending 下。所有字段都有 serde default，
+///     保证旧 config.json 缺字段时也能反序列化。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GithubTrendingConfig {
+    /// 是否启用 Claude CLI 解说生成。关闭时仅展示 GitHub 原始描述。
+    #[serde(default = "default_true")]
+    pub ai_enabled: bool,
+    /// Claude Code CLI 路径或命令名。
+    #[serde(default = "default_claude_cli_path")]
+    pub claude_cli_path: String,
+    /// Claude Code CLI 模型别名或完整模型名。
+    #[serde(default = "default_claude_model")]
+    pub claude_model: String,
+    /// 缓存有效期（小时），默认 24。
+    #[serde(default = "default_trending_cache_ttl_hours")]
+    pub cache_ttl_hours: i64,
+    /// 单次调用预算上限（美元），传给 `claude --max-budget-usd`。
+    #[serde(default = "default_trending_max_budget_usd")]
+    pub max_budget_usd: f64,
+}
+
+impl Default for GithubTrendingConfig {
+    fn default() -> Self {
+        Self {
+            ai_enabled: true,
+            claude_cli_path: default_claude_cli_path(),
+            claude_model: default_claude_model(),
+            cache_ttl_hours: default_trending_cache_ttl_hours(),
+            max_budget_usd: default_trending_max_budget_usd(),
+        }
+    }
 }
 
 /// 健康提醒配置(久坐监测 + 喝水提醒)。
@@ -217,6 +299,9 @@ pub struct AppConfig {
     /// (无 health 字段)反序列化时整体回退 `HealthConfig::default()`。
     #[serde(default)]
     pub health: HealthConfig,
+    /// GitHub 周热门首页与 Claude CLI 解说配置。`#[serde(default)]` 兼容旧 config.json。
+    #[serde(default)]
+    pub github_trending: GithubTrendingConfig,
 }
 
 impl AppConfig {
@@ -251,13 +336,14 @@ impl AppConfig {
                 cloud_sync_interval_secs: default_cloud_sync_interval(),
                 cloud_sync_branch: None,
                 health: HealthConfig::default(),
+                github_trending: GithubTrendingConfig::default(),
             };
             cfg.save()?;
             Ok(cfg)
         }
     }
 
-    /// 保存配置到 `~/.claude-partner/config.json`。
+    /// 保存配置到 `~/.cc-partner/config.json`。
     ///
     /// Business Logic: 用户修改配置后需持久化，下次启动生效。
     /// Code Logic: 确保目录存在；序列化为 UTF-8 JSON（紧凑，中文不转义）写入。
@@ -311,6 +397,8 @@ mod tests {
             "旧 config 缺 health 字段时应回退默认 enabled=true"
         );
         assert_eq!(cfg.health.work_window_seconds, 45 * 60);
+        assert!(cfg.github_trending.ai_enabled);
+        assert_eq!(cfg.github_trending.claude_cli_path, "claude");
     }
 
     #[test]
@@ -340,6 +428,7 @@ mod tests {
                 water_interval_seconds: 1800,
                 reminder_fullscreen: true,
             },
+            github_trending: GithubTrendingConfig::default(),
         };
         let json = serde_json::to_string(&cfg).unwrap();
         let back: AppConfig = serde_json::from_str(&json).unwrap();

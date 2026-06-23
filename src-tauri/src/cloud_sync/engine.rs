@@ -12,7 +12,7 @@
 //!     - `trigger_cloud_sync`：完整同步，返回 CloudSyncResult（pulled/pushed/note）。
 //!     - `test_connection`：探测 git + 远端连通，返回 gitVersion/defaultBranch/error。
 //!     - `ensure_repo`：确保工作区存在（首次 clone + 设身份），解析同步分支。
-//!     - `cloud_sync_workdir`：工作区路径 `~/.claude-partner/cloud-sync/`。
+//!     - `cloud_sync_workdir`：工作区路径 `~/.cc-partner/cloud-sync/`。
 
 use crate::cloud_sync::git_cli::{self, PushError};
 use crate::cloud_sync::snapshot::{export_from_db, import_to_db, ExportStats, ImportStats};
@@ -68,7 +68,7 @@ pub struct CloudClaudeMdPushResult {
     pub note: String,
 }
 
-/// 返回云端同步工作区路径：`~/.claude-partner/cloud-sync/`。
+/// 返回云端同步工作区路径：`~/.cc-partner/cloud-sync/`。
 ///
 /// Business Logic: cloud_sync 的 git 工作区集中放在应用数据根下，便于清理与定位。
 /// Code Logic: 复用 config::config_dir()（与配置/数据库同根），追加 "cloud-sync"。

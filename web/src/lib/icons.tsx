@@ -235,3 +235,33 @@ export const HealthIcon = ({ size, ...rest }: IconProps) => (
     <path d="M1.5 8h2l1.5-3.5L7.5 12 10 5l1.5 3h3" />
   </svg>
 );
+
+export const StarIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M8 2.2 9.8 5.8l4 .6-2.9 2.8.7 4-3.6-1.9-3.6 1.9.7-4-2.9-2.8 4-.6L8 2.2Z" />
+  </svg>
+);
+
+export const ForkIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <circle cx="4.5" cy="3.5" r="1.5" />
+    <circle cx="11.5" cy="3.5" r="1.5" />
+    <circle cx="8" cy="12.5" r="1.5" />
+    <path d="M4.5 5v1.5A1.5 1.5 0 0 0 6 8h4a1.5 1.5 0 0 0 1.5-1.5V5M8 8v3" />
+  </svg>
+);
+
+export const ExternalLinkIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M6.5 3.5H4A1.5 1.5 0 0 0 2.5 5v7A1.5 1.5 0 0 0 4 13.5h7A1.5 1.5 0 0 0 12.5 12V9.5" />
+    <path d="M9 2.5h4.5V7M13.5 2.5 7.5 8.5" />
+  </svg>
+);
+
+export const RefreshIcon = ({ size, ...rest }: IconProps) => (
+  <svg {...baseProps(size)} {...rest}>
+    <path d="M13.5 8a5.5 5.5 0 0 1-9.2 4.05" />
+    <path d="M2.5 8a5.5 5.5 0 0 1 9.2-4.05" />
+    <path d="M11.8 1.8v2.6H9.2M4.2 14.2v-2.6h2.6" />
+  </svg>
+);

@@ -37,7 +37,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use crate::commands::{
     cc_history as cc_history_cmd, claude_code_assets as claude_code_assets_cmd,
     claude_md as claude_md_cmd, cloud_sync as cloud_sync_cmd, config as config_cmd,
-    devices as device_cmd, health as health_cmd,
+    devices as device_cmd, github_trending as github_trending_cmd, health as health_cmd,
     permissions as permissions_cmd, prompts as prompt_cmd, screenshot as screenshot_cmd,
     ssh_target as ssh_target_cmd, sync as sync_cmd, transfer as transfer_cmd,
     updater as updater_cmd,
@@ -151,6 +151,19 @@ const HEALTH_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS activity_records (
 const WATER_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS water_records (
     ts INTEGER PRIMARY KEY
 )";
+
+/// GitHub Trending 首页缓存表（榜单 + Claude CLI 中英文解说）。
+///
+/// Business Logic: 首页每天只抓取一次 GitHub Trending Weekly，并把 Claude CLI 生成结果持久化，
+///     避免重复网络请求和重复 AI 消耗。payload 为完整前端响应主体（不含 fromCache/stale）。
+const GITHUB_TRENDING_CACHE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS github_trending_cache (
+    key TEXT PRIMARY KEY,
+    payload TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    ai_status TEXT NOT NULL,
+    ai_error TEXT
+)";
 /// 初始化数据库连接池：开启 WAL，手动建表，返回 SqlitePool。
 ///
 /// Business Logic: 单连接语义与 Python aiosqlite 一致（max_connections(1)）。
@@ -185,6 +198,10 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
     // 健康提醒：活动采样表 + 喝水记录表（在 CLAUDE_MD_SCHEMA 之后执行）
     sqlx::query(HEALTH_SCHEMA).execute(&pool).await?;
     sqlx::query(WATER_SCHEMA).execute(&pool).await?;
+    // GitHub Trending 首页缓存（榜单 + Claude CLI 解说），独立于同步数据。
+    sqlx::query(GITHUB_TRENDING_CACHE_SCHEMA)
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }
 
@@ -217,6 +234,7 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             // 日志统一由 run() 开头的 tracing_subscriber 接管（tracing 宏 + 经 tracing-log 桥接 log）。
             // 不再注册 tauri-plugin-log：它也会设置全局 log logger，与 tracing_subscriber 冲突，
@@ -426,6 +444,11 @@ pub fn run() {
             cloud_sync_cmd::update_cloud_sync_config,
             cloud_sync_cmd::trigger_cloud_sync_cmd,
             cloud_sync_cmd::test_cloud_sync,
+            // GitHub Trending 首页（榜单缓存 + Claude CLI 双语解说）
+            github_trending_cmd::list_github_trending_repos,
+            github_trending_cmd::get_github_trending_config,
+            github_trending_cmd::update_github_trending_config,
+            github_trending_cmd::test_claude_cli,
             // M10 健康提醒（11 命令：配置/状态/开关/暂停/贪睡/跳过/配置回写/统计/活动明细/喝水/全屏遮罩）
             health_cmd::get_health_config,
             health_cmd::get_health_status,

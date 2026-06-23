@@ -8,6 +8,7 @@ import { Prompts } from './pages/Prompts';
 import { CcHistory } from './pages/CcHistory';
 import { Scratchpad } from './pages/Scratchpad';
 import { ClaudeMd } from './pages/ClaudeMd';
+import { ClaudeCodeAssets } from './pages/ClaudeCodeAssets';
 import { Devices } from './pages/Devices';
 import { Settings } from './pages/Settings';
 import { Health } from './pages/Health';
@@ -117,6 +118,7 @@ export default function App() {
             <Route path="/cc-history" element={<CcHistory />} />
             <Route path="/scratchpad" element={<Scratchpad />} />
             <Route path="/claude-md" element={<ClaudeMd />} />
+            <Route path="/claude-code" element={<ClaudeCodeAssets />} />
             <Route path="/devices" element={<Devices />} />
             <Route path="/ssh" element={<Navigate to="/devices" replace />} />
             <Route path="/settings" element={<Settings />} />

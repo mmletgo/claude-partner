@@ -2,7 +2,7 @@
 
 ## 概述
 
-Claude Partner 的桌面宿主与全部后端逻辑，从 PyQt6 + Python 迁移而来。Tauri 2 主进程用 Rust 实现配置/存储/网络/同步/传输/截图/权限/更新等全部能力；前端复用 `web/` 的 React。
+cc-partner 的桌面宿主与全部后端逻辑，从 PyQt6 + Python 迁移而来。Tauri 2 主进程用 Rust 实现配置/存储/网络/同步/传输/截图/权限/更新等全部能力；前端复用 `web/` 的 React。
 
 ## 通信架构（核心，务必遵守）
 
@@ -17,10 +17,10 @@ src/
 ├── main.rs / lib.rs   — Tauri Builder + 命令注册 + setup 装配（load config → init_db → AppState）
 ├── state.rs           — AppState（config: RwLock + db pool + prompt_repo + device_id）[已实现]
 ├── error.rs           — AppError（thiserror + serde 成 {error:"msg"}）              [已实现]
-├── config.rs          — AppConfig：读旧 ~/.claude-partner/config.json，缺失生成默认 [已实现]
+├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认，并从旧 ~/.claude-partner 迁移 [已实现]
 ├── cc/                — Claude Code 历史采集（collector）+ 合并（merger，复用 sync/vector_clock）+ 同步（engine）+ 模型 [已实现]
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
-├── commands/          — #[tauri::command]：prompts + cc_history + cloud_sync + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health [已实现]
+├── commands/          — #[tauri::command]：prompts + cc_history + cloud_sync + github_trending + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health [已实现]
 ├── models/prompt.rs   — PromptRow（snake_case，DB/同步）+ PromptDto（camelCase，前端） [已实现]
 ├── storage/prompt_repo.rs — sqlx 运行期 query（非宏），list/get/create/update/soft_delete/list_tags [已实现]
 ├── storage/cc_history_repo.rs — claude_history 表 CRUD + bulk_ingest(IGNORE)/bulk_upsert(REPLACE) + scan_state [已实现]
@@ -49,9 +49,9 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## M3 已落地行为约定（移植自 Python network/，逐方法对照）
 
-- **mDNS service type**：`_claude-partner._tcp.local.`（`net/mod.rs::SERVICE_TYPE`），与 Python `discovery.py` 完全一致，迁移期 Rust 版与旧 Python 版可互发现。
+- **mDNS service type**：`_cc-partner._tcp.local.`（`net/mod.rs::SERVICE_TYPE`），跟随更名后的应用名，供同版本实例互发现。
 - **TXT 记录字段**：`device_id`、`device_name`（与 Python discovery.py 一致；**port 不在 TXT**，走 mDNS SRV record，与 Python 相同）。
-- **服务实例名**：`{device_id}`（不含 type 后缀，mdns-sd `ServiceInfo::new` 的 `my_name`）；**host_name** = `cp-{device_id}.local.`（对照 Python `server_name`，避免系统 hostname 解析到多 IP）。
+- **服务实例名**：`{device_id}`（不含 type 后缀，mdns-sd `ServiceInfo::new` 的 `my_name`）；**host_name** = `cc-{device_id}.local.`，避免系统 hostname 解析到多 IP。
 - **本机过滤**：`ServiceResolved` 时比对 TXT `device_id` 与本机 device_id，一致则忽略（与 Python `_on_service_state_change` 过滤逻辑一致）。本机设备不入 devices 表。
 - **本机 IP 探测**：`local_lan_ip` 用 UDP socket "连接" 8.8.8.8 探测出站接口 IP（对照 Python `_get_local_ip` 回退方案）；探测失败回退 `enable_addr_auto` 让 mdns-sd 自动更新接口地址。
 - **事件循环**：用 mdns-sd re-export 的 `Receiver<ServiceEvent>`，`recv()` 阻塞等待（daemon shutdown 后 channel 断开自然退出）；Resolved → 写 devices 表，Removed(`fullname` 去 type 后缀得 device_id) → 剔除。
@@ -115,7 +115,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   - **注册**：v2 的 `on_shortcut(shortcut, handler)` 需随快捷键传入 handler（不是 Builder 全局 handler）；`register_screenshot_hotkey(app, hotkey, handler)` 先 `unregister_all` 再 `on_shortcut`。handler = `screenshot_handler`，按下时直接调 `screenshot::overlay::start_region_capture`（Rust 直接起 overlay，不依赖前端 emit）。
   - **热更新**：`commands::config::update_config` 加 `app: AppHandle` 参数，screenshotHotkey 变更后 `register_screenshot_hotkey(app, new_hotkey, screenshot_handler)` 重注册。
   - setup 里读 `config.screenshot_hotkey` 注册。
-- **系统托盘（tray.rs，对照 tray.py）**：`TrayIconBuilder` id=`main-tray`，图标用 `app.default_window_icon()`（复用 icons/），tooltip=`Claude Partner`。菜单三项：显示主窗口 / 截图（直接调 overlay::start_region_capture）/ 退出（`app.exit(0)`）。**左键单击托盘**显示主窗口（Python 是双击；Tauri 2 托盘 Click 事件更顺手，行为等价）。需 `tauri` crate 开 `tray-icon` feature。
+- **系统托盘（tray.rs，对照 tray.py）**：`TrayIconBuilder` id=`main-tray`，图标用 `app.default_window_icon()`（复用 icons/），tooltip=`cc-partner`。菜单三项：显示主窗口 / 截图（直接调 overlay::start_region_capture）/ 退出（`app.exit(0)`）。**左键单击托盘**显示主窗口（Python 是双击；Tauri 2 托盘 Click 事件更顺手，行为等价）。需 `tauri` crate 开 `tray-icon` feature。
 - **关闭钩子（lib.rs）**：`.build(...)` 后链 `.run(|app_handle, event| {...})`，在 `RunEvent::Exit` 调 `discovery::stop_discovery(&state)` 优雅注销 mDNS（对照 Python 关闭清理顺序）。`stop_discovery` 之前的 `#[allow(dead_code)]` 已移除。
 - **error.rs 扩展**：新增 `AppError::Tauri(#[from] tauri::Error)`（托盘/菜单 API 返回 tauri::Error）+ `AppError::generic()` 便捷构造。
 
@@ -123,8 +123,8 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 - **插件**：`tauri-plugin-updater = "2"`（check/download/install + 签名校验 + 三平台自带替换脚本，**不再写 DMG/CMD/sh 脚本**）+ `tauri-plugin-process = "2"`（rust 侧用 `app.request_restart()`，前端 restart 命令同源）。lib.rs 注册 `.plugin(tauri_plugin_updater::Builder::new().build())` + `.plugin(tauri_plugin_process::init())`。**禁止引入 tauri-plugin-log**（与 tracing_subscriber 冲突 panic，见 M4 踩坑）。
 - **capabilities**：`capabilities/default.json` 加 `updater:default` + `process:default`。
-- **tauri.conf.json**：加 `plugins.updater`：`pubkey`（minisign 公钥 base64）、`endpoints: ["https://github.com/mmletgo/claude-partner/releases/latest/download/latest.json"]`（M9 CI 产出）、`windows.installMode: "passive"`。端到端更新需 M9 latest.json + 签名产物，M8 只实现命令层。
-- **签名密钥**：`npx tauri signer generate -w ~/.tauri/claude-partner.updater.key --password ""`（空密码，免 CI 配置）。私钥路径 `~/.tauri/claude-partner.updater.key`（**不进 git**），公钥已入 tauri.conf.json。**M9 CI 需配 secret `TAURI_SIGNING_PRIVATE_KEY_PATH`（或 `TAURI_SIGNING_PRIVATE_KEY`）**；空密码则 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 可省。
+- **tauri.conf.json**：加 `plugins.updater`：`pubkey`（minisign 公钥 base64）、`endpoints: ["https://github.com/mmletgo/cc-partner/releases/latest/download/latest.json"]`（M9 CI 产出）、`windows.installMode: "passive"`。端到端更新需 M9 latest.json + 签名产物，M8 只实现命令层。
+- **签名密钥**：`npx tauri signer generate -w ~/.tauri/cc-partner.updater.key --password ""`（空密码，免 CI 配置）。私钥路径 `~/.tauri/cc-partner.updater.key`（**不进 git**），公钥已入 tauri.conf.json。**M9 CI 需配 secret `TAURI_SIGNING_PRIVATE_KEY_PATH`（或 `TAURI_SIGNING_PRIVATE_KEY`）**；空密码则 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` 可省。
 - **返回类型严格对齐前端 `web/src/lib/types.ts`（camelCase）**：
   - `UpdateCheckResult`（`commands/updater.rs::UpdateCheckResult`，`#[serde(rename_all="camelCase")]`）：`{hasUpdate, version?, body?, downloadUrl?, filename?, size?, error?}`。有更新：`{hasUpdate:true, version, body, downloadUrl(=update.download_url), filename(从 url 路径末段解析), size:Some(0)(check 阶段无 content_length)}`；无更新：全 None；检查异常：`{hasUpdate:false, error}`。
   - `UpdateDownloadStatus`（`UpdateDownloadStatus`）：字段**全非可选**（前端 types.ts 定义 error/filePath/url/filename 为 string、size 为 number），故用 String/u64。`status` 枚举 serde lowercase 对齐 `'idle'|'downloading'|'completed'|'failed'|'cancelled'`；progress 0.0~1.0。filePath 恒空串（updater 下载到内存非文件）。
@@ -174,7 +174,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   - `targets: "all"` —— Tauri 按当前构建平台自动选择本平台产物（macOS→dmg/app、Windows→nsis/msi、Linux→appimage/deb）。CI 三平台矩阵各跑本平台，故 `"all"` 等效于列全三平台且不会跨平台报错。
   - `macOS.signingIdentity: "-"` —— **ad-hoc 签名**（开发/测试用，免 Apple Developer ID）。**正式分发需后续配 Apple Developer ID 签名 + notarization**（M9 不做，用户后续配置）。
   - `windows.wix.language: ["en-US","zh-CN"]` —— MSI 安装包中英文双语。
-  - `publisher: "Claude Partner"`、`category: "Productivity"` —— 安装包元数据。
+  - `publisher: "cc-partner"`、`category: "Productivity"` —— 安装包元数据。
   - `icon` 数组覆盖三平台（32x32.png/128x128.png/128x128@2x.png/icon.icns/icon.ico），无需额外生成。
 - **版本号单一来源 + 同步**：`tauri.conf.json.version`（当前 0.5.0）是唯一来源。`Cargo.toml.version` **必须与之完全一致**（Tauri build 强制校验，不一致会告警/失败，M9 已将 Cargo.toml 从 0.1.0 同步到 0.5.0）。`web/package.json.version` 跟随同步（前端构建元数据一致）。
 - **bump 脚本（`scripts/bump-version.mjs`）**：发版时统一升级三处版本号，避免漏改。用法 `node scripts/bump-version.mjs <新版本号>`（如 `0.6.0`），内部正则替换三文件 version 字段并回读校验，支持语义化版本含预发布号（如 `1.0.0-beta.1`）。**禁止手动改单个文件版本号**，必须走 bump 脚本。
@@ -185,7 +185,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   - 步骤：checkout → setup-node 20 → Rust stable（macOS 装 aarch64 target）→ Linux 装 webkit2gtk-4.1-dev 等依赖 → `cd web && npm ci` → tauri-action 构建+签名+上传 Release。
   - tauri-action 自动生成 `latest.json`（含各平台签名后下载 URL + signature，供 M8 updater endpoint），并 merge 多平台矩阵结果。
   - `updaterJsonPreferNsis: true` —— Windows updater 用 nsis 安装包（非 msi）作下载源。
-- **签名 secret（用户待配）**：tauri-action 引用 `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}`。用户需把 `~/.tauri/claude-partner.updater.key` 的**内容**配到 repo 的同名 secret（Settings → Secrets and variables → Actions）。**M8 用空密码，故无需配 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`**。未配 secret 时 CI 构建不签名、latest.json 无 signature，updater 校验会失败。
+- **签名 secret（用户待配）**：tauri-action 引用 `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}`。用户需把 `~/.tauri/cc-partner.updater.key` 的**内容**配到 repo 的同名 secret（Settings → Secrets and variables → Actions）。**M8 用空密码，故无需配 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`**。未配 secret 时 CI 构建不签名、latest.json 无 signature，updater 校验会失败。
 - **发版流程**：1) `node scripts/bump-version.mjs <新版本号>`（同步 tauri.conf.json + Cargo.toml + web/package.json）；2) 提交；3) `git tag v<版本号> && git push origin v<版本号>` 触发 CI。
 
 ## Claude Code 历史采集与同步已落地行为约定（src/cc/ + storage/cc_history_repo.rs + commands/cc_history.rs + net/routes/cc_history.rs）
@@ -236,7 +236,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 - **核心模型**：把一个 GitHub 私有仓库当作"中心化对端"。**本地 SQLite + 向量时钟是权威源**，git 只承担传输与历史承载——不参与合并，只保证最终文件一致。一次同步 = detect_git → ensure_repo → 定分支 → import(merge 进本地) → export(写回工作区) → commit → push 循环。冲突解决复用既有 `merge_prompt`/`merge_cc_history`/`merge_ssh_target`（向量时钟 + LWW + device_id tie-break），与局域网同步语义一致。同步范围：prompts + CC 历史 + SSH 目标（含软删除传播）。**CLAUDE.md 不参与 GitHub 自动同步，只由 CLAUDE.md 页面用户主动推送。**
 - **系统 git CLI**（不引入 git 库）：`cloud_sync/git_cli.rs` 用 `tokio::process::Command` 封装系统 git，应用**不管理认证**（复用本机 git 凭证 / SSH key / credential helper / token）。`detect_git()` 跑 `git --version` 探测（失败给平台提示，Windows 提示装 Git for Windows）；`run(git, workdir, args, timeout)` 统一入口：`.current_dir(workdir)`、stdout/stderr piped、`tokio::time::timeout` 包裹、非零退出转 `AppError::generic`（含 stderr）。clone/fetch/push 180s 超时，其余 30s。`push` 用自定义 `PushError::{Rejected, Other(AppError)}` 区分"被远端拒绝（可重试）"与"普通失败"（stderr 含 rejected/non-fast-forward/fetch first → Rejected）。
-- **工作区路径**：`~/.claude-partner/cloud-sync/`（`engine::cloud_sync_workdir()` 复用 `config::config_dir()`，config_dir 已提升为 pub）。首次 clone 远端到此 + `set_local_identity`（local user.name/email = Claude Partner / claude-partner@local，不污染全局 git 配置）；后续复用。
+- **工作区路径**：`~/.cc-partner/cloud-sync/`（`engine::cloud_sync_workdir()` 复用 `config::config_dir()`，config_dir 已提升为 pub）。首次 clone 远端到此 + `set_local_identity`（local user.name/email = cc-partner / cc-partner@local，不污染全局 git 配置）；后续复用。
 - **工作区文件结构**（`cloud_sync/snapshot.rs`）：
   - `prompts/<id>.json` → PromptRow；`claude_history/<id>.json` → ClaudeHistoryRow；`ssh_targets/<host>.json` → SshTargetRow。旧仓库中若残留 `claude_md/claude_md.json`，本流程会忽略它，不 import 覆盖本机，也不 export/commit 本机 CLAUDE.md。
   - **文件名安全化（关键）**：id 可能含 Windows 非法字符（CC 历史 id 是 `{session_id}:{uuid}` 含冒号）。`id_to_filename` / `filename_to_id` 用 **hex 编码** id 的 UTF-8 字节做可逆映射（输出仅 `[0-9a-f]`，跨平台安全，round-trip 一致）。export 和 import 必须用同一映射（已配 7 个单测覆盖含冒号 / 斜杠 / 中文 / 空串 / 非法 hex 回退）。
@@ -249,6 +249,15 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **DTO 锁定契约（前端依赖）**：`CloudSyncConfigDto`{repoUrl,enabled,auto,intervalSecs,branch}、`CloudSyncResult`{ok,pulled,pushed,note,syncedAt}、`TestCloudSyncResult`{ok,gitVersion,defaultBranch,error}。
 - **scheduler**（`cloud_sync/scheduler.rs`）：`start(state) -> CancellationToken` 用 **`tauri::async_runtime::spawn`**（非 `tokio::spawn`——本函数在 lib.rs setup 同步段、block_on 之外被调用，主线程无 Tokio reactor，`tokio::spawn` 会 panic "there is no reactor running"）启动后台任务，`loop { select!{ cancel => break, sleep(interval) => tick } }`。**每 tick 重读 config**：interval = `cloud_sync_interval_secs`（实时生效），`!enabled || !auto` 则 continue（仍按新 interval 等待），否则跑 `trigger_cloud_sync`（错误仅 tracing::error）。首次先 sleep 再检查（不立即跑）。setup **无条件启动**（内部按 config 决定），故配置变更无需重启 scheduler。返回的 token 存 `AppState.cloud_sync_cancel`，`RunEvent::Exit` 时 cancel。
 - **AppState 扩展**：`cloud_sync_cancel: Arc<Mutex<Option<CancellationToken>>>`。`config_dir` 由 private 提升为 pub（cloud_sync 复用）。无新表（init_db 不变）、无新依赖（用 tokio::process + std::fs + 既有 tokio-util/chrono/dirs/uuid）。
+
+## GitHub Trending 首页已落地行为约定（commands/github_trending.rs + config.rs 字段 + github_trending_cache 表）
+
+- **功能定位**：Home 页展示 GitHub Trending Weekly 全语言 Top 25。GitHub 无官方 Trending JSON API，后端抓取 `https://github.com/trending?since=weekly` HTML，使用 `scraper` CSS selector 解析 repo、description、language、stars/forks、stars this week，并返回 camelCase DTO 给前端。前端不直接 fetch GitHub。
+- **缓存策略**：`github_trending_cache` 表按 key `weekly:any:25:<UTC YYYY-MM-DD>` 存完整 payload JSON、`fetched_at`、`expires_at`、`ai_status`、`ai_error`。当天且未过期直接返回缓存（`fromCache=true`），不重新抓 GitHub、不重新调用 Claude CLI。刷新 GitHub 失败但有旧缓存时返回旧缓存并标记 `stale=true`；无旧缓存才返回错误。
+- **Claude CLI 解说**：启用时一次性把 Top 25 元数据通过 stdin 传给本地 Claude Code CLI，命令形态：`claude -p --output-format json --json-schema <schema> --no-session-persistence --tools "" --model <model> --max-budget-usd <budget>`。要求输出 `{repos:[{fullName, explanationZh, explanationEn}]}`，后端兼容直接 JSON 和 `--output-format json` 的 `result` 包装。CLI 失败时仍缓存原始榜单，`aiStatus=failed` + `aiError`，当天不会反复调用。
+- **配置字段**：`AppConfig.github_trending: GithubTrendingConfig`（`#[serde(default)]` 兼容旧 config.json），字段 `ai_enabled`、`claude_cli_path`（默认 `claude`）、`claude_model`（默认 `sonnet`）、`cache_ttl_hours`（默认 24，命令层 clamp 1..168）、`max_budget_usd`（默认 0.50，clamp 0.01..10）。
+- **4 个命令**（`commands/github_trending.rs`，lib.rs invoke_handler 注册）：`list_github_trending_repos`、`get_github_trending_config`、`update_github_trending_config(aiEnabled?,claudeCliPath?,claudeModel?,cacheTtlHours?,maxBudgetUsd?)`、`test_claude_cli(claudeCliPath?)`（只跑 `--version`，可测试表单里的未保存路径）。
+- **外链打开**：前端仓库卡片用 `@tauri-apps/plugin-opener` 打开系统浏览器；Rust Builder 注册 `tauri_plugin_opener::init()`，capabilities 加 `opener:default`。
 
 ## 健康提醒已落地行为约定（src/health/ + storage/health_repo.rs + commands/health.rs）
 
@@ -282,7 +291,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## 关键约定
 
-- **数据兼容**：直接读写旧 `~/.claude-partner/data.db`，迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
+- **数据兼容**：直接读写 `~/.cc-partner/data.db`，首次更名后从旧 `~/.claude-partner` 目录迁移；迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
 - **版本号单一来源**：`tauri.conf.json` 的 `version`；Rust 用 `env!("CARGO_PKG_VERSION")`；前端 `useAppVersion` 经 invoke 获取，禁止硬编码。发版时统一用 `scripts/bump-version.mjs` 同步三处（tauri.conf.json / Cargo.toml / web/package.json），详见 M9 节。
 - **serde 对齐前端**：所有返回给前端的 struct 用 `#[serde(rename_all = "camelCase")]`。
 - **迁移参照**：各模块移植自 Python 版（M10 已删除），算法逻辑（向量时钟、选区、分块协议）逐字等价；各 M1–M8 节的"对照 Python xxx"注释是迁移期的行为基线说明，保留作设计意图记录。
