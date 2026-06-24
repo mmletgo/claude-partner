@@ -132,6 +132,17 @@ pub async fn get_health_config(state: State<'_, AppState>) -> Result<HealthConfi
     Ok(state.config.read().unwrap().health.clone().into())
 }
 
+/// 读取健康提醒默认配置(供设置页「恢复默认」按钮)。
+///
+/// Business Logic: 设置页健康提醒 tab 的「恢复默认」需用后端权威默认值重置表单,
+///                 与同步/AI tab 的 `get_default_*_config` 行为一致,避免前端硬编码默认值。
+/// Code Logic: 返回 `HealthConfig::default()`(config.rs 中已定义,与 serde 单字段缺失回退一致),
+///             经 `From<HealthConfig>` 转 DTO 返回;不依赖 State,默认值是纯常量。
+#[tauri::command]
+pub async fn get_default_health_config() -> Result<HealthConfigDto, AppError> {
+    Ok(crate::config::HealthConfig::default().into())
+}
+
 /// 读取健康提醒当前状态（配置开关 + 运行时相位/暂停/贪睡）。
 ///
 /// Business Logic: 前端轮询展示「工作中/休息中、是否暂停、贪睡何时到期」。
@@ -305,4 +316,25 @@ pub async fn record_water(state: State<'_, AppState>) -> Result<(), AppError> {
 pub async fn close_health_overlay(app: tauri::AppHandle) -> Result<(), AppError> {
     crate::health::close_health_overlay(&app);
     Ok(())
+}
+
+#[cfg(test)]
+mod default_config_tests {
+    use super::*;
+
+    #[test]
+    fn default_health_config_dto_matches_documented_defaults() {
+        let dto: HealthConfigDto = HealthConfig::default().into();
+        assert!(dto.enabled, "默认开启久坐监测");
+        assert_eq!(dto.work_window_seconds, 45 * 60);
+        assert_eq!(dto.break_seconds, 5 * 60);
+        assert!(dto.record_window_title);
+        assert_eq!(dto.retain_days, 90);
+        assert!(dto.notify_enabled);
+        assert_eq!(dto.dnd_start, None);
+        assert_eq!(dto.dnd_end, None);
+        assert!(dto.water_enabled);
+        assert_eq!(dto.water_interval_seconds, 60 * 60);
+        assert!(!dto.reminder_fullscreen);
+    }
 }
