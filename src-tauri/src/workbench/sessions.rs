@@ -181,16 +181,26 @@ impl TmuxCommand {
     ///
     /// Code Logic（这个函数做什么）:
     ///     Native 模式保留真实 shell 命令；WSL 模式展示实际 PTY attach 命令。
-    fn display_command_for_session(&self, target: &str, shell_command: &str) -> String {
+    fn display_command_for_session(
+        &self,
+        session_name: &str,
+        window_target: Option<&str>,
+        shell_command: &str,
+    ) -> String {
         match self.cwd_mode {
             TmuxCwdMode::Native => shell_command.to_string(),
             TmuxCwdMode::Wsl => {
                 let mut parts = Vec::with_capacity(self.prefix_args.len() + 4);
                 parts.push(self.program.clone());
                 parts.extend(self.prefix_args.clone());
-                parts.push("attach-session".to_string());
-                parts.push("-t".to_string());
-                parts.push(target.to_string());
+                match window_target {
+                    Some(target) => parts.extend(tmux_attach_window_args(session_name, target)),
+                    None => {
+                        parts.push("attach-session".to_string());
+                        parts.push("-t".to_string());
+                        parts.push(session_name.to_string());
+                    }
+                }
                 parts.join(" ")
             }
         }
@@ -497,6 +507,34 @@ fn tmux_window_target(session_name: &str, window_id: &str) -> String {
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     cc-partner 是 GUI 应用，父进程可能没有真实终端环境或继承 `TERM=dumb`，会破坏 tmux 客户端协商。
+///
+/// Code Logic（这个函数做什么）:
+///     给工作台 PTY 命令显式设置 xterm 兼容 TERM 与真彩色环境。
+fn apply_workbench_terminal_env(command: &mut CommandBuilder) {
+    command.env("TERM", "xterm-256color");
+    command.env("COLORTERM", "truecolor");
+    command.env("TERM_PROGRAM", "cc-partner");
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     app 里的 terminal window 必须绑定到对应 tmux window，不能只 attach 到项目 session 的当前 window。
+///
+/// Code Logic（这个函数做什么）:
+///     构造 `attach-session -t <session> ; switch-client -t <session:@window>` 参数。
+fn tmux_attach_window_args(session_name: &str, window_target: &str) -> Vec<String> {
+    vec![
+        "attach-session".to_string(),
+        "-t".to_string(),
+        session_name.to_string(),
+        ";".to_string(),
+        "switch-client".to_string(),
+        "-t".to_string(),
+        window_target.to_string(),
+    ]
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     创建 window 前需要知道项目级 tmux session 是否已存在，存在则 new-window，不存在则 new-session。
 ///
 /// Code Logic（这个函数做什么）:
@@ -635,11 +673,19 @@ fn command_builder_for_row(row: &WorkbenchSessionRow) -> CommandBuilder {
                 .as_deref()
                 .map(|window_id| tmux_window_target(session_name, window_id))
                 .unwrap_or_else(|| session_name.to_string());
-            cmd.args(["attach-session", "-t", &target]);
+            if row.backend_window_id.is_some() {
+                let args = tmux_attach_window_args(session_name, &target);
+                cmd.args(args.iter().map(String::as_str));
+            } else {
+                cmd.args(["attach-session", "-t", session_name]);
+            }
+            apply_workbench_terminal_env(&mut cmd);
             return cmd;
         }
     }
-    CommandBuilder::new(row.command.clone())
+    let mut cmd = CommandBuilder::new(row.command.clone());
+    apply_workbench_terminal_env(&mut cmd);
+    cmd
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -706,6 +752,22 @@ fn run_tmux_command(tmux: &TmuxCommand, args: &[&str]) -> Result<String, AppErro
         };
         Err(AppError::generic(format!("tmux 命令失败: {message}")))
     }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     分屏按钮创建的新 pane 必须从项目根目录启动，避免继承当前 pane 中用户 cd 后的位置。
+///
+/// Code Logic（这个函数做什么）:
+///     构造 `tmux split-window <direction> -t <target> -c <cwd>` 参数列表。
+fn tmux_split_window_args(direction: PaneSplitDirection, target: &str, cwd: &str) -> Vec<String> {
+    vec![
+        "split-window".to_string(),
+        direction.tmux_flag().to_string(),
+        "-t".to_string(),
+        target.to_string(),
+        "-c".to_string(),
+        cwd.to_string(),
+    ]
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -857,8 +919,11 @@ impl WorkbenchSessionRegistry {
                 ) {
                     Ok(window_id) => {
                         let target = tmux_window_target(&project_tmux_id, &window_id);
-                        let display_command =
-                            tmux.display_command_for_session(&target, &terminal_command);
+                        let display_command = tmux.display_command_for_session(
+                            &project_tmux_id,
+                            Some(&target),
+                            &terminal_command,
+                        );
                         (
                             TMUX_BACKEND.to_string(),
                             Some(project_tmux_id),
@@ -944,10 +1009,13 @@ impl WorkbenchSessionRegistry {
                         Ok(window_id) => {
                             let project_tmux_id = tmux_project_session_name(&project.id);
                             let target = tmux_window_target(&project_tmux_id, &window_id);
-                            row.backend_id = Some(project_tmux_id);
+                            row.backend_id = Some(project_tmux_id.clone());
                             row.backend_window_id = Some(window_id);
-                            row.command =
-                                tmux.display_command_for_session(&target, &terminal_command);
+                            row.command = tmux.display_command_for_session(
+                                &project_tmux_id,
+                                Some(&target),
+                                &terminal_command,
+                            );
                         }
                         Err(error) => {
                             tracing::warn!("恢复工作台 tmux 会话失败，回退普通 PTY: {error}");
@@ -1060,11 +1128,12 @@ impl WorkbenchSessionRegistry {
     ///     用户需要在当前 tmux window 内创建左右或上下 pane，复用 tmux 的真实布局能力。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     找到会话 row 的 tmux target，执行 `tmux split-window -h/-v -t <target>`。
+    ///     找到会话 row 的 tmux target，把项目根路径转换为 tmux cwd 后执行 `split-window -c`。
     pub fn split_pane(
         &self,
         session_id: &str,
         direction: PaneSplitDirection,
+        project_path: &str,
     ) -> Result<(), AppError> {
         let handle = self.get_handle(session_id)?;
         let handle = handle.lock().expect("workbench session 锁中毒");
@@ -1075,10 +1144,10 @@ impl WorkbenchSessionRegistry {
         let Some(tmux) = available_tmux_command() else {
             return Err(AppError::generic("未找到 tmux，无法创建 pane"));
         };
-        run_tmux_command(
-            &tmux,
-            &["split-window", direction.tmux_flag(), "-t", &target],
-        )?;
+        let tmux_cwd = tmux.project_cwd(project_path)?;
+        let args = tmux_split_window_args(direction, &target, &tmux_cwd);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        run_tmux_command(&tmux, &arg_refs)?;
         Ok(())
     }
 
@@ -1555,8 +1624,16 @@ mod tests {
         );
         assert_eq!(backend.shell_command_for_new_session("cmd.exe"), None);
         assert_eq!(
-            backend.display_command_for_session("cc-partner-session", "cmd.exe"),
+            backend.display_command_for_session("cc-partner-session", None, "cmd.exe"),
             "wsl.exe --exec tmux attach-session -t cc-partner-session"
+        );
+        assert_eq!(
+            backend.display_command_for_session(
+                "cc-partner-session",
+                Some("cc-partner-session:@7"),
+                "cmd.exe"
+            ),
+            "wsl.exe --exec tmux attach-session -t cc-partner-session ; switch-client -t cc-partner-session:@7"
         );
     }
 
@@ -1577,6 +1654,54 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
+    ///     Workbench 运行在 GUI/Tauri 环境时可能继承 `TERM=dumb`，tmux attach 会把终端响应错误送进 pane。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言所有工作台 PTY 命令都会显式声明 xterm 兼容终端环境和真彩色能力。
+    #[test]
+    fn workbench_terminal_env_overrides_dumb_parent_term() {
+        let mut command = CommandBuilder::new("/bin/sh");
+        apply_workbench_terminal_env(&mut command);
+
+        assert_eq!(
+            command.get_env("TERM").and_then(|value| value.to_str()),
+            Some("xterm-256color")
+        );
+        assert_eq!(
+            command
+                .get_env("COLORTERM")
+                .and_then(|value| value.to_str()),
+            Some("truecolor")
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     前端 terminal window 必须绑定到对应 tmux window，不能只 attach 到项目 session 的当前 window。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言 attach 参数先连接项目 session，再用 switch-client 指向具体 `session:@window` target。
+    #[test]
+    fn tmux_attach_window_args_switch_client_to_window_target() {
+        let args = tmux_attach_window_args(
+            "cc-partner-project-project1234abcd",
+            "cc-partner-project-project1234abcd:@7",
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "attach-session",
+                "-t",
+                "cc-partner-project-project1234abcd",
+                ";",
+                "switch-client",
+                "-t",
+                "cc-partner-project-project1234abcd:@7",
+            ]
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
     ///     pane 操作应复用 tmux 原生命令，避免前端伪分屏和真实终端布局分裂。
     ///
     /// Code Logic（这个测试做什么）:
@@ -1585,6 +1710,32 @@ mod tests {
     fn tmux_split_direction_maps_to_tmux_arguments() {
         assert_eq!(PaneSplitDirection::Right.tmux_flag(), "-h");
         assert_eq!(PaneSplitDirection::Down.tmux_flag(), "-v");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     通过分屏按钮创建的新 pane 应从项目根目录启动，不能继承当前 pane 里用户 cd 后的目录。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言 split-window 参数包含 `-c <project_root>`，并保留方向与 target 参数。
+    #[test]
+    fn tmux_split_window_args_pin_project_root_cwd() {
+        let args = tmux_split_window_args(
+            PaneSplitDirection::Right,
+            "cc-partner-project-p1:@2",
+            "/Users/hans/project",
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "split-window",
+                "-h",
+                "-t",
+                "cc-partner-project-p1:@2",
+                "-c",
+                "/Users/hans/project",
+            ]
+        );
     }
 
     /// Business Logic（为什么需要这个测试）:

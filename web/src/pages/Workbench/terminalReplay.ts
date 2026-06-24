@@ -1,0 +1,41 @@
+interface TerminalReplayWriter {
+  write(data: string, callback?: () => void): void;
+}
+
+export interface TerminalReplayGate {
+  current: boolean;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   工作台 terminal 首次挂载或 buffer 截断后会重放历史 PTY 输出，历史输出中的 tmux 查询序列不应再次写回后端。
+ *
+ * Code Logic（这个函数做什么）:
+ *   返回当前 xterm onData 是否应作为真实用户输入转发给 PTY。
+ */
+export function shouldForwardTerminalInput(gate: TerminalReplayGate): boolean {
+  return !gate.current;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   xterm 在处理 tmux 的设备能力查询序列时会通过 onData 产生响应；历史 buffer replay 期间这些响应是旧输出副作用。
+ *
+ * Code Logic（这个函数做什么）:
+ *   写入 replay buffer 前打开 gate，等 xterm write callback 触发后关闭 gate；空 buffer 立即保持可输入。
+ */
+export function writeTerminalReplay(
+  terminal: TerminalReplayWriter,
+  data: string,
+  gate: TerminalReplayGate,
+): void {
+  if (data.length === 0) {
+    gate.current = false;
+    return;
+  }
+
+  gate.current = true;
+  terminal.write(data, () => {
+    gate.current = false;
+  });
+}

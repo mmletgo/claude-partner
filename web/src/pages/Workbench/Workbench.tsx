@@ -17,7 +17,6 @@ import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
-import type { ITheme, ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { workbenchApi } from '@/api/workbench';
@@ -45,6 +44,8 @@ import type {
 } from '@/lib/types';
 import styles from './Workbench.module.css';
 import { visibleTerminalSessions } from './terminalSessionOrder';
+import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOptions';
+import { shouldForwardTerminalInput, writeTerminalReplay } from './terminalReplay';
 import { terminalPanePixelSize } from './terminalSizing';
 import type { TerminalLayoutMode } from './terminalSizing';
 
@@ -201,53 +202,6 @@ function clampU16(value: number, min: number): number {
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   xterm 的主题需要跟随应用设计 token，而不是写死另一套终端色板。
- *
- * Code Logic（这个函数做什么）:
- *   从 documentElement 的 CSS 变量读取颜色；缺失时回退系统色关键字。
- */
-function tokenValue(name: string, fallback: string): string {
-  const value = window.getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return value || fallback;
-}
-
-/**
- * Business Logic（为什么需要这个函数）:
- *   终端颜色需要跟随当前主题 token，且主题切换后已存在的 xterm 也要同步更新。
- *
- * Code Logic（这个函数做什么）:
- *   读取 terminal 相关 CSS token 并组装 xterm ITheme。
- */
-function terminalTheme(): ITheme {
-  return {
-    background: tokenValue('--terminal-bg', 'Canvas'),
-    foreground: tokenValue('--terminal-fg', 'CanvasText'),
-    cursor: tokenValue('--accent', 'CanvasText'),
-    selectionBackground: tokenValue('--accent-soft', 'Highlight'),
-  };
-}
-
-/**
- * Business Logic（为什么需要这个函数）:
- *   工作台创建和渲染终端都必须使用同一套 xterm 字体参数，否则启动前测量出的行列数会偏离真实显示。
- *
- * Code Logic（这个函数做什么）:
- *   组装 Terminal 构造参数，包含字体、行高、滚动缓冲与主题。
- */
-function terminalOptions(): ITerminalOptions {
-  return {
-    cursorBlink: true,
-    convertEol: true,
-    fontFamily: tokenValue('--font-mono', 'monospace'),
-    fontSize: 13,
-    lineHeight: 1.35,
-    scrollback: 3000,
-    theme: terminalTheme(),
-  };
-}
-
-/**
- * Business Logic（为什么需要这个函数）:
  *   交互式终端程序会按 PTY 初始 cols/rows 绘制首屏；如果后端先用默认尺寸启动，前端随后 resize 会导致首屏错位。
  *
  * Code Logic（这个函数做什么）:
@@ -281,7 +235,7 @@ function measureInitialTerminalSize(
   host.appendChild(viewport);
   document.body.appendChild(host);
 
-  const terminal = new Terminal(terminalOptions());
+  const terminal = new Terminal(workbenchTerminalOptions());
   const fit = new FitAddon();
   try {
     terminal.loadAddon(fit);
@@ -361,6 +315,7 @@ function TerminalPane(props: TerminalPaneProps) {
   const terminalRef = useRef<Terminal | null>(null);
   const bufferRef = useRef<string>('');
   const writtenLengthRef = useRef<number>(0);
+  const replayGateRef = useRef<boolean>(false);
   const resizeTimerRef = useRef<number | null>(null);
   const sessionId = session?.id ?? null;
 
@@ -372,16 +327,17 @@ function TerminalPane(props: TerminalPaneProps) {
     const viewport = viewportRef.current;
     if (!viewport || !sessionId) return undefined;
 
-    const terminal = new Terminal(terminalOptions());
+    const terminal = new Terminal(workbenchTerminalOptions());
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(viewport);
     fit.fit();
-    terminal.write(bufferRef.current);
-    writtenLengthRef.current = bufferRef.current.length;
     const dataDisposable = terminal.onData((data: string) => {
+      if (!shouldForwardTerminalInput(replayGateRef)) return;
       onInput(sessionId, data);
     });
+    writeTerminalReplay(terminal, bufferRef.current, replayGateRef);
+    writtenLengthRef.current = bufferRef.current.length;
     const resize = () => {
       try {
         fit.fit();
@@ -414,6 +370,7 @@ function TerminalPane(props: TerminalPaneProps) {
       terminal.dispose();
       terminalRef.current = null;
       writtenLengthRef.current = 0;
+      replayGateRef.current = false;
     };
   }, [onInput, onResize, sessionId]);
 
@@ -421,7 +378,7 @@ function TerminalPane(props: TerminalPaneProps) {
     const applyTheme = () => {
       const terminal = terminalRef.current;
       if (terminal) {
-        terminal.options.theme = terminalTheme();
+        terminal.options.theme = workbenchTerminalTheme();
       }
     };
     window.addEventListener('cp-theme-change', applyTheme);
@@ -438,7 +395,7 @@ function TerminalPane(props: TerminalPaneProps) {
     const previousLength = writtenLengthRef.current;
     if (buffer.length < previousLength) {
       terminal.clear();
-      terminal.write(buffer);
+      writeTerminalReplay(terminal, buffer, replayGateRef);
       writtenLengthRef.current = buffer.length;
       return;
     }
@@ -571,6 +528,7 @@ export function Workbench() {
     () => visibleTerminalSessions({ sessions, activeSessionId }),
     [activeSessionId, sessions],
   );
+  const renderedActiveSessionId = activeSession?.id ?? visibleSessions[0]?.id ?? null;
   const selectedParentPath = selectedInfo
     ? selectedInfo.kind === 'dir'
       ? selectedInfo.path
@@ -1146,7 +1104,7 @@ export function Workbench() {
               <div
                 key={session.id}
                 className={styles.terminalPaneFrame}
-                data-active={session.id === activeSessionId || undefined}
+                data-active={session.id === renderedActiveSessionId || undefined}
                 onClick={() => focusSession(session.id)}
               >
                 <div className={styles.terminalPaneHeader}>

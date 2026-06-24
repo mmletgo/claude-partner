@@ -316,7 +316,7 @@ pub async fn resize_workbench_session(
 ///     工作台采用真实 tmux 映射后，用户需要在当前 window 内创建左右或上下 pane。
 ///
 /// Code Logic（这个函数做什么）:
-///     校验 direction 字符串，调用 registry 执行 tmux split-window，成功返回 sessionId 和 direction。
+///     校验 direction 字符串，读取会话所属项目根路径，调用 registry 执行带 cwd 的 tmux split-window。
 #[tauri::command]
 pub async fn split_workbench_pane(
     state: State<'_, AppState>,
@@ -324,9 +324,15 @@ pub async fn split_workbench_pane(
     direction: String,
 ) -> Result<serde_json::Value, AppError> {
     let split_direction = PaneSplitDirection::from_api(&direction)?;
+    let row = state
+        .workbench_session_repo
+        .get(&session_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台会话不存在"))?;
+    let project = get_project(&state, &row.project_id).await?;
     state
         .workbench_sessions
-        .split_pane(&session_id, split_direction)?;
+        .split_pane(&session_id, split_direction, &project.path)?;
     Ok(serde_json::json!({ "ok": true, "sessionId": session_id, "direction": direction }))
 }
 

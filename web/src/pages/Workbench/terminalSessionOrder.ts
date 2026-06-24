@@ -34,16 +34,12 @@ function sortSessionsByCreatedOrder(sessions: WorkbenchSession[]): WorkbenchSess
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   真实 tmux 映射下，前端每次只 attach 当前 window；pane 布局由 tmux 在该 window 内渲染。
+ *   app tab 对应真实 tmux window；切换 tab 只应改变可见/交互层，不能销毁其他 xterm 实例，
+ *   否则回切时 replay 原始终端流会重新执行历史控制序列，导致设备能力响应字符出现在 shell 中。
  *
  * Code Logic（这个函数做什么）:
- *   优先返回 activeSessionId 对应 window；缺失时返回最早创建 window。
+ *   按创建时间返回所有 window，activeSessionId 不参与重排；调用方用 activeSessionId 控制可见性。
  */
 export function visibleTerminalSessions(input: VisibleTerminalSessionsInput): WorkbenchSession[] {
-  const orderedSessions = sortSessionsByCreatedOrder(input.sessions);
-  const activeSession =
-    input.activeSessionId === null
-      ? null
-      : input.sessions.find((session) => session.id === input.activeSessionId);
-  return (activeSession ? [activeSession] : orderedSessions).slice(0, 1);
+  return sortSessionsByCreatedOrder(input.sessions);
 }

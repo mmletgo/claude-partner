@@ -26,7 +26,7 @@ function session(id: string, name: string, startedAt: string): WorkbenchSession 
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   排序测试只关心会话 id 顺序，需要用清晰错误展示实际可见终端列表。
+ *   排序测试只关心会话 id 顺序，需要用清晰错误展示实际渲染终端列表。
  *
  * Code Logic（这个函数做什么）:
  *   从 WorkbenchSession 数组投影 id，并与期望 id 列表做 JSON 严格比较。
@@ -53,7 +53,7 @@ assertIds(
     sessions,
     activeSessionId: 'third',
   }),
-  ['third'],
+  ['first', 'second', 'third', 'fourth', 'fifth'],
 );
 
 assertIds(
@@ -61,7 +61,7 @@ assertIds(
     sessions,
     activeSessionId: 'fifth',
   }),
-  ['fifth'],
+  ['first', 'second', 'third', 'fourth', 'fifth'],
 );
 
 assertIds(
@@ -69,7 +69,7 @@ assertIds(
     sessions,
     activeSessionId: 'third',
   }),
-  ['third'],
+  ['first', 'second', 'third', 'fourth', 'fifth'],
 );
 
 assertIds(
@@ -77,7 +77,7 @@ assertIds(
     sessions,
     activeSessionId: null,
   }),
-  ['first'],
+  ['first', 'second', 'third', 'fourth', 'fifth'],
 );
 
 console.log('terminalSessionOrder.test.ts passed');

@@ -289,6 +289,7 @@
 
 .terminalPanel[data-layout='single'] {
   grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .terminalPanel[data-layout='single'] .terminalHost {
@@ -309,6 +310,7 @@
 }
 
 .terminalPaneFrame {
+  grid-area: 1 / 1;
   min-width: 0;
   min-height: 0;
   display: grid;
@@ -317,11 +319,18 @@
   border-radius: 0;
   overflow: hidden;
   background: var(--terminal-bg);
+  opacity: 0;
+  pointer-events: none;
   transition: all var(--motion-fast) var(--ease-standard);
+  visibility: hidden;
 }
 
 .terminalPaneFrame[data-active='true'] {
+  z-index: 1;
   border-color: color-mix(in oklab, var(--accent) 40%, var(--terminal-border));
+  opacity: 1;
+  pointer-events: auto;
+  visibility: visible;
 }
 
 .terminalPaneHeader {
