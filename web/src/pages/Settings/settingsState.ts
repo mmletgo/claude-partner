@@ -1,4 +1,4 @@
-import type { AppConfig, CloudSyncConfig, GithubTrendingConfig } from '../../lib/types';
+import type { AppConfig, CloudSyncConfig, GithubTrendingConfig, HealthConfig } from '../../lib/types';
 import { getDefaultShortcutValue } from './shortcutRecorder';
 
 /** 单个快捷键字段定义（label/helper 在渲染时按 i18n 解析，这里只存可本地化的 id） */
@@ -33,6 +33,9 @@ export interface GithubTrendingForm {
   cacheTtlHours: number;
 }
 
+/** 健康提醒 tab 的受控表单值;与 HealthConfig 同构,直接整体提交给 update_health_config。 */
+export type HealthForm = HealthConfig;
+
 /** 可提交到 update_config 的 Settings 字段。 */
 export type SettingsConfigUpdate = Partial<Pick<AppConfig, 'deviceName' | 'receiveDir' | 'screenshotHotkey'>>;
 
@@ -60,6 +63,21 @@ export const PENDING_GITHUB_TRENDING_FORM: GithubTrendingForm = {
   claudeCliPath: 'claude',
   claudeModel: 'sonnet',
   cacheTtlHours: 24,
+};
+
+/** 健康表单加载前占位值;真实值由后端 get_health_config / get_default_health_config 覆盖。 */
+export const PENDING_HEALTH_FORM: HealthForm = {
+  enabled: true,
+  workWindowSeconds: 45 * 60,
+  breakSeconds: 5 * 60,
+  recordWindowTitle: true,
+  retainDays: 90,
+  notifyEnabled: true,
+  dndStart: null,
+  dndEnd: null,
+  waterEnabled: true,
+  waterIntervalSeconds: 60 * 60,
+  reminderFullscreen: false,
 };
 
 /** 快捷键字段定义（值由运行平台或后端配置决定，文案走 t） */
@@ -175,6 +193,21 @@ export function githubTrendingConfigToForm(config: GithubTrendingConfig | null):
     claudeModel: config.claudeModel || 'sonnet',
     cacheTtlHours: config.cacheTtlHours,
   };
+}
+
+/**
+ * 将后端 HealthConfig 映射为健康 tab 受控表单值
+ *
+ * Business Logic（为什么需要）:
+ *   健康 tab 需用同一套映射处理当前配置和恢复默认配置,与其他 tab 的 *ConfigToForm 模式对齐;
+ *   表单层持有独立拷贝,避免外部直接改到后端返回对象或占位常量。
+ *
+ * Code Logic（做什么）:
+ *   null 返回占位默认的新拷贝;非 null 返回字段拷贝(恒等映射 + null 安全,dndStart/dndEnd 等可空字段原样保留)。
+ */
+export function healthConfigToForm(config: HealthConfig | null): HealthForm {
+  if (!config) return { ...PENDING_HEALTH_FORM };
+  return { ...config };
 }
 
 /**

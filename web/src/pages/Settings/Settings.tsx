@@ -20,14 +20,17 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, KeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
+import { useSearchParams } from 'react-router-dom';
 import { Card, Button, Input, Pill } from '@/components/primitives';
 import { PermissionCard } from '@/components/domain';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
+import { healthApi } from '@/api/health';
 import { requestNotificationPermission } from '@/lib/notification';
 import { githubTrendingApi } from '@/api/githubTrending';
 import { usePermissions } from '@/hooks/usePermissions';
 import { mapPermissions } from '@/lib/permissionEntries';
+import { HealthPanel } from './HealthPanel';
 import {
   formatShortcutForDisplay,
   resolveShortcutRecording,
@@ -38,12 +41,19 @@ import {
   cloudSyncFormToUpdate,
   createPendingSettingsState,
   githubTrendingConfigToForm,
+  healthConfigToForm,
   isSettingsStateDirty,
   PENDING_CLOUD_SYNC_FORM,
   PENDING_GITHUB_TRENDING_FORM,
+  PENDING_HEALTH_FORM,
   settingsStateFromConfig,
 } from './settingsState';
-import type { CloudSyncForm, GithubTrendingForm, SettingsState } from './settingsState';
+import type {
+  CloudSyncForm,
+  GithubTrendingForm,
+  HealthForm,
+  SettingsState,
+} from './settingsState';
 import type {
   VersionInfo,
   UpdateCheckResult,
@@ -54,11 +64,12 @@ import type {
   TestCloudSyncResult,
   ClaudeCliTestResult,
   GithubTrendingConfig,
+  HealthConfig,
 } from '@/lib/types';
 import styles from './Settings.module.css';
 
 /** Settings 页内子 tab id */
-type SettingsTabId = 'general' | 'sync' | 'ai' | 'about';
+type SettingsTabId = 'general' | 'health' | 'sync' | 'ai' | 'about';
 
 /** Settings 页内子 tab 定义 */
 interface SettingsTab {
@@ -69,6 +80,7 @@ interface SettingsTab {
 /** Settings 页内子 tab 顺序：按用户查看任务组织，而不是按底层配置来源组织 */
 const SETTINGS_TABS: SettingsTab[] = [
   { id: 'general', labelKey: 'general' },
+  { id: 'health', labelKey: 'health' },
   { id: 'sync', labelKey: 'sync' },
   { id: 'ai', labelKey: 'ai' },
   { id: 'about', labelKey: 'about' },
@@ -128,7 +140,14 @@ export function Settings() {
   const [installing, setInstalling] = useState(false);
   const [saving, setSaving] = useState(false);
   const [choosingDir, setChoosingDir] = useState(false);
-  const [activeTab, setActiveTab] = useState<SettingsTabId>('general');
+  // 深链激活：从 ?tab= 取初值，仅接受已知 tab id，其余回退到「常规」
+  const [searchParams] = useSearchParams();
+  const initialTab = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<SettingsTabId>(
+    initialTab === 'health' || initialTab === 'sync' || initialTab === 'ai' || initialTab === 'about'
+      ? (initialTab as SettingsTabId)
+      : 'general',
+  );
   const [recordingShortcutId, setRecordingShortcutId] = useState<string | null>(null);
 
   // 云端同步（GitHub 私有仓库）独立操作块：表单值 / 已应用配置 / 上次同步结果 / 测试结果 / 各动作 loading
@@ -156,6 +175,13 @@ export function Settings() {
   const [githubTrendingError, setGithubTrendingError] = useState<string | null>(null);
   const [testingClaudeCli, setTestingClaudeCli] = useState(false);
   const [applyingGithubTrending, setApplyingGithubTrending] = useState(false);
+
+  // 健康提醒配置：独立表单编辑 + 恢复默认 + 应用配置（与同步/AI 同模式）。
+  const [healthForm, setHealthForm] = useState<HealthForm>({ ...PENDING_HEALTH_FORM });
+  const [defaultHealthForm, setDefaultHealthForm] = useState<HealthForm>({ ...PENDING_HEALTH_FORM });
+  const [healthConfig, setHealthConfig] = useState<HealthConfig | null>(null);
+  const [applyingHealth, setApplyingHealth] = useState(false);
+  const [healthError, setHealthError] = useState<string | null>(null);
 
   // macOS 权限状态（设置页手动授权入口，持续轮询以反映用户在系统设置的变更）
   const [tWelcome] = useTranslation('welcome');
@@ -407,6 +433,8 @@ export function Settings() {
           defaultCloudSyncConfig,
           githubTrendingLoaded,
           defaultGithubTrendingLoaded,
+          healthLoaded,
+          defaultHealthLoaded,
         ] = await Promise.all([
           configApi.get(),
           configApi.getDefaults(),
@@ -415,6 +443,8 @@ export function Settings() {
           configApi.getDefaultCloudSyncConfig(),
           githubTrendingApi.getConfig(),
           githubTrendingApi.getDefaultConfig(),
+          healthApi.getConfig(),
+          healthApi.getDefaultConfig(),
         ]);
         if (cancelled) return;
 
@@ -433,6 +463,10 @@ export function Settings() {
         setGithubTrendingConfig(githubTrendingLoaded);
         setGithubTrendingForm(githubTrendingConfigToForm(githubTrendingLoaded));
         setDefaultGithubTrendingForm(githubTrendingConfigToForm(defaultGithubTrendingLoaded));
+        // 健康提醒：初始化已应用配置与受控表单值 + 默认表单
+        setHealthConfig(healthLoaded);
+        setHealthForm(healthConfigToForm(healthLoaded));
+        setDefaultHealthForm(healthConfigToForm(defaultHealthLoaded));
       } catch (err) {
         if (cancelled) return;
         setLoadError(err instanceof Error ? err.message : t('error.loadConfigFailed'));
@@ -674,6 +708,50 @@ export function Settings() {
     }
   };
 
+  /**
+   * 更新健康提醒表单字段（浅合并，只改本地，不落盘）
+   *
+   * @param partial 待合并的字段
+   */
+  const patchHealthForm = useCallback((partial: Partial<HealthForm>) => {
+    setHealthForm((prev) => ({ ...prev, ...partial }));
+  }, []);
+
+  /**
+   * 健康提醒「恢复默认」：把表单重置为后端默认配置
+   *
+   * Business Logic（为什么需要这个函数）:
+   *   健康 tab 用户改过工作窗口/提醒等，需随时回到应用内置默认。
+   *
+   * Code Logic（这个函数做什么）:
+   *   用加载时保存的默认表单快照覆盖当前表单；持久化仍由「应用配置」完成。
+   */
+  const handleResetHealthDefaults = useCallback(() => {
+    setHealthForm(defaultHealthForm);
+    setHealthError(null);
+  }, [defaultHealthForm]);
+
+  /**
+   * 健康提醒「应用配置」：整体提交表单到后端并用返回值刷新已应用快照
+   *
+   * Business Logic（为什么需要这个函数）:
+   *   健康配置需整体覆盖式回写（后端 update_health_config 不做部分合并），
+   *   提交后用后端返回值刷新已应用快照与表单，保证 UI 与后端一致。
+   */
+  const handleApplyHealth = async () => {
+    setApplyingHealth(true);
+    setHealthError(null);
+    try {
+      const updated = await healthApi.updateConfig(healthForm);
+      setHealthConfig(updated);
+      setHealthForm(healthConfigToForm(updated));
+    } catch (err) {
+      setHealthError(err instanceof Error ? err.message : t('health.applyFailed'));
+    } finally {
+      setApplyingHealth(false);
+    }
+  };
+
   // 加载状态
   if (loading) {
     return (
@@ -871,10 +949,29 @@ export function Settings() {
               {t('settings:action.resetDefault')}
             </Button>
             <Button variant="primary" onClick={handleSave} disabled={!isDirty || saving}>
-              {saving ? t('settings:action.saving') : t('settings:action.save')}
+              {saving ? t('settings:action.applying') : t('settings:action.apply')}
             </Button>
           </div>
         </div>
+          </div>
+        ) : null}
+
+        {activeTab === 'health' ? (
+          <div
+            id="settings-panel-health"
+            className={styles.tabPanel}
+            role="tabpanel"
+            aria-labelledby="settings-tab-health"
+          >
+            <HealthPanel
+              form={healthForm}
+              applied={healthConfig}
+              onPatch={patchHealthForm}
+              onResetDefaults={handleResetHealthDefaults}
+              onApply={handleApplyHealth}
+              applying={applyingHealth}
+              error={healthError}
+            />
           </div>
         ) : null}
 

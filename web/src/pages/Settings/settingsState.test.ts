@@ -1,10 +1,12 @@
-import type { AppConfig } from '../../lib/types';
+import type { AppConfig, HealthConfig } from '../../lib/types';
 import {
   buildConfigUpdate,
   cloudSyncFormToUpdate,
   cloudSyncConfigToForm,
   githubTrendingConfigToForm,
+  healthConfigToForm,
   isSettingsStateDirty,
+  PENDING_HEALTH_FORM,
   settingsStateFromConfig,
 } from './settingsState';
 
@@ -123,3 +125,60 @@ assertDeepEqual(
     branch: '',
   },
 );
+
+// ===== healthConfigToForm: 健康表单映射 =====
+
+/**
+ * Business Logic（为什么需要）:
+ *   健康 tab 的表单状态必须与已应用配置分离，且恢复默认时不能复用占位常量对象导致外部直接改到常量。
+ *
+ * Code Logic（做什么）:
+ *   比较 actual/expected 深度相等(沿用 assertDeepEqual 语义),再断言两者非同一引用,不一致则抛错。
+ */
+function assertNotSameRef(actual: unknown, expected: unknown): void {
+  if (actual === expected) {
+    throw new Error('Expected distinct object references, got the same reference');
+  }
+}
+
+/**
+ * Business Logic（为什么需要）:
+ *   健康 tab 加载配置前(null)需要占位默认值,且每次调用都返回新对象避免外部误改共享常量。
+ *
+ * Code Logic（做什么）:
+ *   调用 healthConfigToForm(null),断言返回内容与 PENDING_HEALTH_FORM 深度相等且非同一引用。
+ */
+function testHealthConfigToFormNull(): void {
+  const form = healthConfigToForm(null);
+  assertDeepEqual(form, PENDING_HEALTH_FORM);
+  assertNotSameRef(form, PENDING_HEALTH_FORM);
+}
+
+/**
+ * Business Logic（为什么需要）:
+ *   已有后端配置(含部分字段为 null,如 dndStart/dndEnd)需原样进入表单,且恒等映射不可返回同一引用。
+ *
+ * Code Logic（做什么）:
+ *   构造含 null dnd 的 HealthConfig,断言返回字段深度相等且非同一引用。
+ */
+function testHealthConfigToFormConfig(): void {
+  const cfg: HealthConfig = {
+    enabled: false,
+    workWindowSeconds: 120,
+    breakSeconds: 60,
+    recordWindowTitle: false,
+    retainDays: 7,
+    notifyEnabled: false,
+    dndStart: '22:00',
+    dndEnd: null,
+    waterEnabled: false,
+    waterIntervalSeconds: 1800,
+    reminderFullscreen: true,
+  };
+  const form = healthConfigToForm(cfg);
+  assertDeepEqual(form, cfg);
+  assertNotSameRef(form, cfg);
+}
+
+testHealthConfigToFormNull();
+testHealthConfigToFormConfig();

@@ -299,6 +299,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **配置（`config.rs::HealthConfig`）**：`AppConfig.health: HealthConfig`（`#[serde(default)]` 兼容旧 config.json 无此字段）。字段：`enabled`/`work_window_seconds`(默认 45min)/`break_seconds`(默认 5min)/`record_window_title`/`retain_days`(默认 90)/`notify_enabled`/`dnd_start`/`dnd_end`(Option<String> "HH:MM")/`water_enabled`/`water_interval_seconds`(默认 1h)/`reminder_fullscreen`(Plan 2 全屏遮罩开关，`#[serde(default)]` 默认 false)。各字段 `#[serde(default = "...")]` 单字段缺失回退（reminder_fullscreen 用裸 `#[serde(default)]` 回退 false）。
 - **命令层（`commands/health.rs`，lib.rs invoke_handler 注册）**：
   - `get_health_config` → `HealthConfigDto`（全部配置字段，供前端配置表单初始化；避免 `get_health_status` 只含运行时相位 + 阈值不够用，导致前端 updateConfig 拼凑配置字段清零）
+  - `get_default_health_config` → `HealthConfigDto`（默认值，供设置页恢复默认，复用 `HealthConfig::default()`）
   - `get_health_status` → `HealthStatusDto`（enabled/paused/phase[idle/working/resting]/windowStartTs?/workWindowSeconds/breakSeconds/snoozeUntil?）
   - `toggle_health_enabled(enabled)` → 写 config.health.enabled + save → `HealthConfigDto`
   - `toggle_health_paused(paused)` → store 原子标记（不落盘，重启失效）
