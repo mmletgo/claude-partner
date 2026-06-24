@@ -1,0 +1,1141 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>cc-partner 工作台高保真原型</title>
+  <!--
+    Assumptions:
+    1. 工作台是 cc-partner 的一级页面，用于按项目文件夹管理多个 Claude Code 终端。
+    2. 当前期右侧只承载“当前会话状态”和“可交互项目文件夹”，不放 CLI 配置、事件日志、AGENTS 状态。
+    3. 下一期文件预览会嵌入项目文件夹区域内部，不改变三栏主结构。
+    4. 视觉以现有 cc-partner token 为锚点：暖米色背景、terracotta accent、紧凑桌面工具密度。
+  -->
+  <style>
+    :root {
+      --bg: #f5f4ed;
+      --surface: #faf9f5;
+      --surface-warm: #e8e6dc;
+      --fg: #141413;
+      --fg-2: #3d3d3a;
+      --muted: #5e5d59;
+      --meta: #87867f;
+      --border: #f0eee6;
+      --border-soft: #e8e6dc;
+      --accent: #c96442;
+      --accent-on: #faf9f5;
+      --accent-soft: color-mix(in oklab, var(--accent) 14%, transparent);
+      --success: #17a34a;
+      --warn: #eab308;
+      --danger: #b53333;
+      --font-display: Georgia, "Times New Roman", serif;
+      --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --font-mono: "SFMono-Regular", Menlo, Consolas, monospace;
+      --text-xs: 11px;
+      --text-sm: 12px;
+      --text-base: 13px;
+      --text-md: 14px;
+      --text-lg: 16px;
+      --text-xl: 20px;
+      --text-2xl: 24px;
+      --radius-xs: 4px;
+      --radius-sm: 6px;
+      --radius-md: 8px;
+      --radius-lg: 12px;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.04), 0 2px 8px rgba(0,0,0,.06);
+      --shadow-md: 0 4px 12px rgba(0,0,0,.08);
+      --motion-fast: 150ms;
+      --ease-standard: cubic-bezier(.2, 0, 0, 1);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-body);
+      font-size: var(--text-base);
+      letter-spacing: 0;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    .app {
+      height: 100vh;
+      display: grid;
+      grid-template-columns: 240px minmax(680px, 1fr) 340px;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      background: var(--surface);
+      border-right: 1px solid var(--border-soft);
+      padding: 18px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 18px;
+      min-width: 0;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 6px 8px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brandMark {
+      width: 28px;
+      height: 28px;
+      border-radius: var(--radius-sm);
+      background:
+        radial-gradient(circle at 35% 30%, #f4d1c4 0 22%, transparent 23%),
+        linear-gradient(135deg, var(--accent), #9d4b35);
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,.35);
+    }
+
+    .brandText {
+      font-family: var(--font-display);
+      font-size: var(--text-lg);
+      font-weight: 600;
+      color: var(--fg);
+    }
+
+    .nav {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .navItem {
+      min-height: 36px;
+      border: 0;
+      border-radius: var(--radius-md);
+      background: transparent;
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 10px;
+      text-align: left;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .navItem.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    .navIcon {
+      width: 16px;
+      height: 16px;
+      border-radius: 4px;
+      border: 1px solid currentColor;
+      opacity: .72;
+      position: relative;
+      flex: 0 0 auto;
+    }
+
+    .navIcon::after {
+      content: "";
+      position: absolute;
+      inset: 4px;
+      border-top: 1px solid currentColor;
+    }
+
+    .projectSection {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      flex: 1;
+    }
+
+    .sectionTop {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 0 4px;
+    }
+
+    .sectionTitle {
+      color: var(--meta);
+      font-size: var(--text-xs);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .14em;
+    }
+
+    .iconButton {
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .iconButton:hover,
+    .ghostButton:hover,
+    .fileAction:hover {
+      border-color: color-mix(in oklab, var(--accent) 35%, var(--border-soft));
+      color: var(--accent);
+    }
+
+    .projectList {
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+
+    .projectCard {
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      text-align: left;
+      color: var(--fg);
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .projectCard.active {
+      border-color: color-mix(in oklab, var(--accent) 45%, var(--border-soft));
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+
+    .projectName {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-weight: 650;
+      min-width: 0;
+    }
+
+    .projectName span:first-child {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .projectPath,
+    .projectMeta {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .projectMeta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-family: var(--font-body);
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--success);
+      box-shadow: 0 0 0 3px color-mix(in oklab, var(--success) 16%, transparent);
+      flex: 0 0 auto;
+    }
+
+    .dot.remote {
+      background: var(--warn);
+      box-shadow: 0 0 0 3px color-mix(in oklab, var(--warn) 18%, transparent);
+    }
+
+    .main {
+      min-width: 0;
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      overflow: hidden;
+      background: var(--bg);
+    }
+
+    .topbar {
+      padding: 22px 24px 14px;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .headline {
+      min-width: 0;
+    }
+
+    .title {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: 30px;
+      line-height: 1.15;
+      font-weight: 500;
+      color: var(--fg);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .subtitle {
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: var(--text-md);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      max-width: 720px;
+    }
+
+    .actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex: 0 0 auto;
+    }
+
+    .primaryButton,
+    .ghostButton {
+      min-height: 34px;
+      border-radius: var(--radius-md);
+      padding: 0 13px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .primaryButton {
+      border: 1px solid var(--accent);
+      color: var(--accent-on);
+      background: var(--accent);
+      box-shadow: var(--shadow-sm);
+      font-weight: 650;
+    }
+
+    .ghostButton {
+      border: 1px solid var(--border-soft);
+      background: var(--surface);
+      color: var(--fg-2);
+    }
+
+    .contextBar {
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--border);
+      background: color-mix(in oklab, var(--surface) 72%, transparent);
+    }
+
+    .breadcrumb {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: var(--text-sm);
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .breadcrumb strong {
+      color: var(--fg);
+      font-weight: 650;
+    }
+
+    .pill {
+      min-height: 22px;
+      border-radius: 999px;
+      padding: 0 8px;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      border: 1px solid var(--border-soft);
+      background: var(--surface);
+      font-size: var(--text-xs);
+      white-space: nowrap;
+    }
+
+    .pill.accent {
+      color: var(--accent);
+      background: var(--accent-soft);
+      border-color: transparent;
+    }
+
+    .layoutSwitch {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: var(--surface-warm);
+    }
+
+    .layoutSwitch button {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      min-height: 26px;
+      border-radius: var(--radius-sm);
+      padding: 0 10px;
+      font-size: var(--text-xs);
+    }
+
+    .layoutSwitch button.active {
+      background: var(--surface);
+      color: var(--accent);
+      box-shadow: var(--shadow-sm);
+      font-weight: 650;
+    }
+
+    .terminalArea {
+      min-height: 0;
+      padding: 16px 24px 24px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+      overflow: hidden;
+    }
+
+    .tabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+
+    .tab {
+      min-height: 34px;
+      border: 1px solid var(--border-soft);
+      border-radius: var(--radius-md);
+      background: var(--surface);
+      color: var(--fg-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      white-space: nowrap;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .tab.active {
+      color: var(--accent);
+      border-color: color-mix(in oklab, var(--accent) 35%, var(--border-soft));
+      background: color-mix(in oklab, var(--accent) 7%, var(--surface));
+      font-weight: 650;
+    }
+
+    .tabClose {
+      color: var(--meta);
+      margin-left: 2px;
+    }
+
+    .terminalGrid {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1.18fr) minmax(320px, .82fr);
+      gap: 12px;
+      overflow: hidden;
+    }
+
+    .terminalGrid.single {
+      grid-template-columns: 1fr;
+    }
+
+    .terminalGrid.quad {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      grid-template-rows: repeat(2, minmax(0, 1fr));
+    }
+
+    .terminalPane {
+      min-height: 0;
+      border: 1px solid #2b2824;
+      border-radius: var(--radius-lg);
+      background: #171513;
+      box-shadow: var(--shadow-md);
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+    }
+
+    .paneHeader {
+      height: 38px;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      background: #211e1b;
+      color: #ede8dc;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 12px;
+      font-size: var(--text-xs);
+    }
+
+    .paneTitle {
+      min-width: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .traffic {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .traffic span {
+      width: 9px;
+      height: 9px;
+      border-radius: 999px;
+      background: #ed6a5e;
+    }
+
+    .traffic span:nth-child(2) {
+      background: #f4bf4f;
+    }
+
+    .traffic span:nth-child(3) {
+      background: #61c554;
+    }
+
+    .paneMeta {
+      color: rgba(237,232,220,.58);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+    }
+
+    .terminalOutput {
+      min-height: 0;
+      overflow: auto;
+      padding: 14px 16px;
+      color: #e9e1d2;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      line-height: 1.58;
+      white-space: pre-wrap;
+    }
+
+    .termMuted {
+      color: #8c8578;
+    }
+
+    .termAccent {
+      color: #f09c7b;
+    }
+
+    .termSuccess {
+      color: #79d18d;
+    }
+
+    .termPrompt {
+      color: #d8b56d;
+    }
+
+    .inputLine {
+      height: 38px;
+      border-top: 1px solid rgba(255,255,255,.08);
+      background: #151311;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 14px;
+      color: #d8b56d;
+      font-family: var(--font-mono);
+      font-size: 12px;
+    }
+
+    .cursor {
+      width: 8px;
+      height: 15px;
+      background: #e9e1d2;
+      animation: blink 1s steps(2, start) infinite;
+    }
+
+    @keyframes blink {
+      50% { opacity: 0; }
+    }
+
+    .inspector {
+      border-left: 1px solid var(--border-soft);
+      background: var(--surface);
+      min-width: 0;
+      overflow: hidden;
+      display: grid;
+      grid-template-rows: auto minmax(0, .92fr) minmax(0, 1.08fr);
+    }
+
+    .inspectorHeader {
+      padding: 22px 18px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .inspectorTitle {
+      margin: 0;
+      font-family: var(--font-display);
+      font-size: var(--text-xl);
+      line-height: 1.2;
+      font-weight: 500;
+    }
+
+    .inspectorHint {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: var(--text-sm);
+      line-height: 1.45;
+    }
+
+    .panel {
+      min-height: 0;
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--border);
+      overflow: auto;
+    }
+
+    .panel:last-child {
+      border-bottom: 0;
+    }
+
+    .panelHead {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .panelTitle {
+      margin: 0;
+      color: var(--fg);
+      font-size: var(--text-md);
+      font-weight: 700;
+    }
+
+    .statusGrid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+
+    .statusRow {
+      display: grid;
+      grid-template-columns: 74px minmax(0, 1fr);
+      align-items: baseline;
+      gap: 10px;
+      min-height: 28px;
+      padding: 7px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .statusRow:last-child {
+      border-bottom: 0;
+    }
+
+    .statusLabel {
+      color: var(--meta);
+      font-size: var(--text-xs);
+    }
+
+    .statusValue {
+      color: var(--fg);
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .statusValue.mono {
+      font-family: var(--font-mono);
+      font-size: var(--text-xs);
+    }
+
+    .sessionActions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .fileToolbar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .fileAction {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--border-soft);
+      background: var(--surface);
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .fileTree {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 2px 0 10px;
+    }
+
+    .fileNode {
+      min-height: 30px;
+      display: grid;
+      grid-template-columns: 18px 18px minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      padding: 0 7px;
+      color: var(--fg-2);
+      background: transparent;
+      text-align: left;
+      transition: all var(--motion-fast) var(--ease-standard);
+    }
+
+    .fileNode:hover {
+      background: color-mix(in oklab, var(--surface-warm) 55%, transparent);
+    }
+
+    .fileNode.active {
+      background: var(--accent-soft);
+      color: var(--accent);
+      border-color: color-mix(in oklab, var(--accent) 24%, transparent);
+      font-weight: 650;
+    }
+
+    .indent1 { padding-left: 23px; }
+    .indent2 { padding-left: 43px; }
+
+    .twisty {
+      color: var(--meta);
+      text-align: center;
+      font-size: 10px;
+    }
+
+    .fileIcon {
+      width: 16px;
+      height: 14px;
+      border: 1px solid currentColor;
+      border-radius: 3px;
+      opacity: .72;
+      position: relative;
+    }
+
+    .fileIcon.folder::before {
+      content: "";
+      position: absolute;
+      left: 1px;
+      top: -4px;
+      width: 8px;
+      height: 4px;
+      border: 1px solid currentColor;
+      border-bottom: 0;
+      border-radius: 3px 3px 0 0;
+      background: var(--surface);
+    }
+
+    .fileName {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: var(--text-sm);
+    }
+
+    .fileMeta {
+      color: var(--meta);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+    }
+
+    .selectedFile {
+      margin-top: 10px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-md);
+      background: color-mix(in oklab, var(--surface-warm) 36%, var(--surface));
+      padding: 10px;
+      display: grid;
+      gap: 7px;
+    }
+
+    .selectedFileTitle {
+      font-weight: 700;
+      overflow: hidden;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .selectedFileMeta {
+      display: grid;
+      gap: 4px;
+      color: var(--muted);
+      font-size: var(--text-xs);
+      font-family: var(--font-mono);
+    }
+
+    .previewNext {
+      margin-top: 4px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border-soft);
+      color: var(--meta);
+      font-size: var(--text-xs);
+      line-height: 1.45;
+    }
+
+    @media (max-width: 1240px) {
+      .app {
+        grid-template-columns: 220px minmax(560px, 1fr) 310px;
+      }
+
+      .subtitle {
+        max-width: 520px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar" aria-label="侧边栏">
+      <div class="brand">
+        <div class="brandMark"></div>
+        <div class="brandText">cc-partner</div>
+      </div>
+
+      <nav class="nav" aria-label="主导航">
+        <button class="navItem"><span class="navIcon"></span>Github热门</button>
+        <button class="navItem"><span class="navIcon"></span>Prompt库</button>
+        <button class="navItem"><span class="navIcon"></span>Claude历史</button>
+        <button class="navItem"><span class="navIcon"></span>速记本</button>
+        <button class="navItem active"><span class="navIcon"></span>工作台</button>
+        <button class="navItem"><span class="navIcon"></span>Claude Code</button>
+        <button class="navItem"><span class="navIcon"></span>设备</button>
+      </nav>
+
+      <section class="projectSection">
+        <div class="sectionTop">
+          <span class="sectionTitle">项目文件夹</span>
+          <button class="iconButton" title="添加项目">+</button>
+        </div>
+        <div class="projectList">
+          <button class="projectCard active" data-project="cc-partner" data-device="Hans-MacBook" data-path="/Users/hans/web_project/cc-partner">
+            <div class="projectName"><span>cc-partner</span><span class="dot"></span></div>
+            <div class="projectPath">/Users/hans/web_project/cc-partner</div>
+            <div class="projectMeta"><span>本机</span><span>3 个终端</span></div>
+          </button>
+          <button class="projectCard" data-project="agent-lab" data-device="Ubuntu-Desk" data-path="/home/hans/work/agent-lab">
+            <div class="projectName"><span>agent-lab</span><span class="dot remote"></span></div>
+            <div class="projectPath">/home/hans/work/agent-lab</div>
+            <div class="projectMeta"><span>Ubuntu-Desk</span><span>1 个终端</span></div>
+          </button>
+          <button class="projectCard" data-project="notes-site" data-device="Hans-MacBook" data-path="/Users/hans/web_project/notes-site">
+            <div class="projectName"><span>notes-site</span><span class="dot"></span></div>
+            <div class="projectPath">/Users/hans/web_project/notes-site</div>
+            <div class="projectMeta"><span>本机</span><span>未运行</span></div>
+          </button>
+        </div>
+      </section>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="headline">
+          <h1 class="title">工作台 <span class="pill accent">Claude Code sessions</span></h1>
+          <p class="subtitle" id="projectSubtitle">Hans-MacBook · /Users/hans/web_project/cc-partner</p>
+        </div>
+        <div class="actions">
+          <button class="ghostButton">打开文件夹</button>
+          <button class="primaryButton">+ 新建 Claude 终端</button>
+        </div>
+      </header>
+
+      <div class="contextBar">
+        <div class="breadcrumb" id="breadcrumb">
+          <span>项目</span><strong>cc-partner</strong><span>/</span><span>web/src/pages</span>
+        </div>
+        <div class="layoutSwitch" aria-label="分屏布局">
+          <button data-layout="single">单窗</button>
+          <button class="active" data-layout="split">双列</button>
+          <button data-layout="quad">四宫格</button>
+        </div>
+      </div>
+
+      <section class="terminalArea">
+        <div class="tabs" aria-label="终端会话">
+          <button class="tab active" data-session="Claude 主线" data-status="运行中" data-runtime="18m 42s" data-command="claude" data-pane="main">Claude 主线 <span class="tabClose">×</span></button>
+          <button class="tab" data-session="Review" data-status="运行中" data-runtime="07m 11s" data-command="claude --model sonnet" data-pane="review">Review <span class="tabClose">×</span></button>
+          <button class="tab" data-session="Debug shell" data-status="已退出" data-runtime="03m 05s" data-command="zsh" data-pane="debug">Debug shell <span class="tabClose">×</span></button>
+          <button class="tab">+ 新会话</button>
+        </div>
+
+        <div class="terminalGrid" id="terminalGrid">
+          <article class="terminalPane">
+            <div class="paneHeader">
+              <div class="paneTitle">
+                <span class="traffic"><span></span><span></span><span></span></span>
+                Claude 主线
+              </div>
+              <div class="paneMeta">Hans-MacBook · 98×32</div>
+            </div>
+            <div class="terminalOutput">
+<span class="termMuted">$ pwd</span>
+/Users/hans/web_project/cc-partner
+
+<span class="termMuted">$ claude</span>
+<span class="termSuccess">Claude Code ready.</span> Working tree clean. Project memory loaded.
+
+<span class="termPrompt">你:</span> 设计 workbench 页面，支持项目文件夹和多个 Claude Code 终端
+
+<span class="termAccent">Claude:</span> 我会先把能力拆成会话管理和项目文件系统两部分。第一期不做文件预览，但右侧文件树要保留后续扩展位置。
+
+• 新增 workbench_session：PTY 生命周期、输入、resize、停止
+• 新增 workbench_fs：目录树、文件元信息、增删改名
+• 远端项目经 P2P 转发到目标设备执行
+
+<span class="termPrompt">当前焦点:</span> 等待用户确认右侧项目面板交互。
+            </div>
+            <div class="inputLine"><span>cc-partner %</span><span class="cursor"></span></div>
+          </article>
+
+          <article class="terminalPane">
+            <div class="paneHeader">
+              <div class="paneTitle">
+                <span class="traffic"><span></span><span></span><span></span></span>
+                Review
+              </div>
+              <div class="paneMeta">Hans-MacBook · 80×32</div>
+            </div>
+            <div class="terminalOutput">
+<span class="termMuted">$ git diff --stat</span>
+docs/design-demos/workbench-prototype.html | 980 +++++++++++++++++
+
+<span class="termMuted">$ rg "workbench" src-tauri/src web/src</span>
+<span class="termMuted">no production implementation yet</span>
+
+<span class="termAccent">Review note:</span>
+右侧只保留当前会话状态和项目文件夹。下一期文件预览不应成为独立导航，也不应挤压终端区域。
+            </div>
+            <div class="inputLine"><span>cc-partner %</span><span class="cursor"></span></div>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <aside class="inspector" aria-label="右侧项目面板">
+      <header class="inspectorHeader">
+        <h2 class="inspectorTitle">项目面板</h2>
+        <p class="inspectorHint">只显示当前会话状态和项目文件夹。文件预览下一期接在这里。</p>
+      </header>
+
+      <section class="panel">
+        <div class="panelHead">
+          <h3 class="panelTitle">当前会话状态</h3>
+          <span class="pill accent"><span class="dot"></span><span id="statusPill">运行中</span></span>
+        </div>
+        <div class="statusGrid">
+          <div class="statusRow">
+            <div class="statusLabel">会话</div>
+            <div class="statusValue" id="statusSession">Claude 主线</div>
+          </div>
+          <div class="statusRow">
+            <div class="statusLabel">设备</div>
+            <div class="statusValue" id="statusDevice">Hans-MacBook</div>
+          </div>
+          <div class="statusRow">
+            <div class="statusLabel">项目</div>
+            <div class="statusValue" id="statusProject">cc-partner</div>
+          </div>
+          <div class="statusRow">
+            <div class="statusLabel">路径</div>
+            <div class="statusValue mono" id="statusPath">/Users/hans/web_project/cc-partner</div>
+          </div>
+          <div class="statusRow">
+            <div class="statusLabel">命令</div>
+            <div class="statusValue mono" id="statusCommand">claude</div>
+          </div>
+          <div class="statusRow">
+            <div class="statusLabel">运行</div>
+            <div class="statusValue" id="statusRuntime">18m 42s</div>
+          </div>
+        </div>
+        <div class="sessionActions">
+          <button class="ghostButton">重命名</button>
+          <button class="ghostButton">重启</button>
+          <button class="ghostButton">停止</button>
+          <button class="ghostButton">关闭</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panelHead">
+          <h3 class="panelTitle">项目文件夹</h3>
+          <div class="fileToolbar">
+            <button class="fileAction" title="新建文件">+</button>
+            <button class="fileAction" title="新建文件夹">□</button>
+            <button class="fileAction" title="刷新">↻</button>
+          </div>
+        </div>
+
+        <div class="fileTree" id="fileTree">
+          <button class="fileNode" data-name="web" data-kind="folder" data-size="folder" data-path="web">
+            <span class="twisty">▾</span><span class="fileIcon folder"></span><span class="fileName">web</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent1" data-name="src" data-kind="folder" data-size="folder" data-path="web/src">
+            <span class="twisty">▾</span><span class="fileIcon folder"></span><span class="fileName">src</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent2 active" data-name="pages" data-kind="folder" data-size="folder" data-path="web/src/pages">
+            <span class="twisty">▾</span><span class="fileIcon folder"></span><span class="fileName">pages</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent2" data-name="App.tsx" data-kind="tsx" data-size="8.4 KB" data-path="web/src/App.tsx">
+            <span></span><span class="fileIcon"></span><span class="fileName">App.tsx</span><span class="fileMeta">8.4K</span>
+          </button>
+          <button class="fileNode indent2" data-name="styles" data-kind="folder" data-size="folder" data-path="web/src/styles">
+            <span class="twisty">▸</span><span class="fileIcon folder"></span><span class="fileName">styles</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode" data-name="src-tauri" data-kind="folder" data-size="folder" data-path="src-tauri">
+            <span class="twisty">▾</span><span class="fileIcon folder"></span><span class="fileName">src-tauri</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent1" data-name="src" data-kind="folder" data-size="folder" data-path="src-tauri/src">
+            <span class="twisty">▾</span><span class="fileIcon folder"></span><span class="fileName">src</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent2" data-name="commands" data-kind="folder" data-size="folder" data-path="src-tauri/src/commands">
+            <span class="twisty">▸</span><span class="fileIcon folder"></span><span class="fileName">commands</span><span class="fileMeta">dir</span>
+          </button>
+          <button class="fileNode indent2" data-name="lib.rs" data-kind="rust" data-size="18.2 KB" data-path="src-tauri/src/lib.rs">
+            <span></span><span class="fileIcon"></span><span class="fileName">lib.rs</span><span class="fileMeta">18K</span>
+          </button>
+          <button class="fileNode" data-name="AGENTS.md" data-kind="markdown" data-size="28.1 KB" data-path="AGENTS.md">
+            <span></span><span class="fileIcon"></span><span class="fileName">AGENTS.md</span><span class="fileMeta">28K</span>
+          </button>
+        </div>
+
+        <div class="selectedFile" id="selectedFile">
+          <div class="selectedFileTitle">web/src/pages</div>
+          <div class="selectedFileMeta">
+            <span>类型: folder</span>
+            <span>相对路径: web/src/pages</span>
+            <span>修改: 2 分钟前</span>
+          </div>
+          <div class="previewNext">下一期预览入口：图片、代码和 Markdown 将在这里打开，不新增独立右侧导航。</div>
+        </div>
+      </section>
+    </aside>
+  </div>
+
+  <script>
+    const projectCards = Array.from(document.querySelectorAll('.projectCard'));
+    const tabs = Array.from(document.querySelectorAll('.tab[data-session]'));
+    const fileNodes = Array.from(document.querySelectorAll('.fileNode'));
+    const terminalGrid = document.getElementById('terminalGrid');
+    const selectedFile = document.getElementById('selectedFile');
+
+    const projectState = {
+      name: 'cc-partner',
+      device: 'Hans-MacBook',
+      path: '/Users/hans/web_project/cc-partner'
+    };
+
+    function renderProject() {
+      document.getElementById('projectSubtitle').textContent = `${projectState.device} · ${projectState.path}`;
+      document.getElementById('breadcrumb').innerHTML = `<span>项目</span><strong>${projectState.name}</strong><span>/</span><span>web/src/pages</span>`;
+      document.getElementById('statusDevice').textContent = projectState.device;
+      document.getElementById('statusProject').textContent = projectState.name;
+      document.getElementById('statusPath').textContent = projectState.path;
+    }
+
+    function renderSession(tab) {
+      tabs.forEach((item) => item.classList.remove('active'));
+      tab.classList.add('active');
+      document.getElementById('statusSession').textContent = tab.dataset.session;
+      document.getElementById('statusPill').textContent = tab.dataset.status;
+      document.getElementById('statusRuntime').textContent = tab.dataset.runtime;
+      document.getElementById('statusCommand').textContent = tab.dataset.command;
+    }
+
+    projectCards.forEach((card) => {
+      card.addEventListener('click', () => {
+        projectCards.forEach((item) => item.classList.remove('active'));
+        card.classList.add('active');
+        projectState.name = card.dataset.project;
+        projectState.device = card.dataset.device;
+        projectState.path = card.dataset.path;
+        renderProject();
+      });
+    });
+
+    tabs.forEach((tab) => {
+      tab.addEventListener('click', () => renderSession(tab));
+    });
+
+    document.querySelectorAll('[data-layout]').forEach((button) => {
+      button.addEventListener('click', () => {
+        document.querySelectorAll('[data-layout]').forEach((item) => item.classList.remove('active'));
+        button.classList.add('active');
+        terminalGrid.classList.remove('single', 'quad');
+        if (button.dataset.layout === 'single') terminalGrid.classList.add('single');
+        if (button.dataset.layout === 'quad') terminalGrid.classList.add('quad');
+      });
+    });
+
+    fileNodes.forEach((node) => {
+      node.addEventListener('click', () => {
+        fileNodes.forEach((item) => item.classList.remove('active'));
+        node.classList.add('active');
+        selectedFile.innerHTML = `
+          <div class="selectedFileTitle">${node.dataset.path}</div>
+          <div class="selectedFileMeta">
+            <span>类型: ${node.dataset.kind}</span>
+            <span>相对路径: ${node.dataset.path}</span>
+            <span>大小: ${node.dataset.size}</span>
+          </div>
+          <div class="previewNext">下一期预览入口：图片、代码和 Markdown 将在这里打开，不新增独立右侧导航。</div>
+        `;
+      });
+    });
+  </script>
+</body>
+</html>
