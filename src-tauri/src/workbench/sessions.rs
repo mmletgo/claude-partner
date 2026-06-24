@@ -13,7 +13,7 @@ use crate::workbench::models::{WorkbenchProjectRow, WorkbenchSessionDto};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -150,6 +150,28 @@ fn initial_terminal_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
         rows.map(|value| value.max(MIN_TERMINAL_ROWS))
             .unwrap_or(DEFAULT_ROWS),
     )
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     用户停止或关闭终端时，Claude Code 子进程可能已经自然退出并被系统回收，此时 kill 返回 No such process 不应打扰用户。
+///
+/// Code Logic（这个函数做什么）:
+///     将底层 child.kill() 的结果归一化；进程已不存在视为 Ok，其他 IO 错误继续转换为 AppError。
+fn normalize_terminal_kill_result(result: std::io::Result<()>) -> Result<(), AppError> {
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if is_terminal_process_already_gone(&error) => Ok(()),
+        Err(error) => Err(AppError::from(error)),
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     不同平台或 portable-pty 后端对“进程不存在”可能给出 ErrorKind::NotFound 或原始 ESRCH 码。
+///
+/// Code Logic（这个函数做什么）:
+///     检查 IO 错误是否表示目标进程已不存在；macOS/Linux 的 ESRCH 是 raw os error 3。
+fn is_terminal_process_already_gone(error: &std::io::Error) -> bool {
+    matches!(error.kind(), ErrorKind::NotFound) || error.raw_os_error() == Some(3)
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -360,12 +382,12 @@ impl WorkbenchSessionRegistry {
     ///     用户需要主动停止某个 Claude Code 终端，但仍可保留会话记录直到关闭。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     调用 child.kill() 终止进程；退出 watcher 会随后写入 exited 状态并发送事件。
+    ///     调用 child.kill() 终止进程；进程已不存在视为已停止，退出 watcher 会随后写入状态并发送事件。
     pub fn stop(&self, session_id: &str) -> Result<(), AppError> {
         let handle = self.get_handle(session_id)?;
         let mut handle = handle.lock().expect("workbench session 锁中毒");
         match &mut handle.process {
-            SessionProcess::Pty { child, .. } => child.kill()?,
+            SessionProcess::Pty { child, .. } => normalize_terminal_kill_result(child.kill())?,
             SessionProcess::Fake => {}
         }
         Ok(())
@@ -388,7 +410,9 @@ impl WorkbenchSessionRegistry {
         match &mut handle.process {
             SessionProcess::Pty { child, .. } => {
                 if was_running {
-                    let _ = child.kill();
+                    if let Err(error) = normalize_terminal_kill_result(child.kill()) {
+                        tracing::debug!("关闭工作台终端时 kill 失败: {error}");
+                    }
                 }
             }
             SessionProcess::Fake => {}
@@ -417,7 +441,9 @@ impl WorkbenchSessionRegistry {
             match &mut handle.process {
                 SessionProcess::Pty { child, .. } => {
                     if was_running {
-                        let _ = child.kill();
+                        if let Err(error) = normalize_terminal_kill_result(child.kill()) {
+                            tracing::debug!("清理工作台终端时 kill 失败: {error}");
+                        }
                     }
                 }
                 SessionProcess::Fake => {}
@@ -696,6 +722,18 @@ mod tests {
             initial_terminal_size(None, None),
             (DEFAULT_COLS, DEFAULT_ROWS)
         );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     用户关闭或停止终端时，Claude Code 子进程可能已被系统回收，底层 kill 会返回 No such process。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造 macOS/Linux 常见 ESRCH(os error 3)，断言终端 kill 归一化逻辑把它视为已停止。
+    #[test]
+    fn terminal_kill_treats_no_such_process_as_already_stopped() {
+        let error = std::io::Error::from_raw_os_error(3);
+
+        assert!(normalize_terminal_kill_result(Err(error)).is_ok());
     }
 
     /// Business Logic（为什么需要这个测试）:
