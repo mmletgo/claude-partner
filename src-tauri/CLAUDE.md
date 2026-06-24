@@ -181,8 +181,8 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   - `windows.wix.language: ["en-US","zh-CN"]` —— MSI 安装包中英文双语。
   - `publisher: "cc-partner"`、`category: "Productivity"` —— 安装包元数据。
   - `icon` 数组覆盖三平台（32x32.png/128x128.png/128x128@2x.png/icon.icns/icon.ico），无需额外生成。
-- **版本号单一来源 + 同步**：`tauri.conf.json.version`（当前 0.5.0）是唯一来源。`Cargo.toml.version` **必须与之完全一致**（Tauri build 强制校验，不一致会告警/失败，M9 已将 Cargo.toml 从 0.1.0 同步到 0.5.0）。`web/package.json.version` 跟随同步（前端构建元数据一致）。
-- **bump 脚本（`scripts/bump-version.mjs`）**：发版时统一升级三处版本号，避免漏改。用法 `node scripts/bump-version.mjs <新版本号>`（如 `0.6.0`），内部正则替换三文件 version 字段并回读校验，支持语义化版本含预发布号（如 `1.0.0-beta.1`）。**禁止手动改单个文件版本号**，必须走 bump 脚本。
+- **版本号单一来源 + 同步**：`tauri.conf.json.version` 是唯一来源。`Cargo.toml.version` **必须与之完全一致**（Tauri build 强制校验，不一致会告警/失败）；`web/package.json.version` 跟随同步（前端构建元数据一致）。锁文件中的根包版本也必须同步，避免 CI 的 `cargo --locked` / `npm ci` 路径与源码清单不一致。
+- **bump 脚本（`scripts/bump-version.mjs`）**：发版时统一升级版本号，避免漏改。用法 `node scripts/bump-version.mjs <新版本号>`（如 `0.6.0`），内部正则替换 `tauri.conf.json` / `Cargo.toml` / `Cargo.lock` / `web/package.json` / `web/package-lock.json` 的版本字段并回读校验，支持语义化版本含预发布号（如 `1.0.0-beta.1`）。**禁止手动改单个文件版本号**，必须走 bump 脚本。
 - **CI workflow（`.github/workflows/release-tauri.yml`）**：
   - 触发：`push tags: ['v*']`。
   - 旧的 Python/PyInstaller `release.yml` 已于 M10 删除，现在仓库为纯 Tauri 结构，推 `v*` tag 只跑这一套 Tauri 构建。
@@ -191,7 +191,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
   - **latest.json 当前缺失（tauri-action 上游 bug，v0.6.0 起发现）**：`@v0`(=v0.6.2) 与 dev commit `61337b43` 的 artifacts 收集均不收集 updater `.sig`（与 tauri v2 updater bundle 兼容缺陷），导致 `upload-version-json` 报 "Signature not found for the updater JSON" 跳过 latest.json 生成。release 仅含三平台安装包（无 latest.json/.sig），M8 updater 端到端校验暂不可用（手动下载安装不受影响）。待 tauri-action 上游修复 artifacts 收集后，`@v0` 浮动 tag 自动跟进即可恢复，无需改本仓库代码。注：`assetNamePattern`（旧 input 名 + 不存在的 `[filename]` 占位符）曾导致同平台资产撞名 already_exists，已移除，改用 tauri-action 默认命名（普通产物保留原文件名，macOS updater tarball 自动加 `_版本_架构`，全局唯一）。
   - `updaterJsonPreferNsis: true` —— Windows updater 用 nsis 安装包（非 msi）作下载源。
 - **签名 secret（用户待配）**：tauri-action 引用 `${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}`。用户需把 `~/.tauri/cc-partner.updater.key` 的**内容**配到 repo 的同名 secret（Settings → Secrets and variables → Actions）。**M8 用空密码，故无需配 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`**。未配 secret 时 CI 构建不签名、latest.json 无 signature，updater 校验会失败。
-- **发版流程**：1) `node scripts/bump-version.mjs <新版本号>`（同步 tauri.conf.json + Cargo.toml + web/package.json）；2) 提交；3) `git tag v<版本号> && git push origin v<版本号>` 触发 CI。
+- **发版流程**：1) `node scripts/bump-version.mjs <新版本号>`（同步源码清单与锁文件版本）；2) 提交；3) `git tag v<版本号> && git push origin v<版本号>` 触发 CI。
 
 ## Claude Code 历史采集与同步已落地行为约定（src/cc/ + storage/cc_history_repo.rs + commands/cc_history.rs + net/routes/cc_history.rs）
 
@@ -320,7 +320,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 ## 关键约定
 
 - **数据兼容**：直接读写 `~/.cc-partner/data.db`。两阶段迁移——(1) 首次启动目录级 `config_dir()` 用 `fs::rename` 把 `~/.claude-partner` 整目录搬到 `~/.cc-partner`（**只动目录、不动文件内容**）；(2) 之后 `AppConfig::load()` 检测到 config.json 里残留的旧绝对路径（`db_path` 字段仍指向 `~/.claude-partner/data.db`），按 home 目录做字段级前缀替换并 save——否则 `init_db` 找不到文件会 SQLITE_CANTOPEN panic。迁移 SQL 全用 `CREATE TABLE IF NOT EXISTS`，保用户数据。`tags`/`vector_clock` 仍是标准 JSON TEXT（与 Python `json.dumps` 互通）；`datetime` 需兼容有无时区偏移两种格式。
-- **版本号单一来源**：`tauri.conf.json` 的 `version`；Rust 用 `env!("CARGO_PKG_VERSION")`；前端 `useAppVersion` 经 invoke 获取，禁止硬编码。发版时统一用 `scripts/bump-version.mjs` 同步三处（tauri.conf.json / Cargo.toml / web/package.json），详见 M9 节。
+- **版本号单一来源**：`tauri.conf.json` 的 `version`；Rust 用 `env!("CARGO_PKG_VERSION")`；前端 `useAppVersion` 经 invoke 获取，禁止硬编码。发版时统一用 `scripts/bump-version.mjs` 同步源码清单与锁文件版本，详见 M9 节。
 - **serde 对齐前端**：所有返回给前端的 struct 用 `#[serde(rename_all = "camelCase")]`。
 - **迁移参照**：各模块移植自 Python 版（M10 已删除），算法逻辑（向量时钟、选区、分块协议）逐字等价；各 M1–M8 节的"对照 Python xxx"注释是迁移期的行为基线说明，保留作设计意图记录。
 - **事件替代 Qt 信号**：后端 `app_handle.emit("transfer:progress", ...)` 等，前端 `listen(...)`。

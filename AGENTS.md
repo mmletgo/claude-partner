@@ -382,6 +382,14 @@ cd web
 
 Tauri 自动打包三平台本平台产物（macOS→dmg/app、Windows→nsis/msi、Linux→AppImage/deb），前端构建产物嵌入应用。
 
+### 7.5 发版版本同步
+
+```bash
+node scripts/bump-version.mjs <新版本号>
+```
+
+发版必须通过该脚本统一同步 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`web/package.json`、`web/package-lock.json`；提交后推送 `v<新版本号>` tag 触发 `.github/workflows/release-tauri.yml`。
+
 ## 8. 与 Rust 后端协作
 
 ### 8.1 通信通道
