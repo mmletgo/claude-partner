@@ -55,6 +55,58 @@ struct TerminalStatusEvent {
     ts: i64,
 }
 
+/// 工作台终端 UTF-8 流式解码器。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Claude Code 终端会输出中文、符号和状态栏文本，PTY read 可能把一个 UTF-8 字符拆到两个 chunk。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存上次 chunk 末尾未完成的字节序列，下次 decode 时先拼回去；真实非法字节仍输出替换符。
+#[derive(Debug, Default)]
+struct TerminalUtf8Decoder {
+    pending: Vec<u8>,
+}
+
+impl TerminalUtf8Decoder {
+    /// Business Logic（为什么需要这个函数）:
+    ///     PTY reader 每个会话启动时都需要一个新的解码状态容器。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     返回没有 pending 字节的流式 UTF-8 解码器。
+    fn new() -> Self {
+        Self::default()
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     终端输出事件必须保持文本完整，否则前端 xterm 会显示 �，影响命令行状态栏阅读。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     将新字节与 pending 拼接后解码；遇到末尾不完整 UTF-8 时暂存，遇到非法字节时输出替换符。
+    fn decode(&mut self, bytes: &[u8]) -> String {
+        if self.pending.is_empty() {
+            return decode_utf8_chunk(bytes, &mut self.pending);
+        }
+
+        let mut combined = Vec::with_capacity(self.pending.len() + bytes.len());
+        combined.append(&mut self.pending);
+        combined.extend_from_slice(bytes);
+        decode_utf8_chunk(&combined, &mut self.pending)
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     PTY 关闭前如果仍有残留字节，前端应收到可诊断的占位文本而不是静默丢失。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     取出 pending 并用 lossy 解码；没有 pending 时返回 None。
+    fn finish(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let pending = std::mem::take(&mut self.pending);
+        Some(String::from_utf8_lossy(&pending).into_owned())
+    }
+}
+
 /// PTY 进程资源。
 ///
 /// Business Logic（为什么需要这个枚举）:
@@ -82,6 +134,47 @@ enum SessionProcess {
 struct WorkbenchSessionHandle {
     dto: WorkbenchSessionDto,
     process: SessionProcess,
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     PTY reader 只能拿到字节流，工作台事件需要发送 UTF-8 字符串给前端 xterm。
+///
+/// Code Logic（这个函数做什么）:
+///     从给定字节切片中尽可能解出完整 UTF-8 文本，把末尾不完整序列写入 pending。
+fn decode_utf8_chunk(bytes: &[u8], pending: &mut Vec<u8>) -> String {
+    let mut output = String::new();
+    let mut offset = 0;
+
+    while offset < bytes.len() {
+        match std::str::from_utf8(&bytes[offset..]) {
+            Ok(valid) => {
+                output.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if valid_up_to > 0 {
+                    let valid = std::str::from_utf8(&bytes[offset..offset + valid_up_to])
+                        .expect("valid_up_to guarantees this prefix is valid UTF-8");
+                    output.push_str(valid);
+                    offset += valid_up_to;
+                }
+
+                match error.error_len() {
+                    Some(invalid_len) => {
+                        output.push('\u{FFFD}');
+                        offset += invalid_len;
+                    }
+                    None => {
+                        pending.extend_from_slice(&bytes[offset..]);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    output
 }
 
 /// 工作台 PTY 会话注册表。
@@ -394,21 +487,12 @@ fn spawn_reader_thread(app: AppHandle, session_id: String, mut reader: Box<dyn R
     thread::spawn(move || {
         let mut buf = [0_u8; 8192];
         let mut seq: u64 = 0;
+        let mut decoder = TerminalUtf8Decoder::default();
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    seq += 1;
-                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
-                    let event = TerminalOutputEvent {
-                        session_id: session_id.clone(),
-                        chunk,
-                        seq,
-                        ts: now_millis(),
-                    };
-                    if let Err(error) = app.emit("workbench:terminal-output", event) {
-                        tracing::warn!("发送工作台终端输出事件失败: {error}");
-                    }
+                    emit_terminal_output(&app, &session_id, &mut seq, decoder.decode(&buf[..n]));
                 }
                 Err(error) => {
                     tracing::debug!("读取工作台终端输出结束: {error}");
@@ -416,7 +500,31 @@ fn spawn_reader_thread(app: AppHandle, session_id: String, mut reader: Box<dyn R
                 }
             }
         }
+        if let Some(chunk) = decoder.finish() {
+            emit_terminal_output(&app, &session_id, &mut seq, chunk);
+        }
     });
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     终端输出事件需要统一递增 seq，且纯 pending chunk 未完成时不应发送空事件。
+///
+/// Code Logic（这个函数做什么）:
+///     非空 chunk 才构造 `TerminalOutputEvent` 并通过 `workbench:terminal-output` emit。
+fn emit_terminal_output(app: &AppHandle, session_id: &str, seq: &mut u64, chunk: String) {
+    if chunk.is_empty() {
+        return;
+    }
+    *seq += 1;
+    let event = TerminalOutputEvent {
+        session_id: session_id.to_string(),
+        chunk,
+        seq: *seq,
+        ts: now_millis(),
+    };
+    if let Err(error) = app.emit("workbench:terminal-output", event) {
+        tracing::warn!("发送工作台终端输出事件失败: {error}");
+    }
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -532,6 +640,25 @@ mod tests {
         let registry = WorkbenchSessionRegistry::new();
 
         assert!(registry.close("missing").is_err());
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     Claude Code 状态栏会输出中文和符号，PTY read 可能把多字节 UTF-8 拆到相邻 chunk。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造一个被拆开的中文字符串，断言流式解码器能跨 chunk 保留完整字符。
+    #[test]
+    fn terminal_utf8_decoder_preserves_split_multibyte_characters() {
+        let mut decoder = TerminalUtf8Decoder::new();
+        let text = "思考: xhigh\n";
+        let bytes = text.as_bytes();
+        let split_at = "思".len() + 1;
+
+        let first = decoder.decode(&bytes[..split_at]);
+        let second = decoder.decode(&bytes[split_at..]);
+
+        assert_eq!(format!("{first}{second}"), text);
+        assert_eq!(decoder.finish(), None);
     }
 
     /// Business Logic（为什么需要这个测试）:
