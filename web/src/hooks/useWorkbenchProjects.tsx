@@ -6,11 +6,11 @@
  *   需要一个共享状态源，避免侧栏和页面各自维护选中项目导致不同步。
  *
  * Code Logic（这个模块做什么）:
- *   提供 WorkbenchProjectsProvider，集中管理项目列表加载、添加、选择、移除、
- *   系统目录选择器和当前项目持久化。
+ *   提供 WorkbenchProjectsProvider，集中管理项目列表加载、系统目录选择并添加、
+ *   选择、移除和当前项目持久化。
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { workbenchApi } from '@/api/workbench';
@@ -114,11 +114,10 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
   const [activeProjectId, setActiveProjectIdState] = useState<string | null>(() =>
     readStoredActiveProjectId(),
   );
-  const [projectPath, setProjectPath] = useState<string>('');
-  const [projectFormOpen, setProjectFormOpen] = useState<boolean>(false);
   const [projectsLoading, setProjectsLoading] = useState<boolean>(true);
   const [projectBusy, setProjectBusy] = useState<boolean>(false);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const projectAddBusyRef = useRef<boolean>(false);
 
   const desktopUnavailableMessage = t('workbench:errors.desktopUnavailable');
   const activeProject = useMemo(
@@ -158,36 +157,42 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
     }
   }, [desktopUnavailableMessage, t]);
 
-  const chooseProjectDirectory = useCallback(async () => {
-    try {
-      const result = await configApi.chooseDir();
-      if (result.path) setProjectPath(result.path);
-    } catch (error) {
-      setProjectError(
-        displayWorkbenchErrorMessage(
-          error,
-          t('workbench:errors.chooseDir'),
-          desktopUnavailableMessage,
-        ),
-      );
-    }
-  }, [desktopUnavailableMessage, t]);
-
-  const addProject = useCallback(async () => {
-    const path = projectPath.trim();
-    if (!path) return null;
-    try {
-      setProjectBusy(true);
-      setProjectError(null);
-      const project = await workbenchApi.projects.add(path);
+  const addProjectFromPath = useCallback(
+    async (path: string) => {
+      const trimmedPath = path.trim();
+      if (!trimmedPath) return null;
+      const project = await workbenchApi.projects.add(trimmedPath);
       setProjects((current) => {
         const withoutDuplicate = current.filter((item) => item.id !== project.id);
         return [project, ...withoutDuplicate];
       });
       setActiveProjectId(project.id);
-      setProjectPath('');
-      setProjectFormOpen(false);
       return project;
+    },
+    [setActiveProjectId],
+  );
+
+  const chooseAndAddProject = useCallback(async () => {
+    if (projectAddBusyRef.current || projectBusy) return null;
+    projectAddBusyRef.current = true;
+    try {
+      setProjectBusy(true);
+      setProjectError(null);
+      let result: { path: string | null };
+      try {
+        result = await configApi.chooseDir();
+      } catch (error) {
+        setProjectError(
+          displayWorkbenchErrorMessage(
+            error,
+            t('workbench:errors.chooseDir'),
+            desktopUnavailableMessage,
+          ),
+        );
+        return null;
+      }
+      if (!result.path) return null;
+      return await addProjectFromPath(result.path);
     } catch (error) {
       setProjectError(
         displayWorkbenchErrorMessage(
@@ -198,9 +203,10 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
       );
       return null;
     } finally {
+      projectAddBusyRef.current = false;
       setProjectBusy(false);
     }
-  }, [desktopUnavailableMessage, projectPath, setActiveProjectId, t]);
+  }, [addProjectFromPath, desktopUnavailableMessage, projectBusy, t]);
 
   const selectProject = useCallback(
     async (project: WorkbenchProject) => {
@@ -253,29 +259,21 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
       projects,
       activeProjectId,
       activeProject,
-      projectPath,
-      projectFormOpen,
       projectsLoading,
       projectBusy,
       projectError,
-      setProjectPath,
-      setProjectFormOpen,
       loadProjects,
-      chooseProjectDirectory,
-      addProject,
+      chooseAndAddProject,
       selectProject,
       removeProject,
     }),
     [
       activeProject,
       activeProjectId,
-      addProject,
-      chooseProjectDirectory,
+      chooseAndAddProject,
       loadProjects,
       projectBusy,
       projectError,
-      projectFormOpen,
-      projectPath,
       projects,
       projectsLoading,
       removeProject,

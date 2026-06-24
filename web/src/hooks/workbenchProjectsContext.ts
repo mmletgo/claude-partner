@@ -15,16 +15,11 @@ export interface WorkbenchProjectsContextValue {
   projects: WorkbenchProject[];
   activeProjectId: string | null;
   activeProject: WorkbenchProject | null;
-  projectPath: string;
-  projectFormOpen: boolean;
   projectsLoading: boolean;
   projectBusy: boolean;
   projectError: string | null;
-  setProjectPath: (value: string) => void;
-  setProjectFormOpen: (value: boolean | ((current: boolean) => boolean)) => void;
   loadProjects: () => Promise<void>;
-  chooseProjectDirectory: () => Promise<void>;
-  addProject: () => Promise<WorkbenchProject | null>;
+  chooseAndAddProject: () => Promise<WorkbenchProject | null>;
   selectProject: (project: WorkbenchProject) => Promise<WorkbenchProject>;
   removeProject: (projectId: string) => Promise<void>;
 }
