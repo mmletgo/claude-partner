@@ -5,7 +5,7 @@
  *   项目文件夹列表是进入工作台的主要入口，不需要再占用一个独立导航菜单项。
  *
  * Code Logic（这个组件做什么）:
- *   渲染设置菜单项下方的项目列表、项目添加入口和项目移除操作；点击项目后选择项目并跳转 `/workbench`。
+ *   渲染设置菜单项下方的项目列表、window/pane 统计、项目添加入口和项目移除操作；点击项目后选择项目并跳转 `/workbench`。
  */
 
 import { useNavigate } from 'react-router-dom';
@@ -13,6 +13,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/primitives';
 import { FolderIcon, PlusIcon, SyncIcon, XIcon } from '@/lib/icons';
 import { useWorkbenchProjects } from '@/hooks/workbenchProjectsContext';
+import { EMPTY_PROJECT_SESSION_STATS } from '@/lib/workbenchProjectStats';
 import styles from './WorkbenchProjectRail.module.css';
 
 /**
@@ -20,7 +21,7 @@ import styles from './WorkbenchProjectRail.module.css';
  *   用户应能从任意页面直接选择项目文件夹进入 Workbench。
  *
  * Code Logic（这个组件做什么）:
- *   使用共享 Workbench 项目上下文渲染项目列表和添加入口，并用 React Router 导航到 `/workbench`。
+ *   使用共享 Workbench 项目上下文渲染项目列表、terminal window/pane 统计和添加入口，并用 React Router 导航到 `/workbench`。
  */
 export function WorkbenchProjectRail() {
   const { t } = useTranslation(['workbench']);
@@ -31,6 +32,7 @@ export function WorkbenchProjectRail() {
     projectsLoading,
     projectBusy,
     projectError,
+    projectSessionStats,
     loadProjects,
     chooseAndAddProject,
     selectProject,
@@ -74,43 +76,59 @@ export function WorkbenchProjectRail() {
             <span>{t('workbench:emptyProjects')}</span>
           </div>
         ) : null}
-        {projects.map((project) => (
-          <div
-            key={project.id}
-            className={styles.projectItem}
-            data-active={project.id === activeProjectId || undefined}
-          >
-            <button
-              type="button"
-              className={styles.projectSelectButton}
-              onClick={() => {
-                void selectProject(project).then(() => navigate('/workbench'));
-              }}
-            >
-              <span className={styles.projectText}>
-                <span className={styles.projectName}>{project.name}</span>
-                <span className={styles.projectPath}>{project.path}</span>
-                <span className={styles.projectMeta}>
-                  <span>{project.deviceName}</span>
-                  <span>{t('workbench:openWorkbench')}</span>
-                </span>
-              </span>
-            </button>
-            <span
-              className={styles.projectStatusDot}
+        {projects.map((project) => {
+          const stats = projectSessionStats[project.id] ?? EMPTY_PROJECT_SESSION_STATS;
+          const windowCountLabel = t('workbench:projectWindowCount', {
+            count: stats.windowCount,
+          });
+          const paneCountLabel = t('workbench:projectPaneCount', {
+            count: stats.paneCount,
+          });
+          return (
+            <div
+              key={project.id}
+              className={styles.projectItem}
               data-active={project.id === activeProjectId || undefined}
-              aria-hidden="true"
-            />
-            <Button
-              className={styles.projectRemoveButton}
-              variant="icon"
-              icon={<XIcon />}
-              title={t('workbench:removeProject')}
-              aria-label={t('workbench:removeProject')}
-              onClick={() => void removeProject(project.id)}
-            />
-          </div>
-        ))}
+            >
+              <button
+                type="button"
+                className={styles.projectSelectButton}
+                onClick={() => {
+                  void selectProject(project).then(() => navigate('/workbench'));
+                }}
+              >
+                <span className={styles.projectText}>
+                  <span className={styles.projectName}>{project.name}</span>
+                  <span className={styles.projectPath}>{project.path}</span>
+                  <span className={styles.projectMeta}>
+                    <span>{project.deviceName}</span>
+                    <span
+                      className={styles.projectStats}
+                      aria-label={`${windowCountLabel}, ${paneCountLabel}`}
+                    >
+                      <span>{windowCountLabel}</span>
+                      <span aria-hidden="true">·</span>
+                      <span>{paneCountLabel}</span>
+                    </span>
+                  </span>
+                </span>
+              </button>
+              <span
+                className={styles.projectStatusDot}
+                data-active={project.id === activeProjectId || undefined}
+                aria-hidden="true"
+              />
+              <Button
+                className={styles.projectRemoveButton}
+                variant="icon"
+                icon={<XIcon />}
+                title={t('workbench:removeProject')}
+                aria-label={t('workbench:removeProject')}
+                onClick={() => void removeProject(project.id)}
+              />
+            </div>
+          );
+        })}
       </div>
     </section>
   );

@@ -76,7 +76,7 @@ impl WorkbenchProjectRow {
 /// 工作台 terminal window DTO。
 ///
 /// Business Logic（为什么需要这个结构体）:
-///     前端需要展示本机项目 terminal window 状态、尺寸和退出信息。
+///     前端需要展示本机项目 terminal window 状态、尺寸、退出信息以及 window 内 pane 数。
 ///
 /// Code Logic（这个结构体做什么）:
 ///     定义 window 列表与状态事件可复用的数据形状，字段使用 camelCase 序列化。
@@ -94,6 +94,7 @@ pub struct WorkbenchSessionDto {
     pub exited_at: Option<String>,
     pub exit_code: Option<i32>,
     pub supports_panes: bool,
+    pub pane_count: usize,
 }
 
 /// 工作台 terminal window 数据库行模型。
@@ -128,8 +129,17 @@ impl WorkbenchSessionRow {
     ///     前端会话列表只需要 UI 字段，不应暴露后端重连实现细节。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     克隆持久化 row 的展示字段，转换为 `WorkbenchSessionDto`。
+    ///     克隆持久化 row 的展示字段，转换为 `WorkbenchSessionDto`，pane 数默认按单 pane 处理。
     pub fn to_dto(&self) -> WorkbenchSessionDto {
+        self.to_dto_with_pane_count(1)
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     项目列表需要显示真实 pane 数，而该数据来自运行期 tmux 查询，不属于 SQLite row。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     克隆 row 字段并注入调用方计算出的 pane_count，生成前端 camelCase DTO。
+    pub fn to_dto_with_pane_count(&self, pane_count: usize) -> WorkbenchSessionDto {
         WorkbenchSessionDto {
             id: self.id.clone(),
             project_id: self.project_id.clone(),
@@ -142,6 +152,7 @@ impl WorkbenchSessionRow {
             exited_at: self.exited_at.clone(),
             exit_code: self.exit_code,
             supports_panes: self.backend == "tmux" && self.backend_window_id.is_some(),
+            pane_count,
         }
     }
 }

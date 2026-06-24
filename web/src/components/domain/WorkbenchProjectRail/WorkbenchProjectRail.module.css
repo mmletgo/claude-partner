@@ -100,9 +100,20 @@
 .projectMeta {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: var(--space-2);
   color: var(--fg-2);
   font-size: var(--text-xs);
+}
+
+.projectStats {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
 }
 
 .projectStatusDot {

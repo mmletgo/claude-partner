@@ -10,6 +10,8 @@
   "removeProject": "移除项目",
   "emptyProjects": "还没有项目文件夹",
   "openWorkbench": "进入工作台",
+  "projectWindowCount": "{{count}} window",
+  "projectPaneCount": "{{count}} pane",
   "notRunning": "未运行",
   "lastOpened": "最近打开 {{value}}",
   "noProject": "未选择项目",

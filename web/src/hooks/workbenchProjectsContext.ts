@@ -10,6 +10,7 @@
 
 import { createContext, useContext } from 'react';
 import type { WorkbenchProject } from '@/lib/types';
+import type { WorkbenchProjectSessionStats } from '@/lib/workbenchProjectStats';
 
 export interface WorkbenchProjectsContextValue {
   projects: WorkbenchProject[];
@@ -18,7 +19,9 @@ export interface WorkbenchProjectsContextValue {
   projectsLoading: boolean;
   projectBusy: boolean;
   projectError: string | null;
+  projectSessionStats: Record<string, WorkbenchProjectSessionStats>;
   loadProjects: () => Promise<void>;
+  refreshProjectSessionStats: (projectId?: string) => Promise<void>;
   chooseAndAddProject: () => Promise<WorkbenchProject | null>;
   selectProject: (project: WorkbenchProject) => Promise<WorkbenchProject>;
   removeProject: (projectId: string) => Promise<void>;

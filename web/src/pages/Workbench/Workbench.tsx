@@ -499,7 +499,7 @@ function FileTree(props: NestedFileTreeProps) {
  */
 export function Workbench() {
   const { t } = useTranslation(['workbench', 'common']);
-  const { activeProjectId, activeProject } = useWorkbenchProjects();
+  const { activeProjectId, activeProject, refreshProjectSessionStats } = useWorkbenchProjects();
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionNameDraft, setSessionNameDraft] = useState<string>('');
@@ -616,6 +616,7 @@ export function Workbench() {
         knownSessionIdsRef.current = new Set(list.map((session) => session.id));
         setSessions(list);
         updateActiveSession(list);
+        void refreshProjectSessionStats(projectId);
       } catch (error) {
         if (activeProjectIdRef.current !== projectId) return;
         setSessionError(
@@ -623,7 +624,7 @@ export function Workbench() {
         );
       }
     },
-    [desktopUnavailableMessage, t, updateActiveSession],
+    [desktopUnavailableMessage, refreshProjectSessionStats, t, updateActiveSession],
   );
 
   const loadDir = useCallback(
@@ -777,6 +778,7 @@ export function Workbench() {
       focusSession(session.id);
       setTerminalBuffers((current) => ({ ...current, [session.id]: '' }));
       setTerminalRevision((current) => current + 1);
+      void refreshProjectSessionStats(projectId);
     } catch (error) {
       if (activeProjectIdRef.current !== projectId) return;
       setSessionError(
@@ -789,7 +791,7 @@ export function Workbench() {
     } finally {
       setSessionBusy(false);
     }
-  }, [desktopUnavailableMessage, focusSession, t]);
+  }, [desktopUnavailableMessage, focusSession, refreshProjectSessionStats, t]);
 
   const handleSplitPane = useCallback(
     async (direction: 'right' | 'down') => {
@@ -797,6 +799,7 @@ export function Workbench() {
       try {
         setSessionError(null);
         await workbenchApi.sessions.splitPane(activeSession.id, direction);
+        await loadSessions(activeSession.projectId);
       } catch (error) {
         setSessionError(
           displayErrorMessage(
@@ -807,7 +810,7 @@ export function Workbench() {
         );
       }
     },
-    [activeSession, desktopUnavailableMessage, t],
+    [activeSession, desktopUnavailableMessage, loadSessions, t],
   );
 
   const handleClosePane = useCallback(async () => {
@@ -815,6 +818,7 @@ export function Workbench() {
     try {
       setSessionError(null);
       const result = await workbenchApi.sessions.closePane(activeSession.id);
+      const projectId = activeSession.projectId;
       if (result.closedWindow) {
         setSessions((current) => {
           const next = current.filter((session) => session.id !== result.sessionId);
@@ -829,12 +833,13 @@ export function Workbench() {
         });
         setTerminalRevision((current) => current + 1);
       }
+      await loadSessions(projectId);
     } catch (error) {
       setSessionError(
         displayErrorMessage(error, t('workbench:errors.closePane'), desktopUnavailableMessage),
       );
     }
-  }, [activeSession, desktopUnavailableMessage, t, updateActiveSession]);
+  }, [activeSession, desktopUnavailableMessage, loadSessions, t, updateActiveSession]);
 
   const handleInput = useCallback(async (sessionId: string, data: string) => {
     try {
@@ -872,6 +877,8 @@ export function Workbench() {
           return next;
         });
         setTerminalRevision((current) => current + 1);
+        const projectId = activeProjectIdRef.current;
+        if (projectId) void refreshProjectSessionStats(projectId);
       } catch (error) {
         setSessionError(
           displayErrorMessage(
@@ -882,7 +889,7 @@ export function Workbench() {
         );
       }
     },
-    [desktopUnavailableMessage, t, updateActiveSession],
+    [desktopUnavailableMessage, refreshProjectSessionStats, t, updateActiveSession],
   );
 
   const handleRenameSession = useCallback(async () => {

@@ -7,7 +7,7 @@
  *
  * Code Logic（这个模块做什么）:
  *   提供 WorkbenchProjectsProvider，集中管理项目列表加载、系统目录选择并添加、
- *   选择、移除和当前项目持久化。
+ *   选择、移除、terminal window/pane 统计和当前项目持久化。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -16,6 +16,11 @@ import { useTranslation } from 'react-i18next';
 import { workbenchApi } from '@/api/workbench';
 import { configApi } from '@/api/config';
 import type { WorkbenchProject } from '@/lib/types';
+import {
+  projectSessionStats,
+  sessionStatsByProject,
+  type WorkbenchProjectSessionStats,
+} from '@/lib/workbenchProjectStats';
 import {
   WorkbenchProjectsContext,
   type WorkbenchProjectsContextValue,
@@ -106,7 +111,7 @@ export interface WorkbenchProjectsProviderProps {
  *   左侧栏项目文件夹列表是进入工作台的全局入口，Workbench 页面需要复用同一份当前项目状态。
  *
  * Code Logic（这个组件做什么）:
- *   拉取项目列表、持久化当前项目 ID，并提供添加/选择/移除项目的业务动作。
+ *   拉取项目列表、持久化当前项目 ID，并提供添加/选择/移除项目和刷新终端统计的业务动作。
  */
 export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProviderProps) {
   const { t } = useTranslation(['workbench']);
@@ -117,6 +122,9 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
   const [projectsLoading, setProjectsLoading] = useState<boolean>(true);
   const [projectBusy, setProjectBusy] = useState<boolean>(false);
   const [projectError, setProjectError] = useState<string | null>(null);
+  const [projectSessionStatsMap, setProjectSessionStatsMap] = useState<
+    Record<string, WorkbenchProjectSessionStats>
+  >({});
   const projectAddBusyRef = useRef<boolean>(false);
 
   const desktopUnavailableMessage = t('workbench:errors.desktopUnavailable');
@@ -128,6 +136,21 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
   const setActiveProjectId = useCallback((projectId: string | null) => {
     setActiveProjectIdState(projectId);
     writeStoredActiveProjectId(projectId);
+  }, []);
+
+  const refreshProjectSessionStats = useCallback(async (projectId?: string) => {
+    try {
+      const list = await workbenchApi.sessions.list(projectId);
+      setProjectSessionStatsMap((current) => {
+        if (!projectId) return sessionStatsByProject(list);
+        return {
+          ...current,
+          [projectId]: projectSessionStats(list, projectId),
+        };
+      });
+    } catch {
+      // 统计只辅助项目卡片展示；失败时保留上一次成功统计，不打断项目列表主流程。
+    }
   }, []);
 
   const loadProjects = useCallback(async () => {
@@ -144,6 +167,7 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
         writeStoredActiveProjectId(next);
         return next;
       });
+      void refreshProjectSessionStats();
     } catch (error) {
       setProjectError(
         displayWorkbenchErrorMessage(
@@ -155,7 +179,7 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
     } finally {
       setProjectsLoading(false);
     }
-  }, [desktopUnavailableMessage, t]);
+  }, [desktopUnavailableMessage, refreshProjectSessionStats, t]);
 
   const addProjectFromPath = useCallback(
     async (path: string) => {
@@ -192,7 +216,9 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
         return null;
       }
       if (!result.path) return null;
-      return await addProjectFromPath(result.path);
+      const project = await addProjectFromPath(result.path);
+      if (project) void refreshProjectSessionStats(project.id);
+      return project;
     } catch (error) {
       setProjectError(
         displayWorkbenchErrorMessage(
@@ -206,7 +232,7 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
       projectAddBusyRef.current = false;
       setProjectBusy(false);
     }
-  }, [addProjectFromPath, desktopUnavailableMessage, projectBusy, t]);
+  }, [addProjectFromPath, desktopUnavailableMessage, projectBusy, refreshProjectSessionStats, t]);
 
   const selectProject = useCallback(
     async (project: WorkbenchProject) => {
@@ -217,13 +243,15 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
           const withoutCurrent = current.filter((item) => item.id !== touched.id);
           return [touched, ...withoutCurrent];
         });
+        void refreshProjectSessionStats(touched.id);
         return touched;
       } catch {
         // 最近打开时间更新失败不阻断本地切换，下一次刷新会恢复后端状态。
+        void refreshProjectSessionStats(project.id);
         return project;
       }
     },
-    [setActiveProjectId],
+    [refreshProjectSessionStats, setActiveProjectId],
   );
 
   const removeProject = useCallback(
@@ -232,6 +260,11 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
         setProjectBusy(true);
         await workbenchApi.projects.remove(projectId);
         setProjects((current) => current.filter((project) => project.id !== projectId));
+        setProjectSessionStatsMap((current) => {
+          const next = { ...current };
+          delete next[projectId];
+          return next;
+        });
         if (activeProjectId === projectId) setActiveProjectId(null);
       } catch (error) {
         setProjectError(
@@ -262,7 +295,9 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
       projectsLoading,
       projectBusy,
       projectError,
+      projectSessionStats: projectSessionStatsMap,
       loadProjects,
+      refreshProjectSessionStats,
       chooseAndAddProject,
       selectProject,
       removeProject,
@@ -274,8 +309,10 @@ export function WorkbenchProjectsProvider({ children }: WorkbenchProjectsProvide
       loadProjects,
       projectBusy,
       projectError,
+      projectSessionStatsMap,
       projects,
       projectsLoading,
+      refreshProjectSessionStats,
       removeProject,
       selectProject,
     ],

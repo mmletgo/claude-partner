@@ -119,6 +119,18 @@ fn pane_close_plan(pane_count: usize) -> PaneClosePlan {
     }
 }
 
+/// Business Logic（为什么需要这个函数）:
+///     项目列表需要展示每个 terminal window 内的真实 pane 数，tmux 是该数据的权威来源。
+///
+/// Code Logic（这个函数做什么）:
+///     解析 `tmux list-panes -F #{pane_id}` 输出，忽略空行后返回 pane id 行数。
+fn pane_count_from_tmux_output(output: &str) -> usize {
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .count()
+}
+
 /// 可用 tmux 命令描述。
 ///
 /// Business Logic（为什么需要这个结构体）:
@@ -868,6 +880,32 @@ fn run_tmux_command(tmux: &TmuxCommand, args: &[&str]) -> Result<String, AppErro
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     工作台项目卡片需要展示 window 下 pane 数，必须读取真实 tmux 状态而不是前端猜测。
+///
+/// Code Logic（这个函数做什么）:
+///     对指定 tmux target 执行 `list-panes` 并解析非空 pane id 行数。
+fn tmux_pane_count(tmux: &TmuxCommand, target: &str) -> Result<usize, AppError> {
+    let output = run_tmux_command(tmux, &["list-panes", "-t", target, "-F", "#{pane_id}"])?;
+    Ok(pane_count_from_tmux_output(&output))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     会话 DTO 需要带 paneCount；tmux-backed window 应尽量返回真实 pane 数，raw/disconnected 会话也要有稳定兜底。
+///
+/// Code Logic（这个函数做什么）:
+///     对 running tmux row 查询 pane 数；查询失败或非 tmux 后端时返回 1，避免统计 UI 被临时 tmux 错误清零。
+pub fn pane_count_for_row(row: &WorkbenchSessionRow) -> usize {
+    if row.status == "running" && row.backend == TMUX_BACKEND {
+        if let (Some(tmux), Ok(target)) =
+            (available_tmux_command(), tmux_window_target_for_row(row))
+        {
+            return tmux_pane_count(&tmux, &target).unwrap_or(1).max(1);
+        }
+    }
+    1
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     分屏按钮创建的新 pane 必须从项目根目录启动，避免继承当前 pane 中用户 cd 后的位置。
 ///
 /// Code Logic（这个函数做什么）:
@@ -984,7 +1022,11 @@ impl WorkbenchSessionRegistry {
                     .map(|id| handle.row.project_id == id)
                     .unwrap_or(true)
                 {
-                    Some(handle.row.to_dto())
+                    Some(
+                        handle
+                            .row
+                            .to_dto_with_pane_count(pane_count_for_row(&handle.row)),
+                    )
                 } else {
                     None
                 }
@@ -1342,8 +1384,7 @@ impl WorkbenchSessionRegistry {
         let Some(tmux) = available_tmux_command() else {
             return Err(AppError::generic("未找到 tmux，无法关闭 pane"));
         };
-        let panes = run_tmux_command(&tmux, &["list-panes", "-t", &target, "-F", "#{pane_id}"])?;
-        let pane_count = panes.lines().filter(|line| !line.trim().is_empty()).count();
+        let pane_count = tmux_pane_count(&tmux, &target)?;
         match pane_close_plan(pane_count) {
             PaneClosePlan::KillPane => {
                 run_tmux_command(&tmux, &["kill-pane", "-t", &target])?;
@@ -2014,6 +2055,17 @@ mod tests {
         assert_eq!(pane_close_plan(0), PaneClosePlan::CloseWindow);
         assert_eq!(pane_close_plan(1), PaneClosePlan::CloseWindow);
         assert_eq!(pane_close_plan(2), PaneClosePlan::KillPane);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     项目列表需要展示真实 pane 数，后端必须能从 tmux `list-panes` 输出得到稳定计数。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言空行会被忽略，非空 pane id 行会累计为 paneCount。
+    #[test]
+    fn pane_count_from_tmux_output_ignores_empty_lines() {
+        assert_eq!(pane_count_from_tmux_output("%1\n\n%2\n"), 2);
+        assert_eq!(pane_count_from_tmux_output("\n"), 0);
     }
 
     /// Business Logic（为什么需要这个测试）:

@@ -15,7 +15,9 @@ use crate::workbench::models::{
     WorkbenchFileNode, WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchProjectRow,
     WorkbenchSessionDto,
 };
-use crate::workbench::sessions::{kill_persisted_backend, PaneCloseOutcome, PaneSplitDirection};
+use crate::workbench::sessions::{
+    kill_persisted_backend, pane_count_for_row, PaneCloseOutcome, PaneSplitDirection,
+};
 use crate::workbench::{fs as workbench_fs, projects};
 use chrono::Utc;
 use std::path::PathBuf;
@@ -57,7 +59,7 @@ async fn merged_session_dtos(
         .list(project_id)
         .await?
         .iter()
-        .map(|row| row.to_dto())
+        .map(|row| row.to_dto_with_pane_count(pane_count_for_row(row)))
         .collect();
     for live in state.workbench_sessions.list(project_id) {
         if let Some(existing) = sessions.iter_mut().find(|session| session.id == live.id) {

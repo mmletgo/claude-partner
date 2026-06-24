@@ -21,6 +21,7 @@ function session(id: string, name: string, startedAt: string): WorkbenchSession 
     exitedAt: null,
     exitCode: null,
     supportsPanes: true,
+    paneCount: 1,
   };
 }
 
