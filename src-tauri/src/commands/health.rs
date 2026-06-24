@@ -140,7 +140,7 @@ pub async fn get_health_config(state: State<'_, AppState>) -> Result<HealthConfi
 ///             经 `From<HealthConfig>` 转 DTO 返回;不依赖 State,默认值是纯常量。
 #[tauri::command]
 pub async fn get_default_health_config() -> Result<HealthConfigDto, AppError> {
-    Ok(crate::config::HealthConfig::default().into())
+    Ok(HealthConfig::default().into())
 }
 
 /// 读取健康提醒当前状态（配置开关 + 运行时相位/暂停/贪睡）。

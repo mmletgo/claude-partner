@@ -616,7 +616,7 @@ export function Settings() {
       setCloudSync(updated);
       setCloudSyncForm(cloudSyncConfigToForm(updated));
     } catch (err) {
-      setCloudSyncError(err instanceof Error ? err.message : t('cloudSync.applyFailed'));
+      setCloudSyncError(err instanceof Error ? err.message : t('settings:cloudSync.applyFailed'));
     } finally {
       setApplying(false);
     }
@@ -681,7 +681,7 @@ export function Settings() {
       setGithubTrendingConfig(updated);
       setGithubTrendingForm(githubTrendingConfigToForm(updated));
     } catch (err) {
-      setGithubTrendingError(err instanceof Error ? err.message : t('githubTrending.applyFailed'));
+      setGithubTrendingError(err instanceof Error ? err.message : t('settings:githubTrending.applyFailed'));
     } finally {
       setApplyingGithubTrending(false);
     }
@@ -746,7 +746,7 @@ export function Settings() {
       setHealthConfig(updated);
       setHealthForm(healthConfigToForm(updated));
     } catch (err) {
-      setHealthError(err instanceof Error ? err.message : t('health.applyFailed'));
+      setHealthError(err instanceof Error ? err.message : t('settings:health.applyFailed'));
     } finally {
       setApplyingHealth(false);
     }
