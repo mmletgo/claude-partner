@@ -17,7 +17,8 @@ use crate::config::AppConfig;
 use crate::models::device::Device;
 use crate::net::peer_client::PeerClient;
 use crate::storage::{
-    ClaudeHistoryRepo, ClaudeMdRepo, PromptRepo, ScratchpadRepo, TransferRepo, WorkbenchProjectRepo,
+    ClaudeHistoryRepo, ClaudeMdRepo, PromptRepo, ScratchpadRepo, TransferRepo,
+    WorkbenchProjectRepo, WorkbenchSessionRepo,
 };
 use crate::transfer::registry::TransferRegistry;
 use mdns_sd::ServiceDaemon;
@@ -81,7 +82,10 @@ pub struct AppState {
     /// 工作台项目仓库（workbench_projects 表访问，本机最近项目持久化）
     #[allow(dead_code)]
     pub workbench_project_repo: Arc<WorkbenchProjectRepo>,
-    /// 工作台 PTY 会话注册表（内存态，应用退出即关闭）
+    /// 工作台终端会话元数据仓库（workbench_sessions 表访问，重启恢复终端 tab）
+    #[allow(dead_code)]
+    pub workbench_session_repo: Arc<WorkbenchSessionRepo>,
+    /// 工作台 PTY 会话注册表（运行期 PTY/tmux attach 句柄，元数据由 workbench_session_repo 持久化）
     #[allow(dead_code)]
     pub workbench_sessions: Arc<crate::workbench::sessions::WorkbenchSessionRegistry>,
     /// CC 历史采集器的取消令牌（应用退出时 cancel 优雅停止后台扫描任务）

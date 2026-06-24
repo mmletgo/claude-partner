@@ -1,21 +1,23 @@
 //! workbench/sessions.rs — 工作台本机 PTY 会话注册表
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     工作台允许用户在同一项目下开启多个本机项目终端，会话只需要在应用运行期存在。
+//!     工作台允许用户在同一项目下开启多个本机项目终端，用户希望应用重启后终端 tab 与可重连上下文仍可恢复。
 //!
 //! Code Logic（这个模块做什么）:
-//!     使用 portable-pty 创建 PTY，内存保存会话句柄，并通过 Tauri event 推送终端输出和状态变化。
+//!     使用 portable-pty 创建 PTY；macOS/Linux 优先通过 tmux 承载真实 shell 上下文，应用重启后重新 attach。
+//!     内存保存运行期句柄，通过 Tauri event 推送终端输出和状态变化。
 
 #![allow(dead_code)]
 
 use crate::error::AppError;
-use crate::workbench::models::{WorkbenchProjectRow, WorkbenchSessionDto};
+use crate::workbench::models::{WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchSessionRow};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
+use std::process::Command as StdCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -25,6 +27,8 @@ const DEFAULT_COLS: u16 = 98;
 const DEFAULT_ROWS: u16 = 32;
 const MIN_TERMINAL_COLS: u16 = 20;
 const MIN_TERMINAL_ROWS: u16 = 6;
+const RAW_PTY_BACKEND: &str = "pty";
+const TMUX_BACKEND: &str = "tmux";
 #[cfg(windows)]
 const FALLBACK_TERMINAL_COMMAND: &str = "cmd.exe";
 #[cfg(not(windows))]
@@ -137,9 +141,9 @@ enum SessionProcess {
 ///     每个会话需要同时保存前端展示 DTO 和可操作的 PTY 进程资源。
 ///
 /// Code Logic（这个结构体做什么）:
-///     将 DTO 与 writer/master/child 聚合到单个 Mutex 保护的对象中，保证输入、resize、close 串行访问。
+///     将持久化 row 快照与 writer/master/child 聚合到单个 Mutex 保护的对象中，保证输入、resize、close 串行访问。
 struct WorkbenchSessionHandle {
-    dto: WorkbenchSessionDto,
+    row: WorkbenchSessionRow,
     process: SessionProcess,
 }
 
@@ -184,6 +188,135 @@ fn default_terminal_command_from_env(command: Option<OsString>) -> String {
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| FALLBACK_TERMINAL_COMMAND.to_string())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     重启应用后要继续已有终端上下文，普通 PTY 无法跨进程存活；macOS/Linux 可借助 tmux 保留 shell 进程。
+///
+/// Code Logic（这个函数做什么）:
+///     Windows 直接返回 None；Unix 上依次探测 PATH 与常见 Homebrew/Linux tmux 路径，返回可执行命令。
+fn available_tmux_command() -> Option<String> {
+    #[cfg(windows)]
+    {
+        None
+    }
+    #[cfg(not(windows))]
+    {
+        let candidates = [
+            "tmux",
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "/usr/bin/tmux",
+        ];
+        candidates
+            .iter()
+            .find(|candidate| {
+                StdCommand::new(*candidate)
+                    .arg("-V")
+                    .output()
+                    .map(|output| output.status.success())
+                    .unwrap_or(false)
+            })
+            .map(|candidate| (*candidate).to_string())
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     每个工作台终端 tab 需要稳定映射到一个 tmux session，才能跨应用重启重新 attach。
+///
+/// Code Logic（这个函数做什么）:
+///     用 session_id 派生 tmux session 名称，并去掉 UUID 中的连字符减少 shell 工具兼容风险。
+fn tmux_session_name(session_id: &str) -> String {
+    format!("cc-partner-{}", session_id.replace('-', ""))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     恢复会话时需要判断原 tmux session 是否仍存在，存在则 attach，不存在则按同一名称重建。
+///
+/// Code Logic（这个函数做什么）:
+///     执行 `tmux has-session -t <name>`，返回 status 是否成功。
+fn tmux_has_session(tmux: &str, session_name: &str) -> bool {
+    StdCommand::new(tmux)
+        .args(["has-session", "-t", session_name])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     新建或恢复终端时，如果 tmux session 不存在，需要在项目根目录中创建它以承载真实 shell 上下文。
+///
+/// Code Logic（这个函数做什么）:
+///     执行 `tmux new-session -d -s <name> -c <cwd> <shell>`；失败转为 AppError 供上层 fallback。
+fn create_tmux_session(
+    tmux: &str,
+    session_name: &str,
+    cwd: &str,
+    shell_command: &str,
+) -> Result<(), AppError> {
+    let output = StdCommand::new(tmux)
+        .args([
+            "new-session",
+            "-d",
+            "-s",
+            session_name,
+            "-c",
+            cwd,
+            shell_command,
+        ])
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let message = if detail.is_empty() {
+            "未知错误".to_string()
+        } else {
+            detail
+        };
+        Err(AppError::generic(format!("创建 tmux 会话失败: {message}")))
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     用户关闭终端 tab 时，如果该 tab 使用 tmux 承载上下文，应销毁对应 tmux session，避免后台残留。
+///
+/// Code Logic（这个函数做什么）:
+///     执行 `tmux kill-session -t <name>`；session 已不存在视为成功，其他错误仅记录 debug。
+pub fn kill_persisted_backend(row: &WorkbenchSessionRow) {
+    if row.backend != TMUX_BACKEND {
+        return;
+    }
+    let Some(session_name) = row.backend_id.as_deref() else {
+        return;
+    };
+    let Some(tmux) = available_tmux_command() else {
+        return;
+    };
+    let output = StdCommand::new(&tmux)
+        .args(["kill-session", "-t", session_name])
+        .output();
+    if let Err(error) = output {
+        tracing::debug!("销毁工作台 tmux 会话失败: {error}");
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     portable-pty 启动命令需要统一构造，普通 PTY 和 tmux attach 仅命令及参数不同。
+///
+/// Code Logic（这个函数做什么）:
+///     根据 row.backend/backend_id 构造 CommandBuilder；tmux 行为是 attach，普通 PTY 直接启动 shell。
+fn command_builder_for_row(row: &WorkbenchSessionRow) -> CommandBuilder {
+    if row.backend == TMUX_BACKEND {
+        if let (Some(tmux), Some(session_name)) =
+            (available_tmux_command(), row.backend_id.as_deref())
+        {
+            let mut cmd = CommandBuilder::new(tmux);
+            cmd.args(["attach-session", "-t", session_name]);
+            return cmd;
+        }
+    }
+    CommandBuilder::new(row.command.clone())
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -252,7 +385,7 @@ fn decode_utf8_chunk(bytes: &[u8], pending: &mut Vec<u8>) -> String {
 /// 工作台 PTY 会话注册表。
 ///
 /// Business Logic（为什么需要这个结构体）:
-///     工作台会话是应用运行期内存状态，多个命令需要按 session_id 查找并操作同一 PTY。
+///     工作台会话的元数据持久化在 SQLite，但多个命令仍需要按 session_id 查找并操作当前 PTY attach。
 ///
 /// Code Logic（这个结构体做什么）:
 ///     用 HashMap 保存 session_id 到会话句柄的映射；外层 Arc 允许后台读写线程更新状态。
@@ -284,15 +417,27 @@ impl WorkbenchSessionRegistry {
             .filter_map(|handle| {
                 let handle = handle.lock().expect("workbench session 锁中毒");
                 if project_id
-                    .map(|id| handle.dto.project_id == id)
+                    .map(|id| handle.row.project_id == id)
                     .unwrap_or(true)
                 {
-                    Some(handle.dto.clone())
+                    Some(handle.row.to_dto())
                 } else {
                     None
                 }
             })
             .collect()
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     list 命令从 SQLite 恢复历史会话前，需要避免重复 attach 已在运行期 registry 的会话。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     检查内存 HashMap 是否已有 session_id。
+    pub fn contains(&self, session_id: &str) -> bool {
+        self.sessions
+            .lock()
+            .expect("workbench sessions 锁中毒")
+            .contains_key(session_id)
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -306,12 +451,25 @@ impl WorkbenchSessionRegistry {
         project: WorkbenchProjectRow,
         initial_cols: Option<u16>,
         initial_rows: Option<u16>,
-    ) -> Result<WorkbenchSessionDto, AppError> {
+    ) -> Result<WorkbenchSessionRow, AppError> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let (cols, rows) = initial_terminal_size(initial_cols, initial_rows);
         let terminal_command = default_terminal_command();
-        let dto = WorkbenchSessionDto {
+        let (backend, backend_id) = match available_tmux_command() {
+            Some(tmux) => {
+                let tmux_id = tmux_session_name(&session_id);
+                match create_tmux_session(&tmux, &tmux_id, &project.path, &terminal_command) {
+                    Ok(()) => (TMUX_BACKEND.to_string(), Some(tmux_id)),
+                    Err(error) => {
+                        tracing::warn!("工作台 tmux 后端不可用，回退普通 PTY: {error}");
+                        (RAW_PTY_BACKEND.to_string(), None)
+                    }
+                }
+            }
+            None => (RAW_PTY_BACKEND.to_string(), None),
+        };
+        let row = WorkbenchSessionRow {
             id: session_id.clone(),
             project_id: project.id.clone(),
             name: project.name.clone(),
@@ -322,7 +480,72 @@ impl WorkbenchSessionRegistry {
             started_at: now,
             exited_at: None,
             exit_code: None,
+            backend,
+            backend_id,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            updated_at: chrono::Utc::now().to_rfc3339(),
         };
+
+        self.spawn_row(app, row, &project.path)
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     应用重启后，持久化的终端 tab 需要重新绑定运行期 PTY；tmux 后端可继续原 shell 上下文。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     根据持久化 row.backend 恢复 tmux session 或回退普通 PTY，然后启动 reader/exit watcher。
+    pub fn restore(
+        &self,
+        app: AppHandle,
+        project: WorkbenchProjectRow,
+        mut row: WorkbenchSessionRow,
+    ) -> Result<WorkbenchSessionRow, AppError> {
+        if row.backend == TMUX_BACKEND {
+            if let Some(tmux) = available_tmux_command() {
+                let session_name = row
+                    .backend_id
+                    .clone()
+                    .unwrap_or_else(|| tmux_session_name(&row.id));
+                if !tmux_has_session(&tmux, &session_name) {
+                    if let Err(error) =
+                        create_tmux_session(&tmux, &session_name, &project.path, &row.command)
+                    {
+                        tracing::warn!("恢复工作台 tmux 会话失败，回退普通 PTY: {error}");
+                        row.backend = RAW_PTY_BACKEND.to_string();
+                        row.backend_id = None;
+                    }
+                }
+                if row.backend == TMUX_BACKEND {
+                    row.backend_id = Some(session_name);
+                }
+            } else {
+                tracing::warn!("恢复工作台终端时未找到 tmux，回退普通 PTY");
+                row.backend = RAW_PTY_BACKEND.to_string();
+                row.backend_id = None;
+            }
+        }
+
+        row.status = "running".to_string();
+        row.exited_at = None;
+        row.exit_code = None;
+        row.updated_at = chrono::Utc::now().to_rfc3339();
+        self.spawn_row(app, row, &project.path)
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     新建和恢复终端最终都要启动一个 PTY 客户端并注册输出/退出监听。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     用 row 中的命令/后端信息构造 CommandBuilder，spawn 子进程并写入内存 registry。
+    fn spawn_row(
+        &self,
+        app: AppHandle,
+        row: WorkbenchSessionRow,
+        project_path: &str,
+    ) -> Result<WorkbenchSessionRow, AppError> {
+        let session_id = row.id.clone();
+        let cols = row.cols;
+        let rows = row.rows;
 
         let pty_system = native_pty_system();
         let pair = pty_system
@@ -333,8 +556,8 @@ impl WorkbenchSessionRegistry {
                 pixel_height: 0,
             })
             .map_err(|error| AppError::generic(format!("创建 PTY 失败: {error}")))?;
-        let mut cmd = CommandBuilder::new(terminal_command.clone());
-        cmd.cwd(PathBuf::from(&project.path));
+        let mut cmd = command_builder_for_row(&row);
+        cmd.cwd(PathBuf::from(project_path));
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -349,7 +572,7 @@ impl WorkbenchSessionRegistry {
             .map_err(|error| AppError::generic(format!("创建 PTY writer 失败: {error}")))?;
 
         let handle = Arc::new(Mutex::new(WorkbenchSessionHandle {
-            dto: dto.clone(),
+            row: row.clone(),
             process: SessionProcess::Pty {
                 master: pair.master,
                 writer,
@@ -365,7 +588,7 @@ impl WorkbenchSessionRegistry {
         spawn_reader_thread(app.clone(), session_id.clone(), reader);
         spawn_exit_watcher(app, self.sessions.clone(), session_id.clone(), handle);
 
-        Ok(dto)
+        Ok(row)
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -376,7 +599,7 @@ impl WorkbenchSessionRegistry {
     pub fn write_input(&self, session_id: &str, data: &str) -> Result<(), AppError> {
         let handle = self.get_handle(session_id)?;
         let mut handle = handle.lock().expect("workbench session 锁中毒");
-        if handle.dto.status != "running" {
+        if handle.row.status != "running" {
             return Err(AppError::generic("工作台会话未运行"));
         }
         match &mut handle.process {
@@ -393,23 +616,32 @@ impl WorkbenchSessionRegistry {
     ///     前端终端容器尺寸变化时，子进程需要收到新的 PTY 行列数。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     更新 DTO 尺寸，并调用 MasterPty::resize 通知底层 PTY。
-    pub fn resize(&self, session_id: &str, cols: u16, rows: u16) -> Result<(), AppError> {
+    ///     更新 row 尺寸，并调用 MasterPty::resize 通知底层 PTY。
+    pub fn resize(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+    ) -> Result<WorkbenchSessionRow, AppError> {
         let handle = self.get_handle(session_id)?;
         let mut handle = handle.lock().expect("workbench session 锁中毒");
-        handle.dto.cols = cols;
-        handle.dto.rows = rows;
+        handle.row.cols = cols;
+        handle.row.rows = rows;
+        handle.row.updated_at = chrono::Utc::now().to_rfc3339();
         match &mut handle.process {
-            SessionProcess::Pty { master, .. } => master
-                .resize(PtySize {
-                    rows,
-                    cols,
-                    pixel_width: 0,
-                    pixel_height: 0,
-                })
-                .map_err(|error| AppError::generic(format!("调整 PTY 尺寸失败: {error}"))),
-            SessionProcess::Fake => Ok(()),
+            SessionProcess::Pty { master, .. } => {
+                master
+                    .resize(PtySize {
+                        rows,
+                        cols,
+                        pixel_width: 0,
+                        pixel_height: 0,
+                    })
+                    .map_err(|error| AppError::generic(format!("调整 PTY 尺寸失败: {error}")))?;
+            }
+            SessionProcess::Fake => {}
         }
+        Ok(handle.row.clone())
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -417,7 +649,7 @@ impl WorkbenchSessionRegistry {
     ///
     /// Code Logic（这个函数做什么）:
     ///     从 HashMap 删除句柄，尽力 kill 仍在运行的子进程；缺失会话返回错误。
-    pub fn close(&self, session_id: &str) -> Result<(), AppError> {
+    pub fn close(&self, session_id: &str) -> Result<WorkbenchSessionRow, AppError> {
         let handle = self
             .sessions
             .lock()
@@ -425,7 +657,7 @@ impl WorkbenchSessionRegistry {
             .remove(session_id)
             .ok_or_else(|| AppError::not_found("工作台会话不存在"))?;
         let mut handle = handle.lock().expect("workbench session 锁中毒");
-        let was_running = handle.dto.status == "running";
+        let was_running = handle.row.status == "running";
         match &mut handle.process {
             SessionProcess::Pty { child, .. } => {
                 if was_running {
@@ -436,27 +668,29 @@ impl WorkbenchSessionRegistry {
             }
             SessionProcess::Fake => {}
         }
-        handle.dto.status = "disconnected".to_string();
-        Ok(())
+        handle.row.status = "disconnected".to_string();
+        handle.row.exited_at = Some(chrono::Utc::now().to_rfc3339());
+        handle.row.updated_at = chrono::Utc::now().to_rfc3339();
+        Ok(handle.row.clone())
     }
 
     /// Business Logic（为什么需要这个函数）:
-    ///     应用退出或项目被移除时，所有仍运行的工作台终端子进程都应被显式终止。
+    ///     应用退出时，运行期 PTY attach 应被显式终止；tmux 后端的真实 shell 上下文要保留给下次重连。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     drain registry 中全部会话句柄，逐个尽力 kill 仍运行的 PTY child，并返回被清理的数量。
+    ///     遍历 registry 中全部会话句柄，逐个尽力 kill 仍运行的 PTY child，并把内存状态标记为 disconnected。
     pub fn shutdown_all(&self) -> usize {
         let handles: Vec<Arc<Mutex<WorkbenchSessionHandle>>> = self
             .sessions
             .lock()
             .expect("workbench sessions 锁中毒")
-            .drain()
-            .map(|(_, handle)| handle)
+            .values()
+            .cloned()
             .collect();
         let count = handles.len();
         for handle in handles {
             let mut handle = handle.lock().expect("workbench session 锁中毒");
-            let was_running = handle.dto.status == "running";
+            let was_running = handle.row.status == "running";
             match &mut handle.process {
                 SessionProcess::Pty { child, .. } => {
                     if was_running {
@@ -467,8 +701,9 @@ impl WorkbenchSessionRegistry {
                 }
                 SessionProcess::Fake => {}
             }
-            handle.dto.status = "disconnected".to_string();
-            handle.dto.exited_at = Some(chrono::Utc::now().to_rfc3339());
+            handle.row.status = "disconnected".to_string();
+            handle.row.exited_at = Some(chrono::Utc::now().to_rfc3339());
+            handle.row.updated_at = chrono::Utc::now().to_rfc3339();
         }
         count
     }
@@ -477,12 +712,13 @@ impl WorkbenchSessionRegistry {
     ///     用户可以给多个终端会话改名，以区分不同工作流。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     查找会话并更新 DTO name，返回更新后的 DTO；缺失会话返回错误。
-    pub fn rename(&self, session_id: &str, name: &str) -> Result<WorkbenchSessionDto, AppError> {
+    ///     查找会话并更新 row name，返回更新后的 row；缺失会话返回错误。
+    pub fn rename(&self, session_id: &str, name: &str) -> Result<WorkbenchSessionRow, AppError> {
         let handle = self.get_handle(session_id)?;
         let mut handle = handle.lock().expect("workbench session 锁中毒");
-        handle.dto.name = name.trim().to_string();
-        Ok(handle.dto.clone())
+        handle.row.name = name.trim().to_string();
+        handle.row.updated_at = chrono::Utc::now().to_rfc3339();
+        Ok(handle.row.clone())
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -506,7 +742,7 @@ impl WorkbenchSessionRegistry {
     /// Code Logic（这个函数做什么）:
     ///     仅在测试编译时插入 fake 会话句柄，覆盖 list/filter 纯内存逻辑。
     fn insert_fake_session_for_test(&self, session_id: &str, project_id: &str) {
-        let dto = WorkbenchSessionDto {
+        let row = WorkbenchSessionRow {
             id: session_id.to_string(),
             project_id: project_id.to_string(),
             name: format!("session-{session_id}"),
@@ -517,6 +753,10 @@ impl WorkbenchSessionRegistry {
             started_at: "2026-06-24T00:00:00Z".to_string(),
             exited_at: None,
             exit_code: None,
+            backend: RAW_PTY_BACKEND.to_string(),
+            backend_id: None,
+            created_at: "2026-06-24T00:00:00Z".to_string(),
+            updated_at: "2026-06-24T00:00:00Z".to_string(),
         };
         self.sessions
             .lock()
@@ -524,7 +764,7 @@ impl WorkbenchSessionRegistry {
             .insert(
                 session_id.to_string(),
                 Arc::new(Mutex::new(WorkbenchSessionHandle {
-                    dto,
+                    row,
                     process: SessionProcess::Fake,
                 })),
             );
@@ -623,9 +863,10 @@ fn spawn_exit_watcher(
                     .contains_key(&session_id);
                 if still_registered {
                     let mut handle = handle.lock().expect("workbench session 锁中毒");
-                    handle.dto.status = "exited".to_string();
-                    handle.dto.exited_at = Some(chrono::Utc::now().to_rfc3339());
-                    handle.dto.exit_code = Some(exit_code);
+                    handle.row.status = "exited".to_string();
+                    handle.row.exited_at = Some(chrono::Utc::now().to_rfc3339());
+                    handle.row.exit_code = Some(exit_code);
+                    handle.row.updated_at = chrono::Utc::now().to_rfc3339();
                     emit_status(&app, &session_id, "exited", Some(exit_code));
                 }
                 break;
@@ -787,12 +1028,12 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     应用退出时必须清空所有运行期会话，避免留下不可见的后台终端进程。
+    ///     应用退出时必须停止运行期 PTY attach，但不能丢掉用户下次启动要恢复的会话元数据。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     插入 fake 会话后调用 shutdown_all，断言返回清理数量且 registry 变为空。
+    ///     插入 fake 会话后调用 shutdown_all，断言返回清理数量且会话状态变为 disconnected。
     #[test]
-    fn shutdown_all_drains_registry() {
+    fn shutdown_all_marks_sessions_disconnected() {
         let registry = WorkbenchSessionRegistry::new();
         registry.insert_fake_session_for_test("s1", "p1");
         registry.insert_fake_session_for_test("s2", "p2");
@@ -800,6 +1041,30 @@ mod tests {
         let cleaned = registry.shutdown_all();
 
         assert_eq!(cleaned, 2);
-        assert!(registry.list(None).is_empty());
+        let listed = registry.list(None);
+        assert_eq!(listed.len(), 2);
+        assert!(listed
+            .iter()
+            .all(|session| session.status == "disconnected"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     应用退出后再次启动时，用户之前打开的工作台终端 tab 应能恢复，而不是因为退出清理被彻底遗忘。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     插入 fake 会话并执行退出清理，断言会话元数据仍可列出且状态被标记为 disconnected。
+    #[test]
+    fn shutdown_all_preserves_session_metadata_for_restart_restore() {
+        let registry = WorkbenchSessionRegistry::new();
+        registry.insert_fake_session_for_test("s1", "p1");
+
+        let cleaned = registry.shutdown_all();
+        let listed = registry.list(Some("p1"));
+
+        assert_eq!(cleaned, 1);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, "s1");
+        assert_eq!(listed[0].status, "disconnected");
+        assert!(listed[0].exited_at.is_some());
     }
 }

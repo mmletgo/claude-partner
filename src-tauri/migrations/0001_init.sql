@@ -43,3 +43,34 @@ CREATE TABLE IF NOT EXISTS scratchpad (
     vector_clock TEXT NOT NULL,
     deleted INTEGER DEFAULT 0
 );
+
+-- workbench_projects 表：工作台最近项目记录
+CREATE TABLE IF NOT EXISTS workbench_projects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    device_name TEXT NOT NULL,
+    path TEXT NOT NULL,
+    last_opened_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- workbench_sessions 表：工作台终端 tab 元数据，运行期 PTY/tmux attach 在启动时重建
+CREATE TABLE IF NOT EXISTS workbench_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL,
+    cols INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    exited_at TEXT,
+    exit_code INTEGER,
+    backend TEXT NOT NULL,
+    backend_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);

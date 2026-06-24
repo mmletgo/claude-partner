@@ -4,7 +4,7 @@
 //!     前端工作台需要稳定的项目、会话、文件节点结构；后端也需要 SQLite row 表达项目记录。
 //!
 //! Code Logic（这个模块做什么）:
-//!     定义 WorkbenchProjectRow/Dto、WorkbenchSessionDto、WorkbenchFileNode、WorkbenchPathInfo，
+//!     定义 WorkbenchProjectRow/Dto、WorkbenchSessionRow/Dto、WorkbenchFileNode、WorkbenchPathInfo，
 //!     所有前端 DTO 使用 camelCase。
 
 #![allow(dead_code)]
@@ -76,7 +76,7 @@ impl WorkbenchProjectRow {
 /// 工作台终端会话 DTO。
 ///
 /// Business Logic（为什么需要这个结构体）:
-///     前端需要展示本机 Claude Code 终端会话状态、尺寸和退出信息。
+///     前端需要展示本机项目终端会话状态、尺寸和退出信息。
 ///
 /// Code Logic（这个结构体做什么）:
 ///     定义会话列表与会话状态事件可复用的数据形状，字段使用 camelCase 序列化。
@@ -93,6 +93,54 @@ pub struct WorkbenchSessionDto {
     pub started_at: String,
     pub exited_at: Option<String>,
     pub exit_code: Option<i32>,
+}
+
+/// 工作台终端会话数据库行模型。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     用户希望重启应用后之前打开的终端 tab 仍可恢复，因此会话元数据需要独立于运行期 PTY 持久保存。
+///
+/// Code Logic（这个结构体做什么）:
+///     对齐 SQLite `workbench_sessions` 表字段；backend/backend_id 记录可重连终端后端（如 tmux）信息，
+///     DTO 投影仍只暴露前端展示所需字段。
+#[derive(Debug, Clone)]
+pub struct WorkbenchSessionRow {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub command: String,
+    pub status: String,
+    pub cols: u16,
+    pub rows: u16,
+    pub started_at: String,
+    pub exited_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub backend: String,
+    pub backend_id: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+impl WorkbenchSessionRow {
+    /// Business Logic（为什么需要这个函数）:
+    ///     前端会话列表只需要 UI 字段，不应暴露后端重连实现细节。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     克隆持久化 row 的展示字段，转换为 `WorkbenchSessionDto`。
+    pub fn to_dto(&self) -> WorkbenchSessionDto {
+        WorkbenchSessionDto {
+            id: self.id.clone(),
+            project_id: self.project_id.clone(),
+            name: self.name.clone(),
+            command: self.command.clone(),
+            status: self.status.clone(),
+            cols: self.cols,
+            rows: self.rows,
+            started_at: self.started_at.clone(),
+            exited_at: self.exited_at.clone(),
+            exit_code: self.exit_code,
+        }
+    }
 }
 
 /// 工作台文件树节点 DTO。

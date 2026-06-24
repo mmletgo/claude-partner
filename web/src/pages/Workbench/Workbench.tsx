@@ -713,7 +713,6 @@ export function Workbench() {
       'workbench:terminal-output',
       (event) => {
         const payload = event.payload;
-        if (!knownSessionIdsRef.current.has(payload.sessionId)) return;
         setTerminalBuffers((current) => {
           const nextBuffer = `${current[payload.sessionId] ?? ''}${payload.chunk}`;
           return {

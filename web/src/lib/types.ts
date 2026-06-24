@@ -228,13 +228,13 @@ export interface WorkbenchProject {
 export type WorkbenchSessionStatus = 'running' | 'exited' | 'disconnected' | string;
 
 /**
- * 工作台 Claude Code 终端会话 DTO。
+ * 工作台项目终端会话 DTO。
  *
  * Business Logic（为什么需要这个类型）:
- *   一个项目可开启多个 Claude Code 终端，前端需展示 tab、状态、尺寸和退出信息。
+ *   一个项目可开启多个项目终端，前端需展示可恢复 tab、状态、尺寸和退出信息。
  *
  * Code Logic（字段说明）:
- *   session 只在应用运行期存在；终端输出通过 workbench:terminal-output 事件增量推送。
+ *   session 元数据由后端持久化；终端输出通过 workbench:terminal-output 事件增量推送。
  */
 export interface WorkbenchSession {
   id: string;

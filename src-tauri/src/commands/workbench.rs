@@ -15,6 +15,7 @@ use crate::workbench::models::{
     WorkbenchFileNode, WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchProjectRow,
     WorkbenchSessionDto,
 };
+use crate::workbench::sessions::kill_persisted_backend;
 use crate::workbench::{fs as workbench_fs, projects};
 use chrono::Utc;
 use std::path::PathBuf;
@@ -40,6 +41,72 @@ async fn get_project(state: &AppState, project_id: &str) -> Result<WorkbenchProj
 ///     返回当前 UTC 时间的 RFC3339 字符串。
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 会话列表既要包含 SQLite 中待恢复的历史 tab，也要优先展示当前运行期 registry 的实时状态。
+///
+/// Code Logic（这个函数做什么）:
+///     先把持久化 row 投影为 DTO，再用 registry 中的实时 DTO 按 id 覆盖同名项。
+async fn merged_session_dtos(
+    state: &AppState,
+    project_id: Option<&str>,
+) -> Result<Vec<WorkbenchSessionDto>, AppError> {
+    let mut sessions: Vec<WorkbenchSessionDto> = state
+        .workbench_session_repo
+        .list(project_id)
+        .await?
+        .iter()
+        .map(|row| row.to_dto())
+        .collect();
+    for live in state.workbench_sessions.list(project_id) {
+        if let Some(existing) = sessions.iter_mut().find(|session| session.id == live.id) {
+            *existing = live;
+        } else {
+            sessions.push(live);
+        }
+    }
+    Ok(sessions)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     应用重启后，进入工作台项目时应自动恢复之前打开的终端 tab 和可重连上下文。
+///
+/// Code Logic（这个函数做什么）:
+///     读取持久化会话；registry 已有则跳过；项目存在则调用 registry.restore，成功后写回最新 row，
+///     项目缺失则删除孤儿会话。
+async fn restore_persisted_sessions(
+    state: &AppState,
+    app_handle: AppHandle,
+    project_id: Option<&str>,
+) -> Result<(), AppError> {
+    let rows = state.workbench_session_repo.list(project_id).await?;
+    for row in rows {
+        if state.workbench_sessions.contains(&row.id) {
+            continue;
+        }
+        let Some(project) = state.workbench_project_repo.get(&row.project_id).await? else {
+            state.workbench_session_repo.delete(&row.id).await?;
+            continue;
+        };
+        match state
+            .workbench_sessions
+            .restore(app_handle.clone(), project, row.clone())
+        {
+            Ok(restored) => {
+                state.workbench_session_repo.upsert(&restored).await?;
+            }
+            Err(error) => {
+                tracing::warn!("恢复工作台终端会话失败: {error}");
+                let mut disconnected = row;
+                disconnected.status = "disconnected".to_string();
+                disconnected.exited_at = Some(now_iso());
+                disconnected.updated_at = now_iso();
+                state.workbench_session_repo.upsert(&disconnected).await?;
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -126,22 +193,22 @@ pub async fn add_workbench_project(
 ///     用户可从工作台列表移除项目，但这不应删除磁盘上的真实项目文件夹。
 ///
 /// Code Logic（这个函数做什么）:
-///     先关闭该项目下仍存在的内存会话，再删除 SQLite 项目记录，返回轻量 ok 对象。
+///     先关闭该项目下仍存在的会话并销毁可重连后端，再删除 SQLite 项目与会话记录，返回轻量 ok 对象。
 #[tauri::command]
 pub async fn remove_workbench_project(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<serde_json::Value, AppError> {
     let _ = get_project(&state, &project_id).await?;
-    let session_ids: Vec<String> = state
-        .workbench_sessions
-        .list(Some(&project_id))
-        .into_iter()
-        .map(|session| session.id)
-        .collect();
-    for session_id in session_ids {
-        let _ = state.workbench_sessions.close(&session_id);
+    let session_rows = state.workbench_session_repo.list(Some(&project_id)).await?;
+    for row in session_rows {
+        let _ = state.workbench_sessions.close(&row.id);
+        kill_persisted_backend(&row);
     }
+    state
+        .workbench_session_repo
+        .delete_by_project(&project_id)
+        .await?;
     state.workbench_project_repo.delete(&project_id).await?;
     Ok(serde_json::json!({ "ok": true, "projectId": project_id }))
 }
@@ -172,13 +239,15 @@ pub async fn touch_workbench_project(
 ///     前端需要按项目查看当前运行期内的多个终端，也需要在全局恢复 tab 列表。
 ///
 /// Code Logic（这个函数做什么）:
-///     从内存 registry 读取会话；project_id 为空则返回全部，否则按项目过滤。
+///     先从 SQLite 按需恢复缺失会话，再合并持久化列表和 registry 实时状态返回。
 #[tauri::command]
 pub async fn list_workbench_sessions(
     state: State<'_, AppState>,
+    app_handle: AppHandle,
     project_id: Option<String>,
 ) -> Result<Vec<WorkbenchSessionDto>, AppError> {
-    Ok(state.workbench_sessions.list(project_id.as_deref()))
+    restore_persisted_sessions(&state, app_handle, project_id.as_deref()).await?;
+    merged_session_dtos(&state, project_id.as_deref()).await
 }
 
 /// 在项目目录中创建一个普通 PTY 终端会话。
@@ -187,7 +256,7 @@ pub async fn list_workbench_sessions(
 ///     用户在工作台中打开终端时，应只进入当前项目根目录的 shell，不自动运行 Claude Code。
 ///
 /// Code Logic（这个函数做什么）:
-///     读取项目路径；调用 session registry 按前端初始尺寸创建 shell PTY，
+///     读取项目路径；调用 session registry 按前端初始尺寸创建 shell/tmux 会话，写入 SQLite，
 ///     并通过 Tauri event 推送输出与状态。
 #[tauri::command]
 pub async fn create_workbench_session(
@@ -198,9 +267,11 @@ pub async fn create_workbench_session(
     initial_rows: Option<u16>,
 ) -> Result<WorkbenchSessionDto, AppError> {
     let project = get_project(&state, &project_id).await?;
-    state
+    let row = state
         .workbench_sessions
-        .create(app_handle, project, initial_cols, initial_rows)
+        .create(app_handle, project, initial_cols, initial_rows)?;
+    state.workbench_session_repo.upsert(&row).await?;
+    Ok(row.to_dto())
 }
 
 /// 向工作台终端写入输入。
@@ -226,7 +297,7 @@ pub async fn write_workbench_session_input(
 ///     终端面板尺寸变化时，PTY 子进程需要收到新的 cols/rows，避免输出换行错乱。
 ///
 /// Code Logic（这个函数做什么）:
-///     更新 registry 中的 DTO 尺寸，并调用 MasterPty::resize。
+///     更新 registry 中的 row 尺寸，调用 MasterPty::resize，并写回 SQLite。
 #[tauri::command]
 pub async fn resize_workbench_session(
     state: State<'_, AppState>,
@@ -234,23 +305,38 @@ pub async fn resize_workbench_session(
     cols: u16,
     rows: u16,
 ) -> Result<serde_json::Value, AppError> {
-    state.workbench_sessions.resize(&session_id, cols, rows)?;
+    let row = state.workbench_sessions.resize(&session_id, cols, rows)?;
+    state.workbench_session_repo.upsert(&row).await?;
     Ok(serde_json::json!({ "ok": true, "sessionId": session_id }))
 }
 
 /// 关闭工作台终端 tab。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     用户关闭 tab 后，该会话应从运行期 registry 中移除并释放 PTY 资源。
+///     用户关闭 tab 后，该会话应从运行期 registry 和 SQLite 中移除，并释放 PTY/tmux 资源。
 ///
 /// Code Logic（这个函数做什么）:
-///     从 registry remove 会话并尽力 kill 仍在运行的子进程，返回轻量 ok 对象。
+///     优先关闭 registry 中的运行期句柄；若 registry 已无该会话但 SQLite 仍有记录，则清理持久后端并删除记录。
 #[tauri::command]
 pub async fn close_workbench_session(
     state: State<'_, AppState>,
     session_id: String,
 ) -> Result<serde_json::Value, AppError> {
-    state.workbench_sessions.close(&session_id)?;
+    match state.workbench_sessions.close(&session_id) {
+        Ok(row) => {
+            kill_persisted_backend(&row);
+        }
+        Err(AppError::NotFound(_)) => {
+            let row = state
+                .workbench_session_repo
+                .get(&session_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("工作台会话不存在"))?;
+            kill_persisted_backend(&row);
+        }
+        Err(error) => return Err(error),
+    }
+    state.workbench_session_repo.delete(&session_id).await?;
     Ok(serde_json::json!({ "ok": true, "sessionId": session_id }))
 }
 
@@ -260,14 +346,31 @@ pub async fn close_workbench_session(
 ///     同一项目可打开多个终端，用户需要给 tab 起名区分不同任务。
 ///
 /// Code Logic（这个函数做什么）:
-///     更新内存 DTO 的 name 字段并返回最新会话。
+///     更新运行期 row 或持久化 row 的 name 字段并返回最新会话。
 #[tauri::command]
 pub async fn rename_workbench_session(
     state: State<'_, AppState>,
     session_id: String,
     name: String,
 ) -> Result<WorkbenchSessionDto, AppError> {
-    state.workbench_sessions.rename(&session_id, &name)
+    match state.workbench_sessions.rename(&session_id, &name) {
+        Ok(row) => {
+            state.workbench_session_repo.upsert(&row).await?;
+            Ok(row.to_dto())
+        }
+        Err(AppError::NotFound(_)) => {
+            let mut row = state
+                .workbench_session_repo
+                .get(&session_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("工作台会话不存在"))?;
+            row.name = name.trim().to_string();
+            row.updated_at = now_iso();
+            state.workbench_session_repo.upsert(&row).await?;
+            Ok(row.to_dto())
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// 列出项目目录下的一级文件节点。

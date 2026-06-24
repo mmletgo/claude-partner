@@ -49,7 +49,7 @@ use crate::net::{discovery, http_server, peer_client::PeerClient};
 use crate::state::AppState;
 use crate::storage::{
     ClaudeHistoryRepo, ClaudeMdRepo, PromptRepo, ScratchpadRepo, SshTargetRepo, TransferRepo,
-    WorkbenchProjectRepo,
+    WorkbenchProjectRepo, WorkbenchSessionRepo,
 };
 use crate::transfer::registry::TransferRegistry;
 use tauri::Manager;
@@ -201,6 +201,30 @@ const WORKBENCH_PROJECT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_pro
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 )";
+
+/// 工作台终端会话表（终端 tab 元数据持久化，PTY/tmux attach 运行期重建）。
+///
+/// Business Logic（为什么需要这个常量）:
+///     用户希望重启 cc-partner 后之前打开的终端仍出现在工作台，并在可重连后端可用时继续原上下文。
+///
+/// Code Logic（这个常量做什么）:
+///     定义 workbench_sessions 表结构；backend/backend_id 保存 tmux 等重连后端信息，关闭 tab 时删除记录。
+const WORKBENCH_SESSION_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_sessions (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    status TEXT NOT NULL,
+    cols INTEGER NOT NULL,
+    rows INTEGER NOT NULL,
+    started_at TEXT NOT NULL,
+    exited_at TEXT,
+    exit_code INTEGER,
+    backend TEXT NOT NULL,
+    backend_id TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)";
 /// 初始化数据库连接池：开启 WAL，手动建表，返回 SqlitePool。
 ///
 /// Business Logic: 单连接语义与 Python aiosqlite 一致（max_connections(1)）。
@@ -242,8 +266,9 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
     sqlx::query(GITHUB_TRENDING_CACHE_SCHEMA)
         .execute(&pool)
         .await?;
-    // 工作台最近项目列表（本机 MVP：只保存项目元数据，不涉及终端会话持久化）
+    // 工作台最近项目列表 + 终端会话元数据（PTY 句柄运行期重建）
     sqlx::query(WORKBENCH_PROJECT_SCHEMA).execute(&pool).await?;
+    sqlx::query(WORKBENCH_SESSION_SCHEMA).execute(&pool).await?;
     Ok(pool)
 }
 
@@ -299,6 +324,7 @@ pub fn run() {
                 let ssh_target_repo = Arc::new(SshTargetRepo::new(pool.clone()));
                 let scratchpad_repo = Arc::new(ScratchpadRepo::new(pool.clone()));
                 let workbench_project_repo = Arc::new(WorkbenchProjectRepo::new(pool.clone()));
+                let workbench_session_repo = Arc::new(WorkbenchSessionRepo::new(pool.clone()));
                 let workbench_sessions =
                     Arc::new(crate::workbench::sessions::WorkbenchSessionRegistry::new());
                 // 健康提醒：仓库（共享 pool）+ 运行时（状态机/贪睡/暂停）+ daemon 取消令牌占位
@@ -333,6 +359,7 @@ pub fn run() {
                     // Claude Code 历史：仓库 + 采集器取消令牌（start 在 manage 之后调用）
                     cc_history_repo,
                     workbench_project_repo,
+                    workbench_session_repo,
                     workbench_sessions,
                     cc_collector_cancel: Arc::new(Mutex::new(None)),
                     // 云端同步：后台 scheduler 取消令牌（start 在 manage 之后调用）
@@ -571,7 +598,7 @@ pub fn run() {
                     t.cancel();
                     tracing::info!("健康监测 daemon 已停止");
                 }
-                // 停止工作台中仍运行的 Claude Code PTY 会话，避免应用退出后留下子进程。
+                // 停止工作台中仍运行的 PTY attach；tmux 后端会保留 session 供下次启动重连。
                 let cleaned = state.workbench_sessions.shutdown_all();
                 if cleaned > 0 {
                     tracing::info!("工作台会话已清理: {cleaned}");

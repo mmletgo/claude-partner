@@ -14,6 +14,7 @@ pub mod scratchpad_repo;
 pub mod ssh_target_repo;
 pub mod transfer_repo;
 pub mod workbench_project_repo;
+pub mod workbench_session_repo;
 
 pub use cc_history_repo::ClaudeHistoryRepo;
 pub use claude_md_repo::ClaudeMdRepo;
@@ -24,3 +25,4 @@ pub use scratchpad_repo::ScratchpadRepo;
 pub use ssh_target_repo::SshTargetRepo;
 pub use transfer_repo::TransferRepo;
 pub use workbench_project_repo::WorkbenchProjectRepo;
+pub use workbench_session_repo::WorkbenchSessionRepo;
