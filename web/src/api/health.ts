@@ -22,6 +22,9 @@ export const healthApi = {
   /** 读取完整健康配置（全部字段，供设置表单初始化，避免 updateConfig 部分字段清零） */
   getConfig: () => invoke<HealthConfig>('get_health_config'),
 
+  /** 读取健康提醒默认配置(设置页「恢复默认」用,对齐同步/AI 的 getDefault 模式) */
+  getDefaultConfig: () => invoke<HealthConfig>('get_default_health_config'),
+
   /** 开启/关闭久坐监测（落盘 config.health.enabled） */
   toggleEnabled: (enabled: boolean) =>
     invoke<HealthConfig>('toggle_health_enabled', { enabled }),
