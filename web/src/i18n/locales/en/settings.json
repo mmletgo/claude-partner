@@ -103,8 +103,6 @@
     "checking": "Checking permission status…"
   },
   "action": {
-    "save": "Save",
-    "saving": "Saving…",
     "apply": "Apply",
     "applying": "Applying…",
     "resetDefault": "Reset to defaults"

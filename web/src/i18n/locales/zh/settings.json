@@ -103,8 +103,6 @@
     "checking": "正在检查权限状态…"
   },
   "action": {
-    "save": "保存",
-    "saving": "保存中…",
     "apply": "应用配置",
     "applying": "应用中…",
     "resetDefault": "恢复默认"
