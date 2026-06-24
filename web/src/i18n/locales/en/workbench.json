@@ -1,6 +1,6 @@
 {
   "title": "Workbench",
-  "sessionBadge": "Claude Code sessions",
+  "sessionBadge": "Terminal sessions",
   "refresh": "Refresh",
   "loading": "Loading",
   "emptyValue": "—",
@@ -23,7 +23,7 @@
     "quad": "Four panes"
   },
   "terminalTabs": "Terminal sessions",
-  "terminalPlaceholder": "Create or select a Claude Code terminal",
+  "terminalPlaceholder": "Create or select a terminal",
   "terminalNoProject": "Select a project folder first",
   "closeTerminal": "Close terminal",
   "sessionStatusTitle": "Current session",

@@ -2,7 +2,7 @@
  * 工作台 API - 通过 Tauri invoke 调用 Rust 后端的本机项目、终端和文件树命令。
  *
  * Business Logic（为什么需要这个模块）:
- *   工作台页面需要统一管理项目文件夹、多个 Claude Code 终端和右侧文件树交互。
+ *   工作台页面需要统一管理项目文件夹、多个普通终端和右侧文件树交互。
  *   组件层不应直接拼 invoke 命令名，避免命令参数分散。
  *
  * Code Logic（这个模块做什么）:
@@ -48,7 +48,7 @@ export const workbenchApi = {
         projectId: projectId ?? null,
       }),
 
-    /** 在指定项目根目录创建一个 Claude Code PTY 会话。 */
+    /** 在指定项目根目录创建一个普通 shell PTY 会话。 */
     create: (projectId: string, initialSize?: WorkbenchTerminalSize) =>
       invoke<WorkbenchSession>('create_workbench_session', {
         projectId,

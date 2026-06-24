@@ -1,6 +1,6 @@
 {
   "title": "工作台",
-  "sessionBadge": "Claude Code sessions",
+  "sessionBadge": "Terminal sessions",
   "refresh": "刷新",
   "loading": "加载中",
   "emptyValue": "—",
@@ -23,7 +23,7 @@
     "quad": "四宫格"
   },
   "terminalTabs": "终端会话",
-  "terminalPlaceholder": "创建或选择一个 Claude Code 终端",
+  "terminalPlaceholder": "创建或选择一个终端",
   "terminalNoProject": "先选择项目文件夹",
   "closeTerminal": "关闭终端",
   "sessionStatusTitle": "当前会话",

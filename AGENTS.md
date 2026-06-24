@@ -11,7 +11,7 @@
 - **Prompt 管理** — 记录 / 复制 / 打标签 / 跨设备同步
 - **Prompt 优化** — 调用本机 Claude Code CLI pure/headless 模式生成中英文优化版 Prompt
 - **速记本** — 多页面自动保存文本，支持页面标题、局域网与 GitHub 同步
-- **工作台** — 指定项目文件夹，管理多个本机 Claude Code PTY 终端和可交互项目文件树
+- **工作台** — 指定项目文件夹，管理多个本机项目终端和可交互项目文件树
 - **P2P 自动互联** — 局域网内 mDNS 自动发现
 - **自动更新** — GitHub Releases 检测 / 下载 / 安装
 
@@ -63,7 +63,7 @@ cc-partner/
 │   │   │   ├── Transfer/         # 02-transfer.html
 │   │   │   ├── Prompts/          # 03-prompts.html
 │   │   │   ├── PromptOptimizer/  # Prompt 优化（本机 Claude CLI pure/headless）
-│   │   │   ├── Workbench/        # 项目文件夹 + 多 Claude Code PTY 终端 + 文件树
+│   │   │   ├── Workbench/        # 项目文件夹 + 多项目终端 + 文件树
 │   │   │   ├── Devices/          # 04-devices.html
 │   │   │   ├── Settings/         # 05-settings.html
 │   │   │   ├── Welcome/          # 06-welcome.html
@@ -419,7 +419,7 @@ node scripts/bump-version.mjs <新版本号>
 | check_update / download_update / get_download_status / cancel_download / install_update | 自动更新 5 命令 |
 | start_region_capture / get_region_snapshot / save_clipboard_image / cancel_region_capture | 区域截图 |
 | list_github_trending_repos / get_github_trending_config / get_default_github_trending_config / update_github_trending_config / test_claude_cli | GitHub 周热门项目 + Claude CLI 双语解说配置 / 恢复默认 |
-| list_workbench_projects / add_workbench_project / remove_workbench_project / touch_workbench_project / list_workbench_sessions / create_workbench_session / write_workbench_session_input / resize_workbench_session / close_workbench_session / rename_workbench_session / list_workbench_dir / get_workbench_path_info / create_workbench_file / create_workbench_dir / rename_workbench_path / delete_workbench_path | 工作台本机项目、Claude Code PTY 会话和项目文件树 |
+| list_workbench_projects / add_workbench_project / remove_workbench_project / touch_workbench_project / list_workbench_sessions / create_workbench_session / write_workbench_session_input / resize_workbench_session / close_workbench_session / rename_workbench_session / list_workbench_dir / get_workbench_path_info / create_workbench_file / create_workbench_dir / rename_workbench_path / delete_workbench_path | 工作台本机项目、普通 PTY 终端会话和项目文件树 |
 
 ### 8.3 P2P HTTP 端点（对端调用，由 `src-tauri/src/net/routes/` 注册）
 

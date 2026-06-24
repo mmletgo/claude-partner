@@ -1,7 +1,7 @@
 //! commands/workbench.rs — 工作台 invoke 命令
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     前端工作台页面需要管理最近项目、在项目目录中开启多个 Claude Code 终端，
+//!     前端工作台页面需要管理最近项目、在项目目录中开启多个普通终端，
 //!     并在右侧检查器中交互式浏览和整理项目文件夹。
 //!
 //! Code Logic（这个模块做什么）:
@@ -169,7 +169,7 @@ pub async fn touch_workbench_project(
 /// 列出工作台终端会话。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     前端需要按项目查看当前运行期内的多个 Claude Code 终端，也需要在全局恢复 tab 列表。
+///     前端需要按项目查看当前运行期内的多个终端，也需要在全局恢复 tab 列表。
 ///
 /// Code Logic（这个函数做什么）:
 ///     从内存 registry 读取会话；project_id 为空则返回全部，否则按项目过滤。
@@ -181,14 +181,14 @@ pub async fn list_workbench_sessions(
     Ok(state.workbench_sessions.list(project_id.as_deref()))
 }
 
-/// 在项目目录中创建一个 Claude Code PTY 会话。
+/// 在项目目录中创建一个普通 PTY 终端会话。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     用户在工作台中打开终端时，应在当前项目根目录启动本机 Claude Code CLI。
+///     用户在工作台中打开终端时，应只进入当前项目根目录的 shell，不自动运行 Claude Code。
 ///
 /// Code Logic（这个函数做什么）:
-///     读取项目路径；从现有 GitHub Trending/Prompt 优化配置复用 claude_cli_path；
-///     调用 session registry 按前端初始尺寸创建 PTY，并通过 Tauri event 推送输出与状态。
+///     读取项目路径；调用 session registry 按前端初始尺寸创建 shell PTY，
+///     并通过 Tauri event 推送输出与状态。
 #[tauri::command]
 pub async fn create_workbench_session(
     state: State<'_, AppState>,
@@ -198,13 +198,9 @@ pub async fn create_workbench_session(
     initial_rows: Option<u16>,
 ) -> Result<WorkbenchSessionDto, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let cli_path = {
-        let config = state.config.read().expect("config 读锁中毒");
-        config.github_trending.claude_cli_path.clone()
-    };
     state
         .workbench_sessions
-        .create(app_handle, project, cli_path, initial_cols, initial_rows)
+        .create(app_handle, project, initial_cols, initial_rows)
 }
 
 /// 向工作台终端写入输入。

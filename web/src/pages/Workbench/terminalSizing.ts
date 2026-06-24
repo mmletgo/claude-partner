@@ -19,7 +19,7 @@ interface TerminalPixelSize {
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   创建或重启 Claude Code 终端前，需要按当前工作台布局预估单个 pane 的外框尺寸。
+ *   创建或重启工作台终端前，需要按当前工作台布局预估单个 pane 的外框尺寸。
  *
  * Code Logic（这个函数做什么）:
  *   根据 single/double/quad 布局拆分 panel 宽高，并扣除每个 pane 顶部 header 高度。

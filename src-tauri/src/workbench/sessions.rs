@@ -1,7 +1,7 @@
 //! workbench/sessions.rs — 工作台本机 PTY 会话注册表
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     工作台允许用户在同一项目下开启多个本机 Claude Code 交互式终端，会话只需要在应用运行期存在。
+//!     工作台允许用户在同一项目下开启多个本机项目终端，会话只需要在应用运行期存在。
 //!
 //! Code Logic（这个模块做什么）:
 //!     使用 portable-pty 创建 PTY，内存保存会话句柄，并通过 Tauri event 推送终端输出和状态变化。
@@ -13,6 +13,7 @@ use crate::workbench::models::{WorkbenchProjectRow, WorkbenchSessionDto};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -24,6 +25,10 @@ const DEFAULT_COLS: u16 = 98;
 const DEFAULT_ROWS: u16 = 32;
 const MIN_TERMINAL_COLS: u16 = 20;
 const MIN_TERMINAL_ROWS: u16 = 6;
+#[cfg(windows)]
+const FALLBACK_TERMINAL_COMMAND: &str = "cmd.exe";
+#[cfg(not(windows))]
+const FALLBACK_TERMINAL_COMMAND: &str = "/bin/sh";
 
 /// 工作台终端输出事件 payload。
 ///
@@ -60,7 +65,7 @@ struct TerminalStatusEvent {
 /// 工作台终端 UTF-8 流式解码器。
 ///
 /// Business Logic（为什么需要这个结构体）:
-///     Claude Code 终端会输出中文、符号和状态栏文本，PTY read 可能把一个 UTF-8 字符拆到两个 chunk。
+///     终端会输出中文、符号和交互式程序文本，PTY read 可能把一个 UTF-8 字符拆到两个 chunk。
 ///
 /// Code Logic（这个结构体做什么）:
 ///     保存上次 chunk 末尾未完成的字节序列，下次 decode 时先拼回去；真实非法字节仍输出替换符。
@@ -139,7 +144,7 @@ struct WorkbenchSessionHandle {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     工作台终端首屏需要按前端真实可见尺寸启动，避免 Claude Code 先按默认列宽绘制后错位。
+///     工作台终端首屏需要按前端真实可见尺寸启动，避免交互式程序先按默认列宽绘制后错位。
 ///
 /// Code Logic（这个函数做什么）:
 ///     对前端传入的可选 cols/rows 做下限裁剪；缺失时回退默认 PTY 尺寸。
@@ -153,7 +158,36 @@ fn initial_terminal_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     用户关闭终端或应用退出清理时，Claude Code 子进程可能已经自然退出并被系统回收，此时 kill 返回 No such process 不应打扰用户。
+///     工作台打开终端只应进入项目根目录的普通 shell，用户自己决定是否在里面运行 Claude Code 或其他命令。
+///
+/// Code Logic（这个函数做什么）:
+///     按平台读取系统默认 shell 环境变量；缺失或不可用时回退到跨平台默认 shell 命令。
+fn default_terminal_command() -> String {
+    #[cfg(windows)]
+    {
+        default_terminal_command_from_env(std::env::var_os("ComSpec"))
+    }
+    #[cfg(not(windows))]
+    {
+        default_terminal_command_from_env(std::env::var_os("SHELL"))
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     shell 解析逻辑需要可单测，避免工作台终端再次被误改为固定启动 Claude Code。
+///
+/// Code Logic（这个函数做什么）:
+///     将环境变量 OsString 转成非空 UTF-8 字符串；无法转换或为空时使用平台 fallback。
+fn default_terminal_command_from_env(command: Option<OsString>) -> String {
+    command
+        .and_then(|value| value.into_string().ok())
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| FALLBACK_TERMINAL_COMMAND.to_string())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     用户关闭终端或应用退出清理时，终端子进程可能已经自然退出并被系统回收，此时 kill 返回 No such process 不应打扰用户。
 ///
 /// Code Logic（这个函数做什么）:
 ///     将底层 child.kill() 的结果归一化；进程已不存在视为 Ok，其他 IO 错误继续转换为 AppError。
@@ -262,26 +296,26 @@ impl WorkbenchSessionRegistry {
     }
 
     /// Business Logic（为什么需要这个函数）:
-    ///     用户在工作台中创建本机 Claude Code 终端时，需要在项目目录中启动交互式 CLI。
+    ///     用户在工作台中创建本机终端时，需要在项目根目录中启动普通 shell。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     创建 portable-pty pair，cwd 指向项目路径，spawn cli_path，并启动输出与退出监听线程。
+    ///     创建 portable-pty pair，cwd 指向项目路径，spawn 系统 shell，并启动输出与退出监听线程。
     pub fn create(
         &self,
         app: AppHandle,
         project: WorkbenchProjectRow,
-        cli_path: String,
         initial_cols: Option<u16>,
         initial_rows: Option<u16>,
     ) -> Result<WorkbenchSessionDto, AppError> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
         let (cols, rows) = initial_terminal_size(initial_cols, initial_rows);
+        let terminal_command = default_terminal_command();
         let dto = WorkbenchSessionDto {
             id: session_id.clone(),
             project_id: project.id.clone(),
             name: project.name.clone(),
-            command: cli_path.clone(),
+            command: terminal_command.clone(),
             status: "running".to_string(),
             cols,
             rows,
@@ -299,7 +333,7 @@ impl WorkbenchSessionRegistry {
                 pixel_height: 0,
             })
             .map_err(|error| AppError::generic(format!("创建 PTY 失败: {error}")))?;
-        let mut cmd = CommandBuilder::new(cli_path.clone());
+        let mut cmd = CommandBuilder::new(terminal_command.clone());
         cmd.cwd(PathBuf::from(&project.path));
         let child = pair
             .slave
@@ -407,7 +441,7 @@ impl WorkbenchSessionRegistry {
     }
 
     /// Business Logic（为什么需要这个函数）:
-    ///     应用退出或项目被移除时，所有仍运行的工作台 Claude Code 子进程都应被显式终止。
+    ///     应用退出或项目被移除时，所有仍运行的工作台终端子进程都应被显式终止。
     ///
     /// Code Logic（这个函数做什么）:
     ///     drain registry 中全部会话句柄，逐个尽力 kill 仍运行的 PTY child，并返回被清理的数量。
@@ -476,7 +510,7 @@ impl WorkbenchSessionRegistry {
             id: session_id.to_string(),
             project_id: project_id.to_string(),
             name: format!("session-{session_id}"),
-            command: "claude".to_string(),
+            command: default_terminal_command_from_env(Some("/bin/sh".into())),
             status: "running".to_string(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
@@ -673,7 +707,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     Claude Code 状态栏会输出中文和符号，PTY read 可能把多字节 UTF-8 拆到相邻 chunk。
+    ///     终端交互式程序会输出中文和符号，PTY read 可能把多字节 UTF-8 拆到相邻 chunk。
     ///
     /// Code Logic（这个测试做什么）:
     ///     构造一个被拆开的中文字符串，断言流式解码器能跨 chunk 保留完整字符。
@@ -692,7 +726,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     工作台打开终端时需要先按前端可见区域启动 PTY，避免 Claude Code 首屏按默认列宽绘制后错位。
+    ///     工作台打开终端时需要先按前端可见区域启动 PTY，避免交互式程序首屏按默认列宽绘制后错位。
     ///
     /// Code Logic（这个测试做什么）:
     ///     断言初始终端尺寸优先使用前端传入值，并对过小或缺失值回退到安全默认值。
@@ -710,7 +744,20 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     用户关闭终端或退出应用时，Claude Code 子进程可能已被系统回收，底层 kill 会返回 No such process。
+    ///     工作台打开终端应进入项目根目录的普通 shell，不能替用户自动启动 Claude Code。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造系统 shell 环境值，断言工作台终端命令使用 shell 路径而不是固定的 claude。
+    #[test]
+    fn workbench_terminal_command_defaults_to_shell_instead_of_claude() {
+        let command = default_terminal_command_from_env(Some("/bin/zsh".into()));
+
+        assert_eq!(command, "/bin/zsh");
+        assert_ne!(command, "claude");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     用户关闭终端或退出应用时，终端子进程可能已被系统回收，底层 kill 会返回 No such process。
     ///
     /// Code Logic（这个测试做什么）:
     ///     构造 macOS/Linux 常见 ESRCH(os error 3)，断言终端 kill 归一化逻辑把它视为已停止。

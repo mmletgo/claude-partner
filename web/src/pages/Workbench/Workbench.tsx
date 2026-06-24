@@ -1,8 +1,8 @@
 /**
- * 工作台页面 - 本机项目、多 Claude Code 终端与项目文件夹检查器
+ * 工作台页面 - 本机项目、多终端与项目文件夹检查器
  *
  * Business Logic（为什么需要这个页面）:
- *   用户需要指定一个项目文件夹，并在 cc-partner 内为该项目同时管理多个 Claude Code 终端；
+ *   用户需要指定一个项目文件夹，并在 cc-partner 内为该项目同时管理多个项目终端；
  *   右侧检查器本期展示当前会话状态和可交互项目文件夹，下一期再接入文件预览。
  *
  * Code Logic（这个页面做什么）:
@@ -161,7 +161,7 @@ function formatDateTime(value: string | null, emptyValue: string): string {
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   当前会话状态需要展示运行时长，让用户判断 Claude Code 会话是否长期运行或已经退出多久。
+ *   当前会话状态需要展示运行时长，让用户判断终端会话是否长期运行或已经退出多久。
  *
  * Code Logic（这个函数做什么）:
  *   根据 startedAt 与 exitedAt/当前时间计算秒差，并格式化为 h/m/s 的紧凑文本。
@@ -246,7 +246,7 @@ function terminalOptions(): ITerminalOptions {
 
 /**
  * Business Logic（为什么需要这个函数）:
- *   Claude Code 首屏会按 PTY 初始 cols/rows 绘制状态栏；如果后端先用默认尺寸启动，前端随后 resize 会导致首屏错位。
+ *   交互式终端程序会按 PTY 初始 cols/rows 绘制首屏；如果后端先用默认尺寸启动，前端随后 resize 会导致首屏错位。
  *
  * Code Logic（这个函数做什么）:
  *   按当前终端布局计算单个 pane 的像素尺寸，复用真实 host/viewport 结构创建离屏 xterm；
@@ -531,7 +531,7 @@ function FileTree(props: NestedFileTreeProps) {
 
 /**
  * Business Logic（为什么需要这个组件）:
- *   工作台是用户进入项目并操作 Claude Code 终端的主界面。
+ *   工作台是用户进入项目并操作项目终端的主界面。
  *
  * Code Logic（这个组件做什么）:
  *   聚合项目、会话、终端输出 buffer、文件树与文件操作状态，并组合三栏布局。
