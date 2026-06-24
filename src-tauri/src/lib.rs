@@ -482,7 +482,7 @@ pub fn run() {
             github_trending_cmd::test_claude_cli,
             // Prompt 优化（复用 Claude CLI pure/headless helper，不保存历史）
             prompt_optimizer_cmd::optimize_prompt,
-            // M10 健康提醒（11 命令：配置/状态/开关/暂停/贪睡/跳过/配置回写/统计/活动明细/喝水/全屏遮罩）
+            // M10 健康提醒（13 命令：配置/状态/开关/暂停/贪睡/跳过/配置回写/统计/活动明细/喝水/跳过喝水/延迟喝水/全屏遮罩）
             health_cmd::get_health_config,
             health_cmd::get_health_status,
             health_cmd::toggle_health_enabled,
@@ -493,6 +493,8 @@ pub fn run() {
             health_cmd::get_activity_stats,
             health_cmd::get_activity_detail,
             health_cmd::record_water,
+            health_cmd::skip_water_reminder,
+            health_cmd::snooze_water_reminder,
             health_cmd::close_health_overlay,
         ])
         .build(tauri::generate_context!())

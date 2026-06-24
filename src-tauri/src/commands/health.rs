@@ -296,6 +296,49 @@ pub async fn record_water(state: State<'_, AppState>) -> Result<(), AppError> {
     Ok(())
 }
 
+/// 跳过当前喝水提醒(推进喝水计时起点 + 清未响应提醒,不入库)。
+///
+/// Business Logic: 前端喝水遮罩「跳过」按钮;用户暂时不想喝水,需要把下次提醒推迟一个完整间隔,
+///                  避免下一 tick 立即再次提醒。与「已饮水」区别在于不落库 water_records
+///                  (没有真实喝水行为,不应污染统计)。
+/// Code Logic: 拿当前 UTC 时间戳,更新 `HealthRuntime.water.last_drink_ts = now` 并置
+///             pending_remind=false,使 daemon 在 `water_interval_seconds` 后才能再次提醒。
+///             对照 `record_water` 但去掉 `insert_water` 落库。
+#[tauri::command]
+pub async fn skip_water_reminder(state: State<'_, AppState>) -> Result<(), AppError> {
+    let now = chrono::Utc::now().timestamp();
+    {
+        let mut w = state.health.water.lock().unwrap();
+        w.last_drink_ts = now;
+        w.pending_remind = false;
+    }
+    Ok(())
+}
+
+/// 延迟 N 分钟再提醒喝水(把下次提醒推迟 minutes 分钟 + 清未响应提醒,不入库)。
+///
+/// Business Logic: 前端喝水遮罩「延迟 5/10 分钟」按钮;用户想稍后再被提醒喝水,需要把下次提醒
+///                  推迟指定分钟数(而非一个完整间隔)。不落库(没有真实喝水行为)。
+/// Code Logic: 先读 config 读锁取 `water_interval_seconds` 并立即释放锁(不跨 await 持读锁),
+///             再以 `last_drink_ts = now - interval + minutes*60` 把计时起点回拨,使
+///             `now - last_drink_ts` 距离 interval 还差 minutes 分钟(即 minutes 分钟后到阈值);
+///             pending_remind 置 false。参照 `snooze_reminder` 风格。
+#[tauri::command]
+pub async fn snooze_water_reminder(
+    state: State<'_, AppState>,
+    minutes: i64,
+) -> Result<(), AppError> {
+    // 先读 interval 并释放 config 读锁,避免跨 await 持 RwLockReadGuard(非 Send)。
+    let interval = state.config.read().unwrap().health.water_interval_seconds;
+    let now = chrono::Utc::now().timestamp();
+    {
+        let mut w = state.health.water.lock().unwrap();
+        w.last_drink_ts = now - interval + minutes * 60;
+        w.pending_remind = false;
+    }
+    Ok(())
+}
+
 /// 关闭所有全屏健康提醒遮罩窗口(供前端遮罩页「推迟/跳过」按钮调用)。
 ///
 /// Business Logic: 用户在全屏遮罩上点击推迟/跳过后需关闭遮罩,恢复正常桌面使用。

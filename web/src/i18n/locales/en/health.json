@@ -73,5 +73,11 @@
   "waterBody": "Remember to stay hydrated. Have a sip of water.",
   "drank": "Drank water",
   "snoozed": "Reminder snoozed",
-  "skipped": "Reminder skipped"
+  "skipped": "Reminder skipped",
+  "startRest": "Start rest",
+  "resting": "Resting…",
+  "escToClose": "Press ESC to close",
+  "skipWater": "Skip",
+  "snoozeWater5": "Delay 5 min",
+  "snoozeWater10": "Delay 10 min"
 }

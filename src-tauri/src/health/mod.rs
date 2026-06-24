@@ -17,7 +17,6 @@ use std::time::Duration;
 
 use chrono::Utc;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -159,19 +158,15 @@ async fn handle_sample(
             .is_some_and(|t| t > now);
         let dnd = is_in_dnd(now, cfg.dnd_start.as_deref(), cfg.dnd_end.as_deref());
         if !snoozed && !dnd && cfg.notify_enabled {
-            send_system_notification(
-                app,
-                "该起来活动一下啦 🌿",
-                "连续工作已久,站起来走走、伸展一下吧。",
-            );
-            // 继续 emit 事件载荷;前端监听后显示应用内 toast,提供贪睡/跳过操作。
+            // emit 事件载荷;前端 HealthReminderListener 监听后弹 i18n 系统通知(统一通知出口),
+            // 并提供贪睡/跳过操作。后端不再发系统通知(避免双通知)。
             let _ = app.emit(
                 "health:reminder",
                 serde_json::json!({ "workWindowSeconds": cfg.work_window_seconds }),
             );
             // Plan 2: 开启全屏遮罩开关时,emit 后额外每屏弹出透明置顶遮罩窗口强制打断。
             if cfg.reminder_fullscreen {
-                if let Err(e) = open_health_overlay(app) {
+                if let Err(e) = open_health_overlay(app, "reminder") {
                     tracing::warn!("打开全屏健康遮罩失败: {e}");
                 }
             }
@@ -191,10 +186,16 @@ async fn handle_sample(
         }
         let dnd = is_in_dnd(now, cfg.dnd_start.as_deref(), cfg.dnd_end.as_deref());
         if !dnd {
-            if cfg.notify_enabled {
-                send_system_notification(app, "该喝水啦 💧", "记得补充水分,喝口水再继续。");
-            }
+            // emit 喝水事件;前端 HealthReminderListener 监听后弹 i18n 系统通知(统一通知出口)。
+            // 后端不再发系统通知(避免双通知)。
             let _ = app.emit("health:water", serde_json::json!({}));
+            // Plan 2: 开启全屏遮罩开关时,emit 后额外每屏弹出透明置顶遮罩窗口强制打断
+            // (与久坐提醒同 gate 同模式,type=water)。
+            if cfg.reminder_fullscreen {
+                if let Err(e) = open_health_overlay(app, "water") {
+                    tracing::warn!("打开全屏健康遮罩失败: {e}");
+                }
+            }
         }
     }
 
@@ -206,30 +207,19 @@ async fn handle_sample(
     Ok(())
 }
 
-/// 发送健康提醒系统通知。
-///
-/// Business Logic: 久坐提醒和喝水提醒不应只停留在主窗口内的 toast;当用户开启
-///     `notify_enabled` 时,后台 daemon 触发提醒后要进入操作系统通知中心。
-/// Code Logic: 通过 tauri-plugin-notification 的 Rust API 构造通知;发送失败不影响
-///     健康 daemon 与应用内事件,仅记录 warning。
-fn send_system_notification(app: &AppHandle, title: &str, body: &str) {
-    if let Err(e) = app.notification().builder().title(title).body(body).show() {
-        tracing::warn!("健康系统通知发送失败: {e}");
-    }
-}
-
 /// 打开全屏健康提醒遮罩窗口(每屏一个,复用截图透明窗口构建模式)。
 ///
-/// Business Logic: 用户开启 `reminder_fullscreen` 后,久坐提醒触发时需在每块屏幕覆盖
-///     一个透明置顶遮罩窗口强制打断,展示推迟/跳过按钮。macOS 单窗口不能跨屏(与截图同理),
-///     故枚举每块显示器建独立窗口。
+/// Business Logic: 用户开启 `reminder_fullscreen` 后,久坐/喝水提醒触发时需在每块屏幕覆盖
+///     一个透明置顶遮罩窗口强制打断,展示推迟/跳过(久坐另有「开始休息」倒计时;喝水另有
+///     「已饮水」/延迟/跳过)按钮。macOS 单窗口不能跨屏(与截图同理),故枚举每块显示器建独立窗口。
 /// Code Logic: 枚举 `xcap::Monitor::all()`,每个显示器用 `WebviewWindowBuilder` 建
 ///     decorations(false)/transparent(true)/always_on_top(true)/focused(true)/
 ///     skip_taskbar(true)/resizable(false) 的窗口,label = `health-overlay-{i}`,
-///     url = `/health-overlay?display={i}`。窗口几何直接用 xcap 的 x()/y()/width()/height()
-///     (均为逻辑点,不除 scale,与截图 overlay 一致)。已存在同名窗口则跳过(去重)。
+///     url = `/health-overlay?display={i}&type={overlay_type}`(`overlay_type` 取值 "reminder"
+///     或 "water",前端遮罩页据此渲染对应文案与按钮)。窗口几何直接用 xcap 的 x()/y()/width()
+///     /height()(均为逻辑点,不除 scale,与截图 overlay 一致)。已存在同名窗口则跳过(去重)。
 ///     透明窗口前置条件 `app.macOSPrivateApi: true` 已在 tauri.conf.json 开启。
-pub fn open_health_overlay(app: &AppHandle) -> Result<(), AppError> {
+pub fn open_health_overlay(app: &AppHandle, overlay_type: &str) -> Result<(), AppError> {
     let monitors =
         xcap::Monitor::all().map_err(|e| AppError::Bad(format!("枚举显示器失败: {e}")))?;
 
@@ -257,7 +247,7 @@ pub fn open_health_overlay(app: &AppHandle) -> Result<(), AppError> {
         WebviewWindowBuilder::new(
             app,
             &label,
-            WebviewUrl::App(format!("/health-overlay?display={i}").into()),
+            WebviewUrl::App(format!("/health-overlay?display={i}&type={overlay_type}").into()),
         )
         .title("健康提醒")
         .decorations(false)

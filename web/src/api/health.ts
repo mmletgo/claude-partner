@@ -40,6 +40,13 @@ export const healthApi = {
   /** 记录一次喝水（health:water 提醒 toast 的「已喝水」按钮调用） */
   recordWater: () => invoke<void>('record_water'),
 
+  /** 跳过本次喝水提醒（重置喝水计时） */
+  skipWater: () => invoke<void>('skip_water_reminder'),
+
+  /** 延迟本次喝水提醒 N 分钟 */
+  snoozeWater: (minutes: number) =>
+    invoke<void>('snooze_water_reminder', { minutes }),
+
   /** 整体覆盖 config.health（工作窗口/休息/通知/记录标题/免打扰/保留天数） */
   updateConfig: (config: HealthConfig) =>
     invoke<HealthConfig>('update_health_config', { config }),

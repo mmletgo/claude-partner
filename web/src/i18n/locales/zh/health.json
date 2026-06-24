@@ -73,5 +73,11 @@
   "waterBody": "记得补充水分,喝口水再继续。",
   "drank": "已喝水",
   "snoozed": "已推迟提醒",
-  "skipped": "已跳过本次提醒"
+  "skipped": "已跳过本次提醒",
+  "startRest": "开始休息",
+  "resting": "休息中…",
+  "escToClose": "按 ESC 关闭",
+  "skipWater": "跳过",
+  "snoozeWater5": "延迟 5 分钟",
+  "snoozeWater10": "延迟 10 分钟"
 }
