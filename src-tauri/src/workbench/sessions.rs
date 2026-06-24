@@ -132,7 +132,7 @@ enum SessionProcess {
 ///     每个会话需要同时保存前端展示 DTO 和可操作的 PTY 进程资源。
 ///
 /// Code Logic（这个结构体做什么）:
-///     将 DTO 与 writer/master/child 聚合到单个 Mutex 保护的对象中，保证输入、resize、stop 串行访问。
+///     将 DTO 与 writer/master/child 聚合到单个 Mutex 保护的对象中，保证输入、resize、close 串行访问。
 struct WorkbenchSessionHandle {
     dto: WorkbenchSessionDto,
     process: SessionProcess,
@@ -153,7 +153,7 @@ fn initial_terminal_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     用户停止或关闭终端时，Claude Code 子进程可能已经自然退出并被系统回收，此时 kill 返回 No such process 不应打扰用户。
+///     用户关闭终端或应用退出清理时，Claude Code 子进程可能已经自然退出并被系统回收，此时 kill 返回 No such process 不应打扰用户。
 ///
 /// Code Logic（这个函数做什么）:
 ///     将底层 child.kill() 的结果归一化；进程已不存在视为 Ok，其他 IO 错误继续转换为 AppError。
@@ -376,21 +376,6 @@ impl WorkbenchSessionRegistry {
                 .map_err(|error| AppError::generic(format!("调整 PTY 尺寸失败: {error}"))),
             SessionProcess::Fake => Ok(()),
         }
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     用户需要主动停止某个 Claude Code 终端，但仍可保留会话记录直到关闭。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     调用 child.kill() 终止进程；进程已不存在视为已停止，退出 watcher 会随后写入状态并发送事件。
-    pub fn stop(&self, session_id: &str) -> Result<(), AppError> {
-        let handle = self.get_handle(session_id)?;
-        let mut handle = handle.lock().expect("workbench session 锁中毒");
-        match &mut handle.process {
-            SessionProcess::Pty { child, .. } => normalize_terminal_kill_result(child.kill())?,
-            SessionProcess::Fake => {}
-        }
-        Ok(())
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -725,7 +710,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     用户关闭或停止终端时，Claude Code 子进程可能已被系统回收，底层 kill 会返回 No such process。
+    ///     用户关闭终端或退出应用时，Claude Code 子进程可能已被系统回收，底层 kill 会返回 No such process。
     ///
     /// Code Logic（这个测试做什么）:
     ///     构造 macOS/Linux 常见 ESRCH(os error 3)，断言终端 kill 归一化逻辑把它视为已停止。
