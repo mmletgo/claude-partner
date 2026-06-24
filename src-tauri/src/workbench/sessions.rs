@@ -22,6 +22,8 @@ use tauri::{AppHandle, Emitter};
 
 const DEFAULT_COLS: u16 = 98;
 const DEFAULT_ROWS: u16 = 32;
+const MIN_TERMINAL_COLS: u16 = 20;
+const MIN_TERMINAL_ROWS: u16 = 6;
 
 /// 工作台终端输出事件 payload。
 ///
@@ -137,6 +139,20 @@ struct WorkbenchSessionHandle {
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     工作台终端首屏需要按前端真实可见尺寸启动，避免 Claude Code 先按默认列宽绘制后错位。
+///
+/// Code Logic（这个函数做什么）:
+///     对前端传入的可选 cols/rows 做下限裁剪；缺失时回退默认 PTY 尺寸。
+fn initial_terminal_size(cols: Option<u16>, rows: Option<u16>) -> (u16, u16) {
+    (
+        cols.map(|value| value.max(MIN_TERMINAL_COLS))
+            .unwrap_or(DEFAULT_COLS),
+        rows.map(|value| value.max(MIN_TERMINAL_ROWS))
+            .unwrap_or(DEFAULT_ROWS),
+    )
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     PTY reader 只能拿到字节流，工作台事件需要发送 UTF-8 字符串给前端 xterm。
 ///
 /// Code Logic（这个函数做什么）:
@@ -233,17 +249,20 @@ impl WorkbenchSessionRegistry {
         app: AppHandle,
         project: WorkbenchProjectRow,
         cli_path: String,
+        initial_cols: Option<u16>,
+        initial_rows: Option<u16>,
     ) -> Result<WorkbenchSessionDto, AppError> {
         let session_id = uuid::Uuid::new_v4().to_string();
         let now = chrono::Utc::now().to_rfc3339();
+        let (cols, rows) = initial_terminal_size(initial_cols, initial_rows);
         let dto = WorkbenchSessionDto {
             id: session_id.clone(),
             project_id: project.id.clone(),
             name: project.name.clone(),
             command: cli_path.clone(),
             status: "running".to_string(),
-            cols: DEFAULT_COLS,
-            rows: DEFAULT_ROWS,
+            cols,
+            rows,
             started_at: now,
             exited_at: None,
             exit_code: None,
@@ -252,8 +271,8 @@ impl WorkbenchSessionRegistry {
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: DEFAULT_ROWS,
-                cols: DEFAULT_COLS,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -659,6 +678,24 @@ mod tests {
 
         assert_eq!(format!("{first}{second}"), text);
         assert_eq!(decoder.finish(), None);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     工作台打开终端时需要先按前端可见区域启动 PTY，避免 Claude Code 首屏按默认列宽绘制后错位。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言初始终端尺寸优先使用前端传入值，并对过小或缺失值回退到安全默认值。
+    #[test]
+    fn initial_terminal_size_uses_frontend_size_with_safe_minimums() {
+        assert_eq!(initial_terminal_size(Some(140), Some(42)), (140, 42));
+        assert_eq!(
+            initial_terminal_size(Some(2), Some(1)),
+            (MIN_TERMINAL_COLS, MIN_TERMINAL_ROWS),
+        );
+        assert_eq!(
+            initial_terminal_size(None, None),
+            (DEFAULT_COLS, DEFAULT_ROWS)
+        );
     }
 
     /// Business Logic（为什么需要这个测试）:

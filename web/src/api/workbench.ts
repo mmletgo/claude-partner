@@ -18,6 +18,11 @@ import type {
   WorkbenchSession,
 } from '@/lib/types';
 
+interface WorkbenchTerminalSize {
+  cols: number;
+  rows: number;
+}
+
 export const workbenchApi = {
   projects: {
     /** 列出工作台最近项目，后端按 lastOpenedAt 倒序返回。 */
@@ -44,8 +49,12 @@ export const workbenchApi = {
       }),
 
     /** 在指定项目根目录创建一个 Claude Code PTY 会话。 */
-    create: (projectId: string) =>
-      invoke<WorkbenchSession>('create_workbench_session', { projectId }),
+    create: (projectId: string, initialSize?: WorkbenchTerminalSize) =>
+      invoke<WorkbenchSession>('create_workbench_session', {
+        projectId,
+        initialCols: initialSize?.cols ?? null,
+        initialRows: initialSize?.rows ?? null,
+      }),
 
     /** 向指定终端会话写入输入数据。 */
     writeInput: (sessionId: string, data: string) =>
@@ -67,8 +76,12 @@ export const workbenchApi = {
       invoke<WorkbenchSession>('stop_workbench_session', { sessionId }),
 
     /** 重启终端进程，并返回新建的继承命名会话。 */
-    restart: (sessionId: string) =>
-      invoke<WorkbenchSession>('restart_workbench_session', { sessionId }),
+    restart: (sessionId: string, initialSize?: WorkbenchTerminalSize) =>
+      invoke<WorkbenchSession>('restart_workbench_session', {
+        sessionId,
+        initialCols: initialSize?.cols ?? null,
+        initialRows: initialSize?.rows ?? null,
+      }),
 
     /** 关闭终端 tab，并释放后端 PTY 资源。 */
     close: (sessionId: string) =>

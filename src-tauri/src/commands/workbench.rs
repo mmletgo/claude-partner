@@ -202,12 +202,14 @@ pub async fn list_workbench_sessions(
 ///
 /// Code Logic（这个函数做什么）:
 ///     读取项目路径；从现有 GitHub Trending/Prompt 优化配置复用 claude_cli_path；
-///     调用 session registry 创建 PTY，并通过 Tauri event 推送输出与状态。
+///     调用 session registry 按前端初始尺寸创建 PTY，并通过 Tauri event 推送输出与状态。
 #[tauri::command]
 pub async fn create_workbench_session(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     project_id: String,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
 ) -> Result<WorkbenchSessionDto, AppError> {
     let project = get_project(&state, &project_id).await?;
     let cli_path = {
@@ -216,7 +218,7 @@ pub async fn create_workbench_session(
     };
     state
         .workbench_sessions
-        .create(app_handle, project, cli_path)
+        .create(app_handle, project, cli_path, initial_cols, initial_rows)
 }
 
 /// 向工作台终端写入输入。
@@ -276,12 +278,14 @@ pub async fn stop_workbench_session(
 ///     用户需要在同一个项目上下文中重新启动 Claude Code 会话，以恢复退出或卡住的终端。
 ///
 /// Code Logic（这个函数做什么）:
-///     读取旧会话的项目和名称，关闭旧 PTY 后在同项目创建新会话，并把名称继承给新会话返回。
+///     读取旧会话的项目和名称，关闭旧 PTY 后按前端或旧会话尺寸创建新会话，并把名称继承给新会话返回。
 #[tauri::command]
 pub async fn restart_workbench_session(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     session_id: String,
+    initial_cols: Option<u16>,
+    initial_rows: Option<u16>,
 ) -> Result<WorkbenchSessionDto, AppError> {
     let previous = find_session(&state, &session_id)?;
     let project = get_project(&state, &previous.project_id).await?;
@@ -290,9 +294,13 @@ pub async fn restart_workbench_session(
         config.github_trending.claude_cli_path.clone()
     };
     state.workbench_sessions.close(&session_id)?;
-    let restarted = state
-        .workbench_sessions
-        .create(app_handle, project, cli_path)?;
+    let restarted = state.workbench_sessions.create(
+        app_handle,
+        project,
+        cli_path,
+        initial_cols.or(Some(previous.cols)),
+        initial_rows.or(Some(previous.rows)),
+    )?;
     state
         .workbench_sessions
         .rename(&restarted.id, &previous.name)

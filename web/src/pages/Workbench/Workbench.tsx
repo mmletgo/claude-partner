@@ -17,7 +17,7 @@ import type { CSSProperties } from 'react';
 import { useTranslation } from 'react-i18next';
 import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
-import type { ITheme } from '@xterm/xterm';
+import type { ITheme, ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 import { workbenchApi } from '@/api/workbench';
@@ -44,6 +44,8 @@ import type {
   WorkbenchTerminalStatusEvent,
 } from '@/lib/types';
 import styles from './Workbench.module.css';
+import { terminalPanePixelSize } from './terminalSizing';
+import type { TerminalLayoutMode } from './terminalSizing';
 
 interface TauriInternalsWindow extends Window {
   __TAURI_INTERNALS__?: {
@@ -75,11 +77,15 @@ interface TerminalPaneProps {
   onResize: (sessionId: string, cols: number, rows: number) => void;
 }
 
+interface TerminalSize {
+  cols: number;
+  rows: number;
+}
+
 const MIN_TERMINAL_COLS = 20;
 const MIN_TERMINAL_ROWS = 6;
 const MAX_TERMINAL_BUFFER_CHARS = 200_000;
-
-type TerminalLayoutMode = 'single' | 'double' | 'quad';
+const TERMINAL_PANE_HEADER_PX = 36;
 
 const TERMINAL_LAYOUT_LIMIT: Record<TerminalLayoutMode, number> = {
   single: 1,
@@ -228,6 +234,78 @@ function terminalTheme(): ITheme {
 
 /**
  * Business Logic（为什么需要这个函数）:
+ *   工作台创建和渲染终端都必须使用同一套 xterm 字体参数，否则启动前测量出的行列数会偏离真实显示。
+ *
+ * Code Logic（这个函数做什么）:
+ *   组装 Terminal 构造参数，包含字体、行高、滚动缓冲与主题。
+ */
+function terminalOptions(): ITerminalOptions {
+  return {
+    cursorBlink: true,
+    convertEol: true,
+    fontFamily: tokenValue('--font-mono', 'monospace'),
+    fontSize: 13,
+    lineHeight: 1.35,
+    scrollback: 3000,
+    theme: terminalTheme(),
+  };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Claude Code 首屏会按 PTY 初始 cols/rows 绘制状态栏；如果后端先用默认尺寸启动，前端随后 resize 会导致首屏错位。
+ *
+ * Code Logic（这个函数做什么）:
+ *   按当前终端布局计算单个 pane 的像素尺寸，复用真实 host/viewport 结构创建离屏 xterm；
+ *   FitAddon 只读取无 padding 的 viewport 尺寸，测完 cols/rows 后立即销毁。
+ */
+function measureInitialTerminalSize(
+  panel: HTMLElement | null,
+  layout: TerminalLayoutMode,
+): TerminalSize | undefined {
+  if (!panel || panel.clientWidth <= 0 || panel.clientHeight <= 0) return undefined;
+  const paneSize = terminalPanePixelSize({
+    panelWidth: panel.clientWidth,
+    panelHeight: panel.clientHeight,
+    layout,
+    headerHeight: TERMINAL_PANE_HEADER_PX,
+  });
+  if (paneSize.width <= 0 || paneSize.height <= 0) return undefined;
+
+  const host = document.createElement('div');
+  const viewport = document.createElement('div');
+  host.className = styles.terminalHost;
+  viewport.className = styles.terminalViewport;
+  host.style.position = 'fixed';
+  host.style.left = '-10000px';
+  host.style.top = '-10000px';
+  host.style.width = `${paneSize.width}px`;
+  host.style.height = `${paneSize.height}px`;
+  host.style.visibility = 'hidden';
+  host.style.pointerEvents = 'none';
+  host.appendChild(viewport);
+  document.body.appendChild(host);
+
+  const terminal = new Terminal(terminalOptions());
+  const fit = new FitAddon();
+  try {
+    terminal.loadAddon(fit);
+    terminal.open(viewport);
+    fit.fit();
+    return {
+      cols: clampU16(terminal.cols, MIN_TERMINAL_COLS),
+      rows: clampU16(terminal.rows, MIN_TERMINAL_ROWS),
+    };
+  } catch {
+    return undefined;
+  } finally {
+    terminal.dispose();
+    host.remove();
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
  *   工作台依赖 Tauri IPC；普通浏览器调试环境会抛底层 invoke 错误，不应把内部异常文本展示给用户。
  *
  * Code Logic（这个函数做什么）:
@@ -284,7 +362,7 @@ function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' {
  */
 function TerminalPane(props: TerminalPaneProps) {
   const { session, buffer, revision, placeholder, onInput, onResize } = props;
-  const hostRef = useRef<HTMLDivElement | null>(null);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const bufferRef = useRef<string>('');
   const writtenLengthRef = useRef<number>(0);
@@ -296,21 +374,13 @@ function TerminalPane(props: TerminalPaneProps) {
   }, [buffer]);
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host || !sessionId) return undefined;
+    const viewport = viewportRef.current;
+    if (!viewport || !sessionId) return undefined;
 
-    const terminal = new Terminal({
-      cursorBlink: true,
-      convertEol: true,
-      fontFamily: tokenValue('--font-mono', 'monospace'),
-      fontSize: 13,
-      lineHeight: 1.35,
-      scrollback: 3000,
-      theme: terminalTheme(),
-    });
+    const terminal = new Terminal(terminalOptions());
     const fit = new FitAddon();
     terminal.loadAddon(fit);
-    terminal.open(host);
+    terminal.open(viewport);
     fit.fit();
     terminal.write(bufferRef.current);
     writtenLengthRef.current = bufferRef.current.length;
@@ -335,7 +405,7 @@ function TerminalPane(props: TerminalPaneProps) {
       }
       resizeTimerRef.current = window.setTimeout(resize, 80);
     });
-    observer.observe(host);
+    observer.observe(viewport);
     resize();
     terminalRef.current = terminal;
 
@@ -384,7 +454,8 @@ function TerminalPane(props: TerminalPaneProps) {
   }, [buffer, revision, sessionId]);
 
   return (
-    <div className={styles.terminalHost} ref={hostRef}>
+    <div className={styles.terminalHost}>
+      <div className={styles.terminalViewport} ref={viewportRef} />
       {!session ? <div className={styles.terminalPlaceholder}>{placeholder}</div> : null}
     </div>
   );
@@ -498,6 +569,7 @@ export function Workbench() {
   const activeProjectIdRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
+  const terminalPanelRef = useRef<HTMLElement | null>(null);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId) ?? null,
@@ -736,7 +808,8 @@ export function Workbench() {
     try {
       setSessionBusy(true);
       setSessionError(null);
-      const session = await workbenchApi.sessions.create(projectId);
+      const initialSize = measureInitialTerminalSize(terminalPanelRef.current, terminalLayout);
+      const session = await workbenchApi.sessions.create(projectId, initialSize);
       if (activeProjectIdRef.current !== projectId) return;
       setSessions((current) => [...current, session]);
       knownSessionIdsRef.current.add(session.id);
@@ -755,7 +828,7 @@ export function Workbench() {
     } finally {
       setSessionBusy(false);
     }
-  }, [desktopUnavailableMessage, focusSession, t]);
+  }, [desktopUnavailableMessage, focusSession, t, terminalLayout]);
 
   const handleInput = useCallback(async (sessionId: string, data: string) => {
     try {
@@ -802,7 +875,8 @@ export function Workbench() {
       try {
         setSessionBusy(true);
         setSessionError(null);
-        const session = await workbenchApi.sessions.restart(sessionId);
+        const initialSize = measureInitialTerminalSize(terminalPanelRef.current, terminalLayout);
+        const session = await workbenchApi.sessions.restart(sessionId, initialSize);
         setSessions((current) => [
           ...current.filter((item) => item.id !== sessionId && item.id !== session.id),
           session,
@@ -829,7 +903,7 @@ export function Workbench() {
         setSessionBusy(false);
       }
     },
-    [desktopUnavailableMessage, focusSession, t],
+    [desktopUnavailableMessage, focusSession, t, terminalLayout],
   );
 
   const handleCloseSession = useCallback(
@@ -1125,7 +1199,11 @@ export function Workbench() {
           </div>
         </section>
 
-        <section className={styles.terminalPanel} data-layout={terminalLayout}>
+        <section
+          className={styles.terminalPanel}
+          data-layout={terminalLayout}
+          ref={terminalPanelRef}
+        >
           {visibleSessions.length === 0 ? (
             <TerminalPane
               session={null}
