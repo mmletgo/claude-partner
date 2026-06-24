@@ -36,8 +36,10 @@ import { NavItem } from '../NavItem';
 import { ThemeToggle } from '../ThemeToggle';
 import { LanguageSwitcher } from '../LanguageSwitcher';
 import { PermissionStatusBadge } from '@/components/domain';
-import ReminderToast from '@/pages/Health/ReminderToast';
-import WaterToast from '@/pages/Health/WaterToast';
+// 应用内健康 toast 已停用（改用系统通知 HealthReminderListener + 全屏遮罩 HealthOverlay），
+// 组件代码保留以便恢复。先测试系统级提醒是否够用。
+// import ReminderToast from '@/pages/Health/ReminderToast';
+// import WaterToast from '@/pages/Health/WaterToast';
 import appIconUrl from '@/assets/app-icon.png';
 import styles from './AppShell.module.css';
 
@@ -88,11 +90,9 @@ export function AppShell({ children }: AppShellProps) {
         <PermissionStatusBadge />
       </Sidebar>
       <main className={styles.main}>{children ?? <Outlet />}</main>
-      {/* 健康提醒 toast:主窗口常驻悬浮卡(久坐提醒 + 喝水提醒),
-          监听后端 health:reminder / health:water 事件,非 overlay 路由,
-          仅在 AppShell 内渲染,截图选区页(/screenshot-overlay)不会挂载 */}
-      <ReminderToast />
-      <WaterToast />
+      {/* 应用内健康 toast 已停用（改用系统通知 + 全屏遮罩），代码保留以便恢复（先测试）：
+          <ReminderToast />
+          <WaterToast /> */}
     </div>
   );
 }

@@ -100,36 +100,42 @@ function PermissionNeededListener() {
 }
 
 /**
- * HealthReminderListener - 健康提醒系统通知监听
+ * HealthReminderListener - 健康提醒系统通知监听(久坐 + 喝水)
  *
  * Business Logic（为什么需要这个组件）:
- *   后端 health daemon 判定连续工作达阈值(且未贪睡/不在免打扰/notify_enabled)时 emit
- *   `health:reminder`。app 最小化/在后台时应用内 toast(ReminderToast)看不见,需要原生
- *   系统通知触达用户。本组件监听后弹系统通知,与应用内 toast/全屏遮罩互补。挂在 App
- *   顶层(与 PermissionNeededListener 同层),任意路由下都生效。
+ *   后端 health daemon 在久坐达阈值(且未贪睡/不在免打扰/notify_enabled)时 emit
+ *   `health:reminder`,在喝水提醒时点 emit `health:water`。app 最小化/在后台时应用内
+ *   toast 看不见,需要原生系统通知触达用户。应用内 toast 已停用,系统通知成为久坐/
+ *   喝水的主提醒方式(久坐另有全屏遮罩 HealthOverlay 互补)。挂在 App 顶层(与
+ *   PermissionNeededListener 同层),任意路由下都生效。
  *
  * Code Logic（这个组件做什么）:
- *   - listen `health:reminder` → checkNotificationGranted(复用 lib/notification)→ sendNotification
- *   - 未授权或发送失败静默(应用内 toast/全屏遮罩仍会触发)
- *   - 标题/正文走 i18n health ns(reminderTitle/reminderBody),随当前语言切换
- *   - hooks 在 early return 之前(项目规则 20)
+ *   - listen `health:reminder` → 系统通知(reminderTitle/reminderBody)
+ *   - listen `health:water` → 系统通知(waterTitle/waterBody)
+ *   - notify helper:checkNotificationGranted(复用 lib/notification)授权才发,失败静默
+ *   - 标题/正文走 i18n health ns,随当前语言切换;hooks 在 early return 之前(项目规则 20)
  */
 function HealthReminderListener() {
   const { t } = useTranslation(['health']);
   useEffect(() => {
-    const unlisten = listen('health:reminder', async () => {
+    // 发系统通知:授权才发,失败静默(系统通知是久坐/喝水的主提醒通道)
+    const notify = async (title: string, body: string) => {
       try {
         if (!(await checkNotificationGranted())) return;
-        sendNotification({
-          title: t('health:reminderTitle'),
-          body: t('health:reminderBody'),
-        });
+        sendNotification({ title, body });
       } catch {
-        // 未授权通知权限或发送失败时静默;应用内 toast/全屏遮罩仍会触发
+        // 未授权通知权限或发送失败时静默
       }
-    });
+    };
+    const reminderUnlisten = listen('health:reminder', () =>
+      void notify(t('health:reminderTitle'), t('health:reminderBody')),
+    );
+    const waterUnlisten = listen('health:water', () =>
+      void notify(t('health:waterTitle'), t('health:waterBody')),
+    );
     return () => {
-      void unlisten.then((fn) => fn());
+      void reminderUnlisten.then((fn) => fn());
+      void waterUnlisten.then((fn) => fn());
     };
   }, [t]);
   return null;
