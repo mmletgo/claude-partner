@@ -1,10 +1,15 @@
-import type { WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
+import type { WorkbenchGitCommit, WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
 import {
   activeWorktreeRootPath,
+  buildGitGraphRows,
   canCommitWorktree,
+  canMergeWorktree,
+  canPushWorktree,
+  canRemoveWorktree,
   formatCommitRelativeTime,
   hasGitHistory,
   sessionsForWorktree,
+  worktreeChangeCount,
   worktreeStatusTone,
 } from './workbenchWorktrees';
 
@@ -40,6 +45,7 @@ const mainWorktree: WorkbenchWorktree = {
     behind: 0,
     conflicts: 0,
     clean: true,
+    canPush: true,
   },
   createdAt: '2026-06-25T00:00:00Z',
   updatedAt: '2026-06-25T00:00:00Z',
@@ -123,6 +129,62 @@ function testCanCommitWorktreeIgnoresStaleCleanStatus(): void {
 
 /**
  * Business Logic（为什么需要这个测试）:
+ *   Git 历史 tab 内的工具条承载当前 worktree 的 Git 操作，需要统一判断按钮可用性。
+ *
+ * Code Logic（这个测试做什么）:
+ *   断言 commit/push/merge/remove 的可用性与 active worktree、主 worktree 和 busy 状态一致。
+ */
+function testGitHistoryActionAvailability(): void {
+  const feature = { ...mainWorktree, id: 'feature', isMain: false, branch: 'feature/a' };
+  const localOnlyFeature = {
+    ...feature,
+    status: { ...feature.status, canPush: false },
+  };
+
+  if (!canPushWorktree(feature, null)) {
+    throw new Error('expected feature branch to allow push');
+  }
+  if (canPushWorktree(localOnlyFeature, null)) {
+    throw new Error('expected local-only branch without remote to block push');
+  }
+  if (canPushWorktree({ ...feature, branch: null }, null)) {
+    throw new Error('expected missing branch to block push');
+  }
+  if (!canMergeWorktree(feature, null)) {
+    throw new Error('expected non-main worktree to allow merge');
+  }
+  if (canMergeWorktree(mainWorktree, null)) {
+    throw new Error('expected main worktree to block merge');
+  }
+  if (canMergeWorktree({ ...feature, status: { ...feature.status, changed: 1, clean: false } }, null)) {
+    throw new Error('expected dirty worktree to block merge');
+  }
+  if (!canRemoveWorktree(feature, null)) {
+    throw new Error('expected non-main worktree to allow remove');
+  }
+  if (canRemoveWorktree(feature, 'push')) {
+    throw new Error('expected busy state to block remove');
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   Git 历史 tab 顶部需要显示当前 worktree 的改动数，代替 worktree 顶部主工具区的状态提示。
+ *
+ * Code Logic（这个测试做什么）:
+ *   断言 helper 提取 changed 数量，缺少 active worktree 时回退 0。
+ */
+function testWorktreeChangeCount(): void {
+  if (worktreeChangeCount({ ...mainWorktree, status: { ...mainWorktree.status, changed: 3 } }) !== 3) {
+    throw new Error('expected changed count from active worktree');
+  }
+  if (worktreeChangeCount(null) !== 0) {
+    throw new Error('expected missing worktree to have no changes');
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个测试）:
  *   Git 历史 tab 需要用紧凑相对时间帮助用户快速扫提交顺序。
  *
  * Code Logic（这个测试做什么）:
@@ -157,9 +219,73 @@ function testHasGitHistory(): void {
   }
 }
 
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   Git 历史需要像 VS Code 一样按提交 DAG 绘制分支/合并线，而不是普通线性列表。
+ *
+ * Code Logic（这个测试做什么）:
+ *   构造一个 merge commit，断言 graph helper 给 merge 行分配两个 parent lane，分支行在第二 lane。
+ */
+function testBuildGitGraphRowsForMergeHistory(): void {
+  const commits: WorkbenchGitCommit[] = [
+    {
+      hash: 'a',
+      shortHash: 'a',
+      parentHashes: ['b', 'c'],
+      authorName: 'Alice',
+      authorEmail: 'a@example.com',
+      authoredAt: '2026-06-25T12:00:00Z',
+      summary: 'Merge branch feature',
+      refs: [],
+    },
+    {
+      hash: 'b',
+      shortHash: 'b',
+      parentHashes: ['d'],
+      authorName: 'Alice',
+      authorEmail: 'a@example.com',
+      authoredAt: '2026-06-25T11:00:00Z',
+      summary: 'main work',
+      refs: [{ name: 'main', fullName: 'refs/heads/main', kind: 'local', remote: null, isHead: true }],
+    },
+    {
+      hash: 'c',
+      shortHash: 'c',
+      parentHashes: ['d'],
+      authorName: 'Bob',
+      authorEmail: 'b@example.com',
+      authoredAt: '2026-06-25T10:00:00Z',
+      summary: 'feature work',
+      refs: [{ name: 'origin/main', fullName: 'refs/remotes/origin/main', kind: 'remote', remote: 'origin', isHead: false }],
+    },
+    {
+      hash: 'd',
+      shortHash: 'd',
+      parentHashes: [],
+      authorName: 'Alice',
+      authorEmail: 'a@example.com',
+      authoredAt: '2026-06-25T09:00:00Z',
+      summary: 'base',
+      refs: [],
+    },
+  ];
+
+  const rows = buildGitGraphRows(commits);
+
+  if (rows[0]?.lane !== 0 || rows[0]?.parentLanes.join(',') !== '0,1') {
+    throw new Error(`expected merge parents on lanes 0,1, got ${JSON.stringify(rows[0])}`);
+  }
+  if (rows[2]?.lane !== 1 || rows[2]?.parentLanes.join(',') !== '0') {
+    throw new Error(`expected side branch to merge back to lane 0, got ${JSON.stringify(rows[2])}`);
+  }
+}
+
 testSessionsForWorktree();
 testActiveWorktreeRootPath();
 testWorktreeStatusTone();
 testCanCommitWorktreeIgnoresStaleCleanStatus();
+testGitHistoryActionAvailability();
+testWorktreeChangeCount();
 testFormatCommitRelativeTime();
 testHasGitHistory();
+testBuildGitGraphRowsForMergeHistory();

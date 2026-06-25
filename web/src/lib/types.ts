@@ -267,7 +267,7 @@ export interface WorkbenchProject {
  *   Workbench worktree 管理层需要让用户快速判断当前工作区是否干净、是否领先/落后远端以及是否有冲突。
  *
  * Code Logic（字段说明）:
- *   changed/conflicts 是本地 `git status --porcelain --branch` 的摘要计数；clean 为后端派生布尔值。
+ *   changed/conflicts 是本地 `git status --porcelain --branch` 的摘要计数；clean/canPush 为后端派生布尔值。
  */
 export interface WorkbenchGitStatus {
   branch: string | null;
@@ -276,6 +276,7 @@ export interface WorkbenchGitStatus {
   behind: number;
   conflicts: number;
   clean: boolean;
+  canPush: boolean;
 }
 
 /**
@@ -301,21 +302,51 @@ export interface WorkbenchWorktree {
 }
 
 /**
+ * 工作台 Git 引用类型。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   Git 历史树需要区分本地分支、远端分支和 tag，让用户知道云端与本地位置。
+ *
+ * Code Logic（字段说明）:
+ *   与 Rust enum camelCase 序列化结果保持一致。
+ */
+export type WorkbenchGitRefKind = 'local' | 'remote' | 'tag' | 'head' | 'other';
+
+/**
+ * 工作台 Git 引用标签。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   提交旁需要展示 main、origin/main、tag 等标签，并标识当前 HEAD。
+ *
+ * Code Logic（字段说明）:
+ *   remote 仅远端分支有值；isHead 表示当前 worktree HEAD 指向该 ref。
+ */
+export interface WorkbenchGitRef {
+  name: string;
+  fullName: string;
+  kind: WorkbenchGitRefKind;
+  remote: string | null;
+  isHead: boolean;
+}
+
+/**
  * 工作台 Git 提交历史项。
  *
  * Business Logic（为什么需要这个类型）:
- *   右侧 Git 历史 tab 需要展示当前 active worktree 的最近提交，辅助确认 commit/merge 结果。
+ *   右侧 Git 历史 tab 需要展示当前 active worktree 的最近提交和 Git 树。
  *
  * Code Logic（字段说明）:
- *   hash/shortHash 来自 git log；authoredAt 为 ISO 字符串，前端负责格式化显示。
+ *   parentHashes 用于 graph lane 计算；refs 用于标识本地/远端/tag；authoredAt 为 ISO 字符串。
  */
 export interface WorkbenchGitCommit {
   hash: string;
   shortHash: string;
+  parentHashes: string[];
   authorName: string;
   authorEmail: string;
   authoredAt: string;
   summary: string;
+  refs: WorkbenchGitRef[];
 }
 
 /** 工作台终端会话状态。 */

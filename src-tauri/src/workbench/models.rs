@@ -58,7 +58,8 @@ pub struct WorkbenchProjectDto {
 ///     Workbench 顶部 worktree 管理层需要展示当前分支是否有改动、是否领先/落后远端以及是否存在冲突。
 ///
 /// Code Logic（这个结构体做什么）:
-///     表达 `git status --porcelain --branch` 解析后的轻量状态，字段使用 camelCase 序列化给前端。
+///     表达 `git status --porcelain --branch` 解析后的轻量状态，字段使用 camelCase 序列化给前端；
+///     can_push 由后端按 upstream/origin/唯一 remote 规则派生，供 UI 禁用不可推送项目。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchGitStatusDto {
@@ -68,24 +69,61 @@ pub struct WorkbenchGitStatusDto {
     pub behind: u32,
     pub conflicts: usize,
     pub clean: bool,
+    pub can_push: bool,
+}
+
+/// Git 引用类型 DTO。
+///
+/// Business Logic（为什么需要这个枚举）:
+///     Git 历史树需要区分本地分支、远端分支和 tag，帮助用户判断本地与云端位置。
+///
+/// Code Logic（这个枚举做什么）:
+///     用稳定字符串序列化给前端，避免前端解析 Git ref 前缀。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WorkbenchGitRefKindDto {
+    Local,
+    Remote,
+    Tag,
+    Head,
+    Other,
+}
+
+/// Git 引用标签 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Git 历史树需要在提交旁标识 main、origin/main、tag 等位置。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存展示名、完整 ref、类型、远端名和是否为当前 HEAD。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchGitRefDto {
+    pub name: String,
+    pub full_name: String,
+    pub kind: WorkbenchGitRefKindDto,
+    pub remote: Option<String>,
+    pub is_head: bool,
 }
 
 /// Git 提交历史项 DTO。
 ///
 /// Business Logic（为什么需要这个结构体）:
-///     Workbench 右侧 Git 历史 tab 需要展示 active worktree 的最近提交。
+///     Workbench 右侧 Git 历史 tab 需要展示 active worktree 的最近提交与分支图。
 ///
 /// Code Logic（这个结构体做什么）:
-///     表达 `git log` 的单条提交摘要，字段使用 camelCase 序列化给前端。
+///     表达 `git log` 的单条提交摘要、父提交和 refs，字段使用 camelCase 序列化给前端。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchGitCommitDto {
     pub hash: String,
     pub short_hash: String,
+    pub parent_hashes: Vec<String>,
     pub author_name: String,
     pub author_email: String,
     pub authored_at: String,
     pub summary: String,
+    pub refs: Vec<WorkbenchGitRefDto>,
 }
 
 /// 工作台 Git worktree 数据库行模型。

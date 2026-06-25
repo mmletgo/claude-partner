@@ -66,10 +66,15 @@ import { terminalPanePixelSize } from './terminalSizing';
 import type { TerminalLayoutMode } from './terminalSizing';
 import {
   activeWorktreeRootPath,
+  buildGitGraphRows,
   canCommitWorktree,
+  canMergeWorktree,
+  canPushWorktree,
+  canRemoveWorktree,
   formatCommitRelativeTime,
   hasGitHistory,
   sessionsForWorktree,
+  worktreeChangeCount,
   worktreeStatusTone,
 } from './workbenchWorktrees';
 
@@ -80,6 +85,11 @@ interface TauriInternalsWindow extends Window {
 }
 
 type WorkbenchInspectorTab = 'files' | 'history';
+
+const GIT_GRAPH_LANE_WIDTH = 14;
+const GIT_GRAPH_ROW_HEIGHT = 44;
+const GIT_GRAPH_DOT_Y = 20;
+const GIT_GRAPH_DOT_RADIUS = 4;
 
 interface FileTreeProps {
   nodes: WorkbenchFileNode[];
@@ -332,6 +342,41 @@ function displayErrorMessage(error: unknown, fallback: string, desktopUnavailabl
     return desktopUnavailable;
   }
   return message && message !== 'undefined' && message !== 'null' ? message : fallback;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git graph 需要多条稳定颜色 lane，但具体颜色由 design token 控制。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将 graph helper 的 colorIndex 映射到 CSS custom property。
+ */
+function gitGraphColorStyle(colorIndex: number): CSSProperties {
+  return {
+    '--git-graph-color': `var(--git-graph-${colorIndex % 6})`,
+  } as CSSProperties;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git graph SVG 需要按 lane 数动态扩展宽度，避免 merge 线被裁切。
+ *
+ * Code Logic（这个函数做什么）:
+ *   根据 laneCount 计算紧凑 graph 宽度。
+ */
+function gitGraphWidth(laneCount: number): number {
+  return Math.max(24, laneCount * GIT_GRAPH_LANE_WIDTH + 10);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git graph 每个 lane 需要稳定 x 坐标，供点、竖线和 merge 曲线复用。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将 lane index 映射到 SVG 内部横坐标。
+ */
+function gitGraphX(lane: number): number {
+  return 5 + lane * GIT_GRAPH_LANE_WIDTH;
 }
 
 /**
@@ -650,6 +695,7 @@ export function Workbench() {
     () => visibleTerminalSessions({ sessions: scopedSessions, activeSessionId }),
     [activeSessionId, scopedSessions],
   );
+  const gitGraphRows = useMemo(() => buildGitGraphRows(gitCommits), [gitCommits]);
   const renderedActiveSessionId = activeSession?.id ?? visibleSessions[0]?.id ?? null;
   const selectedParentPath = selectedInfo
     ? selectedInfo.kind === 'dir'
@@ -1577,6 +1623,7 @@ export function Workbench() {
     : t('workbench:noProjectHint');
   const activeWorktreeTone = activeWorktree ? worktreeStatusTone(activeWorktree) : 'neutral';
   const activeWorktreePillTone = activeWorktreeTone === 'warning' ? 'warn' : activeWorktreeTone;
+  const activeWorktreeChangedCount = worktreeChangeCount(activeWorktree);
   const activeWorktreeStatusLabel = activeWorktree
     ? activeWorktree.status.conflicts > 0
       ? t('workbench:worktrees.status.conflict', { count: activeWorktree.status.conflicts })
@@ -1634,9 +1681,6 @@ export function Workbench() {
             )}
           </div>
           <div className={styles.worktreeActions}>
-            <Pill tone={activeWorktreePillTone} dot>
-              {activeWorktreeStatusLabel}
-            </Pill>
             <Button
               size="sm"
               variant="secondary"
@@ -1648,47 +1692,12 @@ export function Workbench() {
               {t('workbench:worktrees.create')}
             </Button>
             <Button
-              size="sm"
-              variant="secondary"
-              icon={<EditIcon />}
-              loading={worktreeBusy === 'commit'}
-              disabled={!canCommitWorktree(activeWorktree, worktreeBusy)}
-              onClick={() => void handleCommitWorktree()}
-            >
-              {t('workbench:worktrees.commit')}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<UploadIcon />}
-              loading={worktreeBusy === 'push'}
-              disabled={!activeWorktree?.branch || worktreeBusy !== null}
-              onClick={() => void handlePushWorktree()}
-            >
-              {t('workbench:worktrees.push')}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<SyncIcon />}
-              loading={worktreeBusy === 'merge'}
-              disabled={
-                !activeWorktree ||
-                activeWorktree.isMain ||
-                !activeWorktree.status.clean ||
-                worktreeBusy !== null
-              }
-              onClick={() => void handleMergeWorktree()}
-            >
-              {t('workbench:worktrees.merge')}
-            </Button>
-            <Button
               variant="icon"
               icon={<TrashIcon />}
               title={t('workbench:worktrees.remove')}
               aria-label={t('workbench:worktrees.remove')}
               loading={worktreeBusy === 'remove'}
-              disabled={!activeWorktree || activeWorktree.isMain || worktreeBusy !== null}
+              disabled={!canRemoveWorktree(activeWorktree, worktreeBusy)}
               onClick={() => void handleRemoveWorktree()}
             />
           </div>
@@ -2118,6 +2127,49 @@ export function Workbench() {
               />
             </div>
 
+            <div className={styles.gitActionBar}>
+              <div className={styles.gitActionStatus}>
+                <Pill tone={activeWorktreePillTone} dot>
+                  {activeWorktreeStatusLabel}
+                </Pill>
+                <span className={styles.gitActionBranch}>
+                  {activeWorktree?.branch ?? activeWorktree?.name ?? emptyValue}
+                </span>
+              </div>
+              <div className={styles.gitActionButtons}>
+                <Button
+                  size="sm"
+                  variant={activeWorktreeChangedCount > 0 ? 'primary' : 'secondary'}
+                  icon={<EditIcon />}
+                  loading={worktreeBusy === 'commit'}
+                  disabled={!canCommitWorktree(activeWorktree, worktreeBusy)}
+                  onClick={() => void handleCommitWorktree()}
+                >
+                  {t('workbench:worktrees.commit')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<UploadIcon />}
+                  loading={worktreeBusy === 'push'}
+                  disabled={!canPushWorktree(activeWorktree, worktreeBusy)}
+                  onClick={() => void handlePushWorktree()}
+                >
+                  {t('workbench:worktrees.push')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<SyncIcon />}
+                  loading={worktreeBusy === 'merge'}
+                  disabled={!canMergeWorktree(activeWorktree, worktreeBusy)}
+                  onClick={() => void handleMergeWorktree()}
+                >
+                  {t('workbench:worktrees.merge')}
+                </Button>
+              </div>
+            </div>
+
             {gitHistoryError ? <div className={styles.errorBox}>{gitHistoryError}</div> : null}
 
             <div className={styles.historyPanel}>
@@ -2129,20 +2181,88 @@ export function Workbench() {
                 <div className={styles.treeEmpty}>{t('workbench:gitHistoryEmpty')}</div>
               ) : (
                 <div className={styles.commitList}>
-                  {gitCommits.map((commit) => (
-                    <article key={commit.hash} className={styles.commitItem}>
-                      <div className={styles.commitHeader}>
-                        <span className={styles.commitHash}>{commit.shortHash}</span>
-                        <span className={styles.commitTime}>
-                          {formatCommitRelativeTime(commit.authoredAt, emptyValue)}
-                        </span>
-                      </div>
-                      <div className={styles.commitSummary}>{commit.summary || emptyValue}</div>
-                      <div className={styles.commitMeta}>
-                        {commit.authorName || commit.authorEmail || emptyValue}
-                      </div>
-                    </article>
-                  ))}
+                  {gitGraphRows.map((row) => {
+                    const graphWidth = gitGraphWidth(row.laneCount);
+                    return (
+                      <article key={row.commit.hash} className={styles.commitItem}>
+                        <div className={styles.commitGraph} style={{ width: graphWidth }}>
+                          <svg
+                            className={styles.commitGraphSvg}
+                            viewBox={`0 0 ${graphWidth} ${GIT_GRAPH_ROW_HEIGHT}`}
+                            aria-hidden="true"
+                          >
+                            {row.activeLanes.map((lane, laneIndex) => {
+                              const x = gitGraphX(laneIndex);
+                              const isCommitLane = laneIndex === row.lane;
+                              const continues = row.parentLanes.includes(laneIndex);
+                              const y2 = isCommitLane && !continues ? GIT_GRAPH_DOT_Y : GIT_GRAPH_ROW_HEIGHT;
+                              return (
+                                <line
+                                  key={`${row.commit.hash}-${lane.hash}-${laneIndex}`}
+                                  className={styles.graphLine}
+                                  style={gitGraphColorStyle(lane.colorIndex)}
+                                  x1={x}
+                                  y1={0}
+                                  x2={x}
+                                  y2={y2}
+                                />
+                              );
+                            })}
+                            {row.parentLanes
+                              .filter((parentLane) => parentLane !== row.lane)
+                              .map((parentLane) => {
+                                const fromX = gitGraphX(row.lane);
+                                const toX = gitGraphX(parentLane);
+                                return (
+                                  <path
+                                    key={`${row.commit.hash}-${parentLane}`}
+                                    className={styles.graphLine}
+                                    style={gitGraphColorStyle(row.colorIndex)}
+                                    d={`M ${fromX} ${GIT_GRAPH_DOT_Y} C ${fromX} 32 ${toX} 32 ${toX} ${GIT_GRAPH_ROW_HEIGHT}`}
+                                  />
+                                );
+                              })}
+                            <circle
+                              className={styles.graphDot}
+                              style={gitGraphColorStyle(row.colorIndex)}
+                              cx={gitGraphX(row.lane)}
+                              cy={GIT_GRAPH_DOT_Y}
+                              r={GIT_GRAPH_DOT_RADIUS}
+                            />
+                          </svg>
+                        </div>
+                        <div className={styles.commitContent}>
+                          <div className={styles.commitHeader}>
+                            <span className={styles.commitSummary}>
+                              {row.commit.summary || emptyValue}
+                            </span>
+                            <span className={styles.commitTime}>
+                              {formatCommitRelativeTime(row.commit.authoredAt, emptyValue)}
+                            </span>
+                          </div>
+                          {row.commit.refs.length > 0 ? (
+                            <div className={styles.refList}>
+                              {row.commit.refs.map((ref) => (
+                                <span
+                                  key={`${row.commit.hash}-${ref.fullName}`}
+                                  className={styles.refBadge}
+                                  data-kind={ref.kind}
+                                  title={ref.fullName}
+                                >
+                                  {ref.kind === 'remote' ? <UploadIcon size={12} /> : null}
+                                  {ref.name}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className={styles.commitMeta}>
+                            <span className={styles.commitHash}>{row.commit.shortHash}</span>
+                            <span>{row.commit.authorName || row.commit.authorEmail || emptyValue}</span>
+                          </div>
+                        </div>
+                      </article>
+                    );
+                  })}
                 </div>
               )}
             </div>

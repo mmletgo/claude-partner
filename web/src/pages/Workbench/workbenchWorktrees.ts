@@ -1,6 +1,22 @@
-import type { WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
+import type { WorkbenchGitCommit, WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
 
 export type WorktreeTone = 'neutral' | 'warning' | 'danger';
+
+export interface WorkbenchGitGraphLane {
+  hash: string;
+  colorIndex: number;
+}
+
+export interface WorkbenchGitGraphRow {
+  commit: WorkbenchGitCommit;
+  lane: number;
+  laneCount: number;
+  activeLanes: WorkbenchGitGraphLane[];
+  parentLanes: number[];
+  colorIndex: number;
+}
+
+const GIT_GRAPH_COLOR_COUNT = 6;
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -67,6 +83,59 @@ export function canCommitWorktree(
 
 /**
  * Business Logic（为什么需要这个函数）:
+ *   Git 历史工具条需要判断当前 worktree 是否可以 push，避免本地未发布仓库显示可点击 Push。
+ *
+ * Code Logic（这个函数做什么）:
+ *   有 active worktree、存在 branch、后端判定存在可用推送目标且没有其他 worktree 操作时返回 true。
+ */
+export function canPushWorktree(
+  activeWorktree: WorkbenchWorktree | null,
+  worktreeBusy: string | null,
+): boolean {
+  return Boolean(activeWorktree?.branch && activeWorktree.status.canPush) && worktreeBusy === null;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 历史工具条的 merge 只适用于功能 worktree 合回主工作区。
+ *
+ * Code Logic（这个函数做什么）:
+ *   active worktree 存在、非主工作区、clean 且没有其他 worktree 操作时返回 true。
+ */
+export function canMergeWorktree(
+  activeWorktree: WorkbenchWorktree | null,
+  worktreeBusy: string | null,
+): boolean {
+  return activeWorktree !== null && !activeWorktree.isMain && activeWorktree.status.clean && worktreeBusy === null;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   移除 worktree 是生命周期管理动作，不能对主工作区或 busy 状态开放。
+ *
+ * Code Logic（这个函数做什么）:
+ *   active worktree 存在、非主工作区且没有其他 worktree 操作时返回 true。
+ */
+export function canRemoveWorktree(
+  activeWorktree: WorkbenchWorktree | null,
+  worktreeBusy: string | null,
+): boolean {
+  return activeWorktree !== null && !activeWorktree.isMain && worktreeBusy === null;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 历史工具条需要显示当前 worktree 的改动数，帮助用户决定是否提交。
+ *
+ * Code Logic（这个函数做什么）:
+ *   读取 active worktree status.changed；没有 active worktree 时返回 0。
+ */
+export function worktreeChangeCount(activeWorktree: WorkbenchWorktree | null): number {
+  return activeWorktree?.status.changed ?? 0;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
  *   Git 历史 tab 中每条提交需要紧凑时间标识，便于在窄侧栏内扫描最近提交。
  *
  * Code Logic（这个函数做什么）:
@@ -97,4 +166,78 @@ export function formatCommitRelativeTime(
  */
 export function hasGitHistory(commits: Array<unknown>): boolean {
   return commits.length > 0;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 历史 tab 需要像 VS Code 一样根据提交 DAG 展示分支线和 merge 线。
+ *
+ * Code Logic（这个函数做什么）:
+ *   按 git log 的拓扑顺序维护活跃 lane；第一个 parent 继承当前 lane，额外 parent 创建侧 lane。
+ */
+export function buildGitGraphRows(commits: WorkbenchGitCommit[]): WorkbenchGitGraphRow[] {
+  const rows: WorkbenchGitGraphRow[] = [];
+  let lanes: WorkbenchGitGraphLane[] = [];
+  let nextColorIndex = 0;
+
+  for (const commit of commits) {
+    let lane = lanes.findIndex((entry) => entry.hash === commit.hash);
+    if (lane < 0) {
+      lane = lanes.length;
+      lanes = [
+        ...lanes,
+        {
+          hash: commit.hash,
+          colorIndex: nextColorIndex % GIT_GRAPH_COLOR_COUNT,
+        },
+      ];
+      nextColorIndex += 1;
+    }
+
+    const activeLanes = lanes.map((entry) => ({ ...entry }));
+    const colorIndex = lanes[lane]?.colorIndex ?? 0;
+    const nextLanes = lanes.map((entry) => ({ ...entry }));
+    const [firstParent, ...extraParents] = commit.parentHashes;
+
+    if (!firstParent) {
+      nextLanes.splice(lane, 1);
+    } else {
+      const existingParentLane = nextLanes.findIndex((entry) => entry.hash === firstParent);
+      if (existingParentLane >= 0 && existingParentLane !== lane) {
+        nextLanes.splice(lane, 1);
+      } else {
+        nextLanes[lane] = { hash: firstParent, colorIndex };
+      }
+    }
+
+    let insertAt = Math.min(lane + 1, nextLanes.length);
+    for (const parentHash of extraParents) {
+      const existingParentLane = nextLanes.findIndex((entry) => entry.hash === parentHash);
+      if (existingParentLane < 0) {
+        nextLanes.splice(insertAt, 0, {
+          hash: parentHash,
+          colorIndex: nextColorIndex % GIT_GRAPH_COLOR_COUNT,
+        });
+        nextColorIndex += 1;
+        insertAt += 1;
+      }
+    }
+
+    const parentLanes = commit.parentHashes
+      .map((parentHash) => nextLanes.findIndex((entry) => entry.hash === parentHash))
+      .filter((parentLane) => parentLane >= 0);
+    const laneCount = Math.max(activeLanes.length, nextLanes.length, lane + 1, 1);
+
+    rows.push({
+      commit,
+      lane,
+      laneCount,
+      activeLanes,
+      parentLanes,
+      colorIndex,
+    });
+    lanes = nextLanes;
+  }
+
+  return rows;
 }

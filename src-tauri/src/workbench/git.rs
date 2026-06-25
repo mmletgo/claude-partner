@@ -8,7 +8,9 @@
 //!     封装系统 git CLI 调用、worktree/status 输出解析和工作台专用 worktree 路径生成。
 
 use crate::error::AppError;
-use crate::workbench::models::{WorkbenchGitCommitDto, WorkbenchGitStatusDto};
+use crate::workbench::models::{
+    WorkbenchGitCommitDto, WorkbenchGitRefDto, WorkbenchGitRefKindDto, WorkbenchGitStatusDto,
+};
 use std::path::Path;
 use std::process::Command;
 
@@ -108,7 +110,9 @@ pub fn list_worktrees(repo_path: &Path, main_path: &str) -> Result<Vec<ParsedWor
 ///     执行 `git status --porcelain --branch`，并解析为 WorkbenchGitStatusDto。
 pub fn status(path: &Path) -> Result<WorkbenchGitStatusDto, AppError> {
     let output = run_git(path, &["status", "--porcelain", "--branch"])?;
-    Ok(parse_status_porcelain(&output))
+    let mut status = parse_status_porcelain(&output);
+    status.can_push = can_push_from_status(path, &status);
+    Ok(status)
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -130,10 +134,13 @@ pub fn list_commits(path: &Path, limit: usize) -> Result<Vec<WorkbenchGitCommitD
         path,
         &[
             "log",
+            "--all",
+            "--topo-order",
+            "--decorate=full",
             "--date=iso-strict",
             "-n",
             &safe_limit,
-            "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
+            "--pretty=format:%H%x1f%h%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s%x1f%D",
         ],
     )?;
     Ok(parse_git_log_output(&output))
@@ -320,6 +327,19 @@ fn resolve_push_target(path: &Path) -> Result<PushTarget, AppError> {
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     本地未发布仓库没有 remote 时，Workbench 的 Push 按钮应直接禁用，而不是等用户点击后报错。
+///
+/// Code Logic（这个函数做什么）:
+///     当前 status 有分支且 resolve_push_target 能找到 upstream/origin/唯一 remote 时返回 true。
+fn can_push_from_status(path: &Path, status: &WorkbenchGitStatusDto) -> bool {
+    status
+        .branch
+        .as_deref()
+        .map(|branch| !branch.trim().is_empty() && resolve_push_target(path).is_ok())
+        .unwrap_or(false)
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     已经跟踪远端分支的 worktree 应复用用户现有 upstream 配置。
 ///
 /// Code Logic（这个函数做什么）:
@@ -446,28 +466,110 @@ pub fn parse_status_porcelain(output: &str) -> WorkbenchGitStatusDto {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     Git log 原始文本不适合直接给 UI；右侧历史 tab 需要结构化提交项。
+///     Git log 原始文本不适合直接给 UI；右侧历史 tab 需要结构化提交项和 refs。
 ///
 /// Code Logic（这个函数做什么）:
-///     按行读取，每行用 ASCII unit separator 拆成 6 个字段；字段不足的异常行跳过。
+///     按行读取，每行用 ASCII unit separator 拆成 8 个字段；字段不足的异常行跳过。
 pub fn parse_git_log_output(output: &str) -> Vec<WorkbenchGitCommitDto> {
     output
         .lines()
         .filter_map(|line| {
             let fields = line.split('\x1f').collect::<Vec<_>>();
-            if fields.len() < 6 {
+            if fields.len() < 8 {
                 return None;
             }
             Some(WorkbenchGitCommitDto {
                 hash: fields[0].to_string(),
                 short_hash: fields[1].to_string(),
-                author_name: fields[2].to_string(),
-                author_email: fields[3].to_string(),
-                authored_at: fields[4].to_string(),
-                summary: fields[5].to_string(),
+                parent_hashes: fields[2]
+                    .split_whitespace()
+                    .map(ToString::to_string)
+                    .collect(),
+                author_name: fields[3].to_string(),
+                author_email: fields[4].to_string(),
+                authored_at: fields[5].to_string(),
+                summary: fields[6].to_string(),
+                refs: parse_git_refs(fields[7]),
             })
         })
         .collect()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Git 历史树需要把 Git decoration 转成可标识本地/云端的稳定标签。
+///
+/// Code Logic（这个函数做什么）:
+///     解析 `%D` 输出，识别 HEAD 指向、本地分支、远端分支、tag 和其他 ref。
+fn parse_git_refs(raw: &str) -> Vec<WorkbenchGitRefDto> {
+    raw.split(',')
+        .filter_map(|item| parse_git_ref(item.trim()))
+        .collect()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     单个 Git decoration 可能是 `HEAD -> refs/heads/main` 或普通 ref，需要统一归一化。
+///
+/// Code Logic（这个函数做什么）:
+///     去掉 symbolic ref 左侧，把完整 ref 转为展示名、类型和远端名。
+fn parse_git_ref(raw: &str) -> Option<WorkbenchGitRefDto> {
+    if raw.is_empty() {
+        return None;
+    }
+    if raw == "HEAD" {
+        return Some(WorkbenchGitRefDto {
+            name: "HEAD".to_string(),
+            full_name: "HEAD".to_string(),
+            kind: WorkbenchGitRefKindDto::Head,
+            remote: None,
+            is_head: true,
+        });
+    }
+
+    let (target, is_head) = if let Some(rest) = raw.strip_prefix("HEAD -> ") {
+        (rest.trim(), true)
+    } else if let Some((_, target)) = raw.split_once(" -> ") {
+        (target.trim(), false)
+    } else {
+        (raw, false)
+    };
+    let target = target.strip_prefix("tag: ").unwrap_or(target).trim();
+
+    if let Some(name) = target.strip_prefix("refs/heads/") {
+        return Some(WorkbenchGitRefDto {
+            name: name.to_string(),
+            full_name: target.to_string(),
+            kind: WorkbenchGitRefKindDto::Local,
+            remote: None,
+            is_head,
+        });
+    }
+    if let Some(name) = target.strip_prefix("refs/remotes/") {
+        let remote = name.split('/').next().filter(|value| !value.is_empty());
+        return Some(WorkbenchGitRefDto {
+            name: name.to_string(),
+            full_name: target.to_string(),
+            kind: WorkbenchGitRefKindDto::Remote,
+            remote: remote.map(ToString::to_string),
+            is_head,
+        });
+    }
+    if let Some(name) = target.strip_prefix("refs/tags/") {
+        return Some(WorkbenchGitRefDto {
+            name: name.to_string(),
+            full_name: target.to_string(),
+            kind: WorkbenchGitRefKindDto::Tag,
+            remote: None,
+            is_head,
+        });
+    }
+
+    Some(WorkbenchGitRefDto {
+        name: target.to_string(),
+        full_name: target.to_string(),
+        kind: WorkbenchGitRefKindDto::Other,
+        remote: None,
+        is_head,
+    })
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -602,6 +704,67 @@ UU web/src/App.tsx
     }
 
     /// Business Logic（为什么需要这个测试）:
+    ///     本地未发布仓库没有 remote 时，Workbench Push 按钮应该禁用，避免用户点击后才看到 fatal。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建无 remote 的真实 Git 仓库，断言 status 派生 can_push=false。
+    #[test]
+    fn status_marks_can_push_false_without_remote() {
+        let root = temp_git_dir("workbench-status-no-remote");
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["checkout", "-b", "feature/local-only"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "hello\n").expect("write readme");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "initial"]);
+
+        let status = status(&repo).expect("read status");
+
+        assert_eq!(status.branch.as_deref(), Some("feature/local-only"));
+        assert!(!status.can_push);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     已配置 remote 的本地分支允许首次 push，让后端用 `git push -u` 建立 upstream。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建真实 Git 仓库和 bare origin remote，断言 status 派生 can_push=true。
+    #[test]
+    fn status_marks_can_push_true_with_origin_remote() {
+        let root = temp_git_dir("workbench-status-origin-remote");
+        let repo = root.join("repo");
+        let remote = root.join("origin.git");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["checkout", "-b", "feature/publishable"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "hello\n").expect("write readme");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "initial"]);
+        git_test_command(
+            &root,
+            &["init", "--bare", remote.to_string_lossy().as_ref()],
+        );
+        git_test_command(
+            &repo,
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
+        );
+
+        let status = status(&repo).expect("read status");
+
+        assert_eq!(status.branch.as_deref(), Some("feature/publishable"));
+        assert!(status.can_push);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
     ///     用户输入分支名可能包含斜杠和符号，生成本地 worktree 目录时必须稳定、安全、可读。
     ///
     /// Code Logic（这个测试做什么）:
@@ -733,17 +896,39 @@ UU web/src/App.tsx
     ///     构造带字段分隔符的 git log 输出，断言解析出完整 hash、短 hash、作者、时间和标题。
     #[test]
     fn parse_git_log_output_extracts_commit_history_items() {
-        let output = "abcdef123456\x1fabcdef1\x1fAlice\x1fa@example.com\x1f2026-06-25T10:00:00+08:00\x1ffeat: add history\n";
+        let output = "abcdef123456\x1fabcdef1\x1f111111111111 222222222222\x1fAlice\x1fa@example.com\x1f2026-06-25T10:00:00+08:00\x1ffeat: add history\x1fHEAD -> refs/heads/main, refs/remotes/origin/main, tag: refs/tags/v1.0\n";
 
         let commits = parse_git_log_output(output);
 
         assert_eq!(commits.len(), 1);
         assert_eq!(commits[0].hash, "abcdef123456");
         assert_eq!(commits[0].short_hash, "abcdef1");
+        assert_eq!(
+            commits[0].parent_hashes,
+            vec!["111111111111", "222222222222"]
+        );
         assert_eq!(commits[0].author_name, "Alice");
         assert_eq!(commits[0].author_email, "a@example.com");
         assert_eq!(commits[0].authored_at, "2026-06-25T10:00:00+08:00");
         assert_eq!(commits[0].summary, "feat: add history");
+        assert_eq!(commits[0].refs.len(), 3);
+        assert_eq!(commits[0].refs[0].name, "main");
+        assert_eq!(
+            commits[0].refs[0].kind,
+            crate::workbench::models::WorkbenchGitRefKindDto::Local
+        );
+        assert!(commits[0].refs[0].is_head);
+        assert_eq!(commits[0].refs[1].name, "origin/main");
+        assert_eq!(
+            commits[0].refs[1].kind,
+            crate::workbench::models::WorkbenchGitRefKindDto::Remote
+        );
+        assert_eq!(commits[0].refs[1].remote.as_deref(), Some("origin"));
+        assert_eq!(commits[0].refs[2].name, "v1.0");
+        assert_eq!(
+            commits[0].refs[2].kind,
+            crate::workbench::models::WorkbenchGitRefKindDto::Tag
+        );
     }
 
     /// Business Logic（为什么需要这个测试）:
