@@ -410,7 +410,7 @@ node scripts/bump-version.mjs <新版本号>
 | config.get_config / config.get_default_config / config.update_config | 配置读写；恢复默认取后端环境默认值，update_config 支持快捷键热更新 |
 | config.get_version | 应用版本号 |
 | prompts.list / get / create / update / delete / list_tags | Prompt CRUD（delete 为软删除，自增 vector_clock） |
-| optimize_prompt | 调用本机 Claude Code CLI pure/headless 模式优化用户输入，返回中英文 Prompt |
+| optimize_prompt | 调用本机 Claude Code CLI pure/headless 模式优化用户输入；不传 targetLanguage 返回中英文 Prompt，Workbench 传 zh/en 时只返回对应语种 |
 | trigger_sync | 触发全网 Prompt 同步，返回 {accepted, synced, note} |
 | get_claude_md / update_claude_md / push_claude_md | CLAUDE.md 读取 / 保存 / 主动推送本机配置到局域网设备和 GitHub 云端 |
 | list_scratchpad_pages / get_scratchpad_page / create_scratchpad_page / update_scratchpad_page_content / rename_scratchpad_page / delete_scratchpad_page / sync_scratchpad | 速记本多页面 CRUD / 自动保存 / 同步 |

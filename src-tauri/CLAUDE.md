@@ -294,9 +294,9 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 ## Prompt 优化与 Claude CLI pure/headless helper 已落地行为约定（claude_cli.rs + commands/prompt_optimizer.rs）
 
 - **共享 helper**：`claude_cli.rs` 是所有“本机 Claude Code CLI + 结构化 JSON 输出”任务的唯一公共入口。`build_pure_headless_args(model,schema)` 固定生成 `claude --bare -p --output-format json --json-schema <schema> --no-session-persistence --tools "" --model <model>` 参数，不包含预算参数；`build_project_headless_args(model,schema)` 保留同样的 headless/json-schema/禁用工具参数但不加 `--bare`，供需要 CLAUDE.md auto-discovery 的项目上下文任务使用；`run_structured_json` 负责默认 pure 模式，`run_structured_json_with_cwd` 在传入工作目录时执行 `Command.current_dir` 并切到项目上下文模式；`parse_structured_output` 兼容直接 JSON、`structured_output`、`result` object/string；`failure_detail` 优先 stderr，再解析 stdout JSON 的 `errors/result/subtype`，最后截断。
-- **Prompt 优化命令**：`optimize_prompt(prompt, workingDirectory?)` 复用 `AppConfig.github_trending` 中的 `claude_cli_path` 与 `claude_model`，不新增配置入口；普通 Prompt 优化页不传目录并保持 pure/bare 模式，Workbench 传当前项目根目录，让 Claude Code 按原生规则读取项目 CLAUDE.md；空输入和超过 20,000 字符的输入直接返回业务错误，非空 workingDirectory 必须存在且是目录；CLI 调用超时 180 秒。
-- **输出契约**：`PromptOptimizeResponseDto` 使用 camelCase 返回 `{optimizedZh, optimizedEn}`。schema 禁止额外字段，要求两版 Prompt 都存在。
-- **业务边界**：Prompt 优化只用于当前页面展示和复制，不入库、不缓存、不跨设备同步，也不记录原始 Prompt 到日志。生成要求面向 Claude Code 编程任务，保留用户原意；原始信息不足时在优化 Prompt 中保留待补充项，不编造外部事实。
+- **Prompt 优化命令**：`optimize_prompt(prompt, workingDirectory?, targetLanguage?)` 复用 `AppConfig.github_trending` 中的 `claude_cli_path` 与 `claude_model`，不新增配置入口；普通 Prompt 优化页不传目录和 targetLanguage 并保持 pure/bare 双语模式，Workbench 传当前项目根目录和设置页语种 `zh|en`，让 Claude Code 按原生规则读取项目 CLAUDE.md 且只生成单语结果；空输入和超过 20,000 字符的输入直接返回业务错误，非空 workingDirectory 必须存在且是目录，targetLanguage 仅接受 `zh` / `en` / 空；CLI 调用超时 180 秒。
+- **输出契约**：`PromptOptimizeResponseDto` 使用 camelCase 返回 `{optimizedZh, optimizedEn}`。普通双语 schema 禁止额外字段并要求两版 Prompt 都存在；Workbench 单语 schema 只要求 `{optimizedPrompt}`，命令层再映射到对应 `optimizedZh` 或 `optimizedEn`，未选语种字段为空字符串。
+- **业务边界**：Prompt 优化只用于当前页面展示和复制，不入库、不缓存、不跨设备同步，也不记录原始 Prompt 到日志。生成要求面向 Claude Code 编程任务，保留用户原意；输出必须以需求方视角写成可直接粘贴给 Claude Code 的委托式 Prompt，不得生成“请确认/是否需要/请指定”等继续询问用户的澄清句。原始信息不足时只能保留待补充占位或执行假设，不编造外部事实；除非原始 Prompt 明确要求文档或文件输出，否则不得新增 `docs/`、写文件、持久化等确认要求。
 - **复用约束**：后续新增类似“本机 Claude CLI 结构化生成”能力时优先复用 `claude_cli.rs`，不要在命令模块内重新拼接 pure/headless 参数或重复解析 wrapper JSON。
 
 ## 健康提醒已落地行为约定（src/health/ + storage/health_repo.rs + commands/health.rs）

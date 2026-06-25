@@ -26,6 +26,7 @@ import { WorkbenchDependencyCard } from '@/components/domain';
 import { Button, Card, Input, Pill } from '@/components/primitives';
 import { useWorkbenchDependency } from '@/hooks/workbenchDependencyContext';
 import { useWorkbenchProjects } from '@/hooks/workbenchProjectsContext';
+import { useWorkbenchTerminalBuffers } from '@/hooks/workbenchTerminalBuffersContext';
 import {
   ChevronRightIcon,
   CopyIcon,
@@ -38,27 +39,22 @@ import {
   SyncIcon,
   TrashIcon,
   XIcon,
-  SendIcon,
 } from '@/lib/icons';
 import type {
-  PromptOptimizeResponse,
   PromptOptimizerFillLanguage,
   WorkbenchFileNode,
   WorkbenchPathInfo,
   WorkbenchSession,
-  WorkbenchTerminalOutputEvent,
   WorkbenchTerminalStatusEvent,
 } from '@/lib/types';
 import styles from './Workbench.module.css';
 import {
   canFillPromptIntoTerminal,
-  createEmptyPromptOptimizeResponse,
   createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
   promptOptimizerWorkingDirectory,
   reducePromptOptimizerShortcut,
   resetPromptOptimizerTextState,
-  selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
 import { visibleTerminalSessions } from './terminalSessionOrder';
 import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOptions';
@@ -115,7 +111,6 @@ interface PromptOptimizerPanelPosition {
 
 const MIN_TERMINAL_COLS = 20;
 const MIN_TERMINAL_ROWS = 6;
-const MAX_TERMINAL_BUFFER_CHARS = 200_000;
 const TERMINAL_PANE_HEADER_PX = 36;
 const TMUX_FOCUS_SYNC_INTERVAL_MS = 700;
 const LOCAL_FOCUS_GRACE_MS = 500;
@@ -576,6 +571,12 @@ export function Workbench() {
   const { t } = useTranslation(['workbench', 'common', 'promptOptimizer']);
   const { status: dependencyStatus } = useWorkbenchDependency();
   const { activeProjectId, activeProject, refreshProjectSessionStats } = useWorkbenchProjects();
+  const {
+    buffers: terminalBuffers,
+    revision: terminalRevision,
+    resetBuffer: resetTerminalBuffer,
+    removeBuffer: removeTerminalBuffer,
+  } = useWorkbenchTerminalBuffers();
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionNameDraft, setSessionNameDraft] = useState<string>('');
@@ -591,16 +592,10 @@ export function Workbench() {
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [newEntryName, setNewEntryName] = useState<string>('');
   const [renameName, setRenameName] = useState<string>('');
-  const [terminalBuffers, setTerminalBuffers] = useState<Record<string, string>>({});
-  const [terminalRevision, setTerminalRevision] = useState<number>(0);
   const [runtimeNow, setRuntimeNow] = useState<number>(() => Date.now());
   const [promptPanelOpen, setPromptPanelOpen] = useState<boolean>(false);
   const [promptInput, setPromptInput] = useState<string>('');
-  const [promptResult, setPromptResult] = useState<PromptOptimizeResponse>(
-    createEmptyPromptOptimizeResponse,
-  );
   const [promptOptimizing, setPromptOptimizing] = useState<boolean>(false);
-  const [promptWidgetMessage, setPromptWidgetMessage] = useState<string | null>(null);
   const [promptOptimizerHotkey, setPromptOptimizerHotkey] = useState<string>('<ctrl>');
   const [promptOptimizerFillLanguage, setPromptOptimizerFillLanguage] =
     useState<PromptOptimizerFillLanguage>('zh');
@@ -643,13 +638,7 @@ export function Workbench() {
   const canUsePanes = Boolean(
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
-  const promptInsertText = selectPromptOptimizerInsertText(
-    promptResult,
-    promptOptimizerFillLanguage,
-  );
   const promptWorkingDirectory = promptOptimizerWorkingDirectory(activeProject);
-  const canOptimizePrompt = promptInput.trim().length > 0 && !promptOptimizing;
-  const canFillPrompt = canFillPromptIntoTerminal(activeSession) && promptInsertText.length > 0;
 
   const updateActiveSession = useCallback((nextSessions: WorkbenchSession[]) => {
     setActiveSessionId((current) => {
@@ -847,23 +836,6 @@ export function Workbench() {
 
   useEffect(() => {
     if (!canListenToTauriEvents()) return undefined;
-    const outputUnlisten = listen<WorkbenchTerminalOutputEvent>(
-      'workbench:terminal-output',
-      (event) => {
-        const payload = event.payload;
-        setTerminalBuffers((current) => {
-          const nextBuffer = `${current[payload.sessionId] ?? ''}${payload.chunk}`;
-          return {
-            ...current,
-            [payload.sessionId]:
-              nextBuffer.length > MAX_TERMINAL_BUFFER_CHARS
-                ? nextBuffer.slice(-MAX_TERMINAL_BUFFER_CHARS)
-                : nextBuffer,
-          };
-        });
-        setTerminalRevision((current) => current + 1);
-      },
-    );
     const statusUnlisten = listen<WorkbenchTerminalStatusEvent>(
       'workbench:terminal-status',
       (event) => {
@@ -886,7 +858,6 @@ export function Workbench() {
       },
     );
     return () => {
-      void outputUnlisten.then((fn) => fn());
       void statusUnlisten.then((fn) => fn());
     };
   }, []);
@@ -903,8 +874,7 @@ export function Workbench() {
       setSessions((current) => [...current, session]);
       knownSessionIdsRef.current.add(session.id);
       focusSession(session.id);
-      setTerminalBuffers((current) => ({ ...current, [session.id]: '' }));
-      setTerminalRevision((current) => current + 1);
+      resetTerminalBuffer(session.id);
       void refreshProjectSessionStats(projectId);
     } catch (error) {
       if (activeProjectIdRef.current !== projectId) return;
@@ -918,7 +888,7 @@ export function Workbench() {
     } finally {
       setSessionBusy(false);
     }
-  }, [desktopUnavailableMessage, focusSession, refreshProjectSessionStats, t]);
+  }, [desktopUnavailableMessage, focusSession, refreshProjectSessionStats, resetTerminalBuffer, t]);
 
   const handleSplitPane = useCallback(
     async (direction: 'right' | 'down') => {
@@ -953,12 +923,7 @@ export function Workbench() {
           return next;
         });
         knownSessionIdsRef.current.delete(result.sessionId);
-        setTerminalBuffers((current) => {
-          const next = { ...current };
-          delete next[result.sessionId];
-          return next;
-        });
-        setTerminalRevision((current) => current + 1);
+        removeTerminalBuffer(result.sessionId);
       }
       await loadSessions(projectId);
     } catch (error) {
@@ -966,7 +931,14 @@ export function Workbench() {
         displayErrorMessage(error, t('workbench:errors.closePane'), desktopUnavailableMessage),
       );
     }
-  }, [activeSession, desktopUnavailableMessage, loadSessions, t, updateActiveSession]);
+  }, [
+    activeSession,
+    desktopUnavailableMessage,
+    loadSessions,
+    removeTerminalBuffer,
+    t,
+    updateActiveSession,
+  ]);
 
   const handleInput = useCallback(async (sessionId: string, data: string) => {
     try {
@@ -979,8 +951,6 @@ export function Workbench() {
   const openPromptOptimizerPanel = useCallback(() => {
     const reset = resetPromptOptimizerTextState();
     setPromptInput(reset.input);
-    setPromptResult(reset.result);
-    setPromptWidgetMessage(reset.message);
     setPromptPanelOpen(true);
   }, []);
 
@@ -990,17 +960,15 @@ export function Workbench() {
     setPromptPanelPosition(promptOptimizerPanelPosition(area.getBoundingClientRect(), anchor));
   }, []);
 
-  const writePromptResultToTerminal = useCallback(
-    async (result: PromptOptimizeResponse) => {
+  const writePromptTextToTerminal = useCallback(
+    async (text: string) => {
       if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
-      const payload = promptOptimizerInsertPayload(result, promptOptimizerFillLanguage);
-      if (!payload) return;
+      if (!text.trim()) return;
       try {
-        setPromptWidgetMessage(null);
-        await workbenchApi.sessions.writeInput(activeSession.id, payload);
-        setPromptWidgetMessage(t('workbench:promptOptimizer.filled'));
+        await workbenchApi.sessions.writeInput(activeSession.id, text);
+        setPromptPanelOpen(false);
       } catch (error) {
-        setPromptWidgetMessage(
+        setSessionError(
           displayErrorMessage(
             error,
             t('workbench:promptOptimizer.fillFailed'),
@@ -1009,27 +977,25 @@ export function Workbench() {
         );
       }
     },
-    [activeSession, desktopUnavailableMessage, promptOptimizerFillLanguage, t],
+    [activeSession, desktopUnavailableMessage, t],
   );
 
   const runPromptOptimization = useCallback(
-    async (autoFill: boolean) => {
+    async () => {
       if (!promptInput.trim() || promptOptimizing) {
         promptInputRef.current?.focus();
         return;
       }
       try {
         setPromptOptimizing(true);
-        setPromptWidgetMessage(null);
         const result = await promptOptimizerApi.optimize(promptInput, {
           workingDirectory: promptWorkingDirectory,
+          targetLanguage: promptOptimizerFillLanguage,
         });
-        setPromptResult(result);
-        if (autoFill) {
-          await writePromptResultToTerminal(result);
-        }
+        const payload = promptOptimizerInsertPayload(result, promptOptimizerFillLanguage);
+        await writePromptTextToTerminal(payload);
       } catch (error) {
-        setPromptWidgetMessage(
+        setSessionError(
           displayErrorMessage(
             error,
             t('workbench:promptOptimizer.optimizeFailed'),
@@ -1044,20 +1010,12 @@ export function Workbench() {
       desktopUnavailableMessage,
       promptInput,
       promptOptimizing,
+      promptOptimizerFillLanguage,
       promptWorkingDirectory,
       t,
-      writePromptResultToTerminal,
+      writePromptTextToTerminal,
     ],
   );
-
-  const handleOptimizePrompt = useCallback(async () => {
-    await runPromptOptimization(false);
-  }, [runPromptOptimization]);
-
-  const handleFillPromptToTerminal = useCallback(async () => {
-    if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
-    await writePromptResultToTerminal(promptResult);
-  }, [activeSession, promptResult, writePromptResultToTerminal]);
 
   const triggerPromptOptimizerShortcut = useCallback(() => {
     if (!activeProjectIdRef.current) return;
@@ -1065,7 +1023,7 @@ export function Workbench() {
       openPromptOptimizerPanel();
       return;
     }
-    void runPromptOptimization(true);
+    void runPromptOptimization();
   }, [openPromptOptimizerPanel, promptPanelOpen, runPromptOptimization]);
 
   useEffect(() => {
@@ -1120,12 +1078,7 @@ export function Workbench() {
           return next;
         });
         knownSessionIdsRef.current.delete(sessionId);
-        setTerminalBuffers((current) => {
-          const next = { ...current };
-          delete next[sessionId];
-          return next;
-        });
-        setTerminalRevision((current) => current + 1);
+        removeTerminalBuffer(sessionId);
         const projectId = activeProjectIdRef.current;
         if (projectId) void refreshProjectSessionStats(projectId);
       } catch (error) {
@@ -1138,7 +1091,13 @@ export function Workbench() {
         );
       }
     },
-    [desktopUnavailableMessage, refreshProjectSessionStats, t, updateActiveSession],
+    [
+      desktopUnavailableMessage,
+      refreshProjectSessionStats,
+      removeTerminalBuffer,
+      t,
+      updateActiveSession,
+    ],
   );
 
   const handleRenameSession = useCallback(async () => {
@@ -1429,23 +1388,6 @@ export function Workbench() {
               style={promptPanelStyle}
               aria-label={t('workbench:promptOptimizer.panelAriaLabel')}
             >
-              <div className={styles.promptOptimizerHeader}>
-                <div>
-                  <h2 className={styles.promptOptimizerTitle}>
-                    {t('workbench:promptOptimizer.title')}
-                  </h2>
-                  <p className={styles.promptOptimizerSubtitle}>
-                    {t('workbench:promptOptimizer.subtitle')}
-                  </p>
-                </div>
-                <Button
-                  variant="icon"
-                  icon={<XIcon />}
-                  title={t('workbench:promptOptimizer.close')}
-                  aria-label={t('workbench:promptOptimizer.close')}
-                  onClick={() => setPromptPanelOpen(false)}
-                />
-              </div>
               <textarea
                 ref={promptInputRef}
                 className={styles.promptOptimizerInput}
@@ -1455,57 +1397,6 @@ export function Workbench() {
                 aria-label={t('promptOptimizer:inputAriaLabel')}
                 disabled={promptOptimizing}
               />
-              <div className={styles.promptOptimizerActions}>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  icon={<EditIcon />}
-                  loading={promptOptimizing}
-                  disabled={!canOptimizePrompt}
-                  onClick={() => void handleOptimizePrompt()}
-                >
-                  {promptOptimizing
-                    ? t('promptOptimizer:optimizing')
-                    : t('promptOptimizer:optimize')}
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  icon={<SendIcon />}
-                  disabled={!canFillPrompt}
-                  onClick={() => void handleFillPromptToTerminal()}
-                >
-                  {t('workbench:promptOptimizer.fillTerminal')}
-                </Button>
-              </div>
-              <div className={styles.promptOptimizerStatus} aria-live="polite">
-                {promptWidgetMessage
-                  ? promptWidgetMessage
-                  : t('workbench:promptOptimizer.fillHint')}
-              </div>
-              <div
-                className={styles.promptOptimizerResults}
-                aria-label={t('promptOptimizer:resultsAriaLabel')}
-              >
-                <section className={styles.promptOptimizerResult}>
-                  <h3>{t('promptOptimizer:zhTitle')}</h3>
-                  <textarea
-                    value={promptResult.optimizedZh}
-                    readOnly
-                    placeholder={t('promptOptimizer:resultPlaceholder')}
-                    aria-label={t('promptOptimizer:zhAriaLabel')}
-                  />
-                </section>
-                <section className={styles.promptOptimizerResult}>
-                  <h3>{t('promptOptimizer:enTitle')}</h3>
-                  <textarea
-                    value={promptResult.optimizedEn}
-                    readOnly
-                    placeholder={t('promptOptimizer:resultPlaceholder')}
-                    aria-label={t('promptOptimizer:enAriaLabel')}
-                  />
-                </section>
-              </div>
             </aside>
           ) : null}
 

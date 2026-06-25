@@ -33,23 +33,85 @@ pub struct PromptOptimizeResponseDto {
     pub optimized_en: String,
 }
 
+/// 单语 Prompt 优化响应 DTO（仅供 Workbench 小组件内部映射）。
+///
+/// Business Logic（为什么需要这个结构）:
+///     Workbench 小组件只需要按设置页语种生成一个 Prompt，避免 CLI 同时生成中英两版造成等待和噪音。
+///
+/// Code Logic（这个结构做什么）:
+///     serde 使用 camelCase 暴露 `optimizedPrompt`，命令层再映射回前端既有 `PromptOptimizeResponseDto`。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SinglePromptOptimizeResponseDto {
+    optimized_prompt: String,
+}
+
+/// Workbench 小组件单语优化目标语种。
+///
+/// Business Logic（为什么需要这个枚举）:
+///     设置页只允许用户选择中文或英文填入终端，后端单语 schema 需要一个受控目标语种。
+///
+/// Code Logic（这个枚举做什么）:
+///     用 Zh / En 表达前端 `zh` / `en`，避免在 schema、指令和结果映射中散落字符串判断。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PromptOptimizeTargetLanguage {
+    Zh,
+    En,
+}
+
+impl PromptOptimizeTargetLanguage {
+    /// Business Logic（为什么需要这个函数）:
+    ///     设置页只允许 Workbench 小组件选择中文或英文填入，后端需要拒绝未知语言值。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     将前端传入的 `zh` / `en` 解析为枚举；None 表示普通双语优化模式。
+    fn parse(input: Option<String>) -> Result<Option<Self>, AppError> {
+        let Some(raw) = input else {
+            return Ok(None);
+        };
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        match trimmed {
+            "zh" => Ok(Some(Self::Zh)),
+            "en" => Ok(Some(Self::En)),
+            _ => Err(AppError::generic("Prompt 优化目标语种仅支持 zh 或 en")),
+        }
+    }
+
+    /// Business Logic（为什么需要这个函数）:
+    ///     Claude CLI 单语优化指令需要明确目标语言，避免生成双语结果。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     返回写入英文指令的语言描述。
+    fn instruction_label(self) -> &'static str {
+        match self {
+            Self::Zh => "Simplified Chinese",
+            Self::En => "English",
+        }
+    }
+}
+
 /// 调用 Claude Code CLI 优化用户输入的编程任务 Prompt。
 ///
 /// Business Logic（为什么需要这个命令）:
-///     用户在本机把零散需求整理成适合 Claude Code 执行的结构化 prompt，并得到中文与英文两版。
-///     结果只在当前页面展示，不入库、不缓存、不跨设备同步。
+///     用户在本机把零散需求整理成适合 Claude Code 执行的结构化 prompt；普通页面得到中英两版，
+///     Workbench 小组件只得到设置页选择的单语版本。结果只在当前页面展示，不入库、不缓存、不跨设备同步。
 ///
 /// Code Logic（这个命令做什么）:
-///     校验输入长度；读取 GitHub Trending 的 Claude CLI 路径和模型；构造 schema 与任务指令；
+///     校验输入长度；读取 GitHub Trending 的 Claude CLI 路径和模型；按 target_language 构造 schema 与任务指令；
 ///     未传工作目录时执行 pure/bare CLI 调用，传入工作目录时执行项目上下文 CLI 调用。
 #[tauri::command]
 pub async fn optimize_prompt(
     state: State<'_, AppState>,
     prompt: String,
     working_directory: Option<String>,
+    target_language: Option<String>,
 ) -> Result<PromptOptimizeResponseDto, AppError> {
     validate_prompt_input(&prompt)?;
     let working_directory = resolve_working_directory(working_directory)?;
+    let target_language = PromptOptimizeTargetLanguage::parse(target_language)?;
     let (cli_path, model) = {
         let cfg = state.config.read().unwrap();
         (
@@ -57,8 +119,22 @@ pub async fn optimize_prompt(
             cfg.github_trending.claude_model.clone(),
         )
     };
-    let schema = prompt_optimize_schema();
-    let instruction = build_optimize_instruction(&prompt);
+    let schema = prompt_optimize_schema_for_target(target_language)?;
+    let instruction = build_optimize_instruction_for_target(&prompt, target_language);
+
+    if let Some(target_language) = target_language {
+        let result = claude_cli::run_structured_json_with_cwd::<SinglePromptOptimizeResponseDto>(
+            &cli_path,
+            &model,
+            &schema.to_string(),
+            &instruction,
+            working_directory.as_deref(),
+            PROMPT_OPTIMIZE_TIMEOUT_SECS,
+            "优化 Prompt",
+        )
+        .await?;
+        return Ok(single_prompt_response_to_full(target_language, result));
+    }
 
     claude_cli::run_structured_json_with_cwd::<PromptOptimizeResponseDto>(
         &cli_path,
@@ -133,13 +209,61 @@ fn prompt_optimize_schema() -> Value {
     })
 }
 
+/// 按目标语种构造 Prompt 优化结构化输出 schema。
+///
+/// Business Logic（为什么需要这个函数）:
+///     普通 Prompt 优化页仍需要中英双语结果；Workbench 小组件只需要一个设置语种的 Prompt。
+///
+/// Code Logic（这个函数做什么）:
+///     target 为 None 时返回双语 schema；target 为 Some 时返回仅包含 `optimizedPrompt` 的单语 schema。
+fn prompt_optimize_schema_for_target(
+    target: Option<PromptOptimizeTargetLanguage>,
+) -> Result<Value, AppError> {
+    if target.is_none() {
+        return Ok(prompt_optimize_schema());
+    }
+    Ok(json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["optimizedPrompt"],
+        "properties": {
+            "optimizedPrompt": { "type": "string" }
+        }
+    }))
+}
+
+/// 把单语优化结果映射回前端既有 DTO。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 小组件只消费设置语种的结果，但前端 API 类型仍复用 `{optimizedZh, optimizedEn}`。
+///
+/// Code Logic（这个函数做什么）:
+///     中文目标填充 optimized_zh；英文目标填充 optimized_en；另一个字段保持空字符串。
+fn single_prompt_response_to_full(
+    target: PromptOptimizeTargetLanguage,
+    result: SinglePromptOptimizeResponseDto,
+) -> PromptOptimizeResponseDto {
+    match target {
+        PromptOptimizeTargetLanguage::Zh => PromptOptimizeResponseDto {
+            optimized_zh: result.optimized_prompt,
+            optimized_en: String::new(),
+        },
+        PromptOptimizeTargetLanguage::En => PromptOptimizeResponseDto {
+            optimized_zh: String::new(),
+            optimized_en: result.optimized_prompt,
+        },
+    }
+}
+
 /// 构造发给 Claude CLI 的优化指令。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     优化目标固定面向 Claude Code 编程任务，要求保留原意并显式标出缺失信息，不能编造外部事实。
+///     优化目标固定面向 Claude Code 编程任务，要求保留原意并用需求方视角直接表达，
+///     不能把结果写成继续向用户追问意见的澄清问题。
 ///
 /// Code Logic（这个函数做什么）:
-///     把原始 prompt 作为 fenced code block 嵌入系统化指令，要求输出目标、上下文、约束、验收标准。
+///     把原始 prompt 作为 fenced code block 嵌入系统化指令，要求输出目标、上下文、约束、验收标准；
+///     缺失信息只能写成待补充占位或执行假设，不能新增原始需求没有要求的文档/文件输出确认。
 fn build_optimize_instruction(prompt: &str) -> String {
     format!(
         "You optimize user prompts for Claude Code programming tasks.\n\
@@ -149,9 +273,45 @@ fn build_optimize_instruction(prompt: &str) -> String {
          - optimizedZh must be a clear Simplified Chinese prompt.\n\
          - optimizedEn must be an equivalent English prompt.\n\
          - Both versions must include: goal, context, constraints, and acceptance criteria.\n\
-         - If the original prompt lacks needed details, keep explicit placeholders or questions to fill in; do not fabricate them.\n\
+         - Write both optimized prompts from the requester's perspective, as a direct prompt they can paste into Claude Code.\n\
+         - Do not ask the requester clarifying questions or include confirmation requests.\n\
+         - If details are missing, express them as bracketed placeholders or execution assumptions inside the prompt, not as questions to the requester.\n\
+         - Do not add documentation, docs/, file-writing, persistence, or confirmation requirements unless the original prompt explicitly asks for those outputs.\n\
          - Keep the prompt actionable for a coding agent.\n\n\
          Original prompt:\n```text\n{}\n```",
+        prompt
+    )
+}
+
+/// 按目标语种构造发给 Claude CLI 的优化指令。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 小组件只需要设置页选择的一种语言，普通 Prompt 优化页仍保留双语输出。
+///
+/// Code Logic（这个函数做什么）:
+///     target 为 None 时复用双语指令；target 为 Some 时构造只返回 `optimizedPrompt` 的单语指令。
+fn build_optimize_instruction_for_target(
+    prompt: &str,
+    target: Option<PromptOptimizeTargetLanguage>,
+) -> String {
+    let Some(target) = target else {
+        return build_optimize_instruction(prompt);
+    };
+    format!(
+        "You optimize user prompts for Claude Code programming tasks.\n\
+         Return only data matching the JSON schema.\n\
+         Requirements:\n\
+         - Preserve the user's intent and do not invent external facts.\n\
+         - optimizedPrompt must be a clear {} prompt.\n\
+         - optimizedPrompt must include: goal, context, constraints, and acceptance criteria.\n\
+         - Write optimizedPrompt from the requester's perspective, as a direct prompt they can paste into Claude Code.\n\
+         - Do not ask the requester clarifying questions or include confirmation requests.\n\
+         - If details are missing, express them as bracketed placeholders or execution assumptions inside the prompt, not as questions to the requester.\n\
+         - Do not add documentation, docs/, file-writing, persistence, or confirmation requirements unless the original prompt explicitly asks for those outputs.\n\
+         - Keep the prompt actionable for a coding agent.\n\
+         - Do not generate a second language version.\n\n\
+         Original prompt:\n```text\n{}\n```",
+        target.instruction_label(),
         prompt
     )
 }
@@ -219,5 +379,56 @@ mod tests {
         assert_eq!(schema["required"][0], "optimizedZh");
         assert_eq!(schema["required"][1], "optimizedEn");
         assert_eq!(schema["additionalProperties"], false);
+    }
+
+    #[test]
+    fn target_language_schema_requires_single_output() {
+        let target = PromptOptimizeTargetLanguage::parse(Some("zh".to_string()))
+            .expect("parse zh")
+            .expect("zh target");
+        let schema = prompt_optimize_schema_for_target(Some(target)).expect("zh schema");
+
+        assert_eq!(schema["required"][0], "optimizedPrompt");
+        assert_eq!(schema["properties"]["optimizedPrompt"]["type"], "string");
+        assert!(schema["properties"].get("optimizedZh").is_none());
+        assert!(schema["properties"].get("optimizedEn").is_none());
+
+        assert!(PromptOptimizeTargetLanguage::parse(Some("fr".to_string())).is_err());
+    }
+
+    #[test]
+    fn single_language_response_maps_to_selected_field() {
+        let zh = single_prompt_response_to_full(
+            PromptOptimizeTargetLanguage::Zh,
+            SinglePromptOptimizeResponseDto {
+                optimized_prompt: "中文版本".to_string(),
+            },
+        );
+        let en = single_prompt_response_to_full(
+            PromptOptimizeTargetLanguage::En,
+            SinglePromptOptimizeResponseDto {
+                optimized_prompt: "English version".to_string(),
+            },
+        );
+
+        assert_eq!(zh.optimized_zh, "中文版本");
+        assert_eq!(zh.optimized_en, "");
+        assert_eq!(en.optimized_zh, "");
+        assert_eq!(en.optimized_en, "English version");
+    }
+
+    #[test]
+    fn instruction_requires_requester_perspective_without_clarifying_questions() {
+        let instruction = build_optimize_instruction("修复工作台 Prompt 优化浮层");
+
+        assert!(instruction.contains(
+            "Do not add documentation, docs/, file-writing, persistence, or confirmation requirements unless the original prompt explicitly asks for those outputs."
+        ));
+        assert!(instruction.contains(
+            "Write both optimized prompts from the requester's perspective, as a direct prompt they can paste into Claude Code."
+        ));
+        assert!(instruction.contains(
+            "Do not ask the requester clarifying questions or include confirmation requests."
+        ));
     }
 }

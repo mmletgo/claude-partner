@@ -24,6 +24,7 @@ import { configApi } from './api/config';
 import { PERMISSION_ONBOARDED_KEY } from './hooks/usePermissions';
 import { WorkbenchProjectsProvider } from './hooks/useWorkbenchProjects';
 import { WorkbenchDependencyProvider } from './hooks/useWorkbenchDependency';
+import { WorkbenchTerminalBuffersProvider } from './hooks/useWorkbenchTerminalBuffers';
 import { checkNotificationGranted } from './lib/notification';
 
 const isDev = import.meta.env.DEV;
@@ -181,7 +182,9 @@ export default function App() {
             element={
               <WorkbenchDependencyProvider>
                 <WorkbenchProjectsProvider>
-                  <AppShell />
+                  <WorkbenchTerminalBuffersProvider>
+                    <AppShell />
+                  </WorkbenchTerminalBuffersProvider>
                 </WorkbenchProjectsProvider>
               </WorkbenchDependencyProvider>
             }
