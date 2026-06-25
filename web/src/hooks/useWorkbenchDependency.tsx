@@ -115,11 +115,12 @@ export function WorkbenchDependencyProvider({ children }: WorkbenchDependencyPro
   }, [check]);
 
   useEffect(() => {
+    const syncTimer = window.setTimeout(() => {
+      setInstalling(status.status === 'installing');
+    }, 0);
     if (status.status !== 'installing') {
-      setInstalling(false);
-      return undefined;
+      return () => window.clearTimeout(syncTimer);
     }
-    setInstalling(true);
     const timer = window.setInterval(() => {
       void workbenchDependencyApi
         .status()
@@ -134,7 +135,10 @@ export function WorkbenchDependencyProvider({ children }: WorkbenchDependencyPro
           setInstalling(false);
         });
     }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(syncTimer);
+      window.clearInterval(timer);
+    };
   }, [status.status]);
 
   const value = useMemo<WorkbenchDependencyContextValue>(

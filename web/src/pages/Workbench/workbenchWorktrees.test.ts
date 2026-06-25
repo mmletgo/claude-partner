@@ -2,6 +2,8 @@ import type { WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
 import {
   activeWorktreeRootPath,
   canCommitWorktree,
+  formatCommitRelativeTime,
+  hasGitHistory,
   sessionsForWorktree,
   worktreeStatusTone,
 } from './workbenchWorktrees';
@@ -119,7 +121,45 @@ function testCanCommitWorktreeIgnoresStaleCleanStatus(): void {
   }
 }
 
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   Git 历史 tab 需要用紧凑相对时间帮助用户快速扫提交顺序。
+ *
+ * Code Logic（这个测试做什么）:
+ *   用固定 now 断言分钟、小时和日期兜底格式。
+ */
+function testFormatCommitRelativeTime(): void {
+  const now = new Date('2026-06-25T12:00:00Z');
+  if (formatCommitRelativeTime('2026-06-25T11:58:00Z', '—', now) !== '2m') {
+    throw new Error('expected minutes relative time');
+  }
+  if (formatCommitRelativeTime('2026-06-25T09:00:00Z', '—', now) !== '3h') {
+    throw new Error('expected hours relative time');
+  }
+  if (formatCommitRelativeTime('2026-06-20T12:00:00Z', '—', now) !== '2026-06-20') {
+    throw new Error('expected date fallback');
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   Git 历史 tab 需要区分有历史和空历史，避免空列表显示成加载失败。
+ *
+ * Code Logic（这个测试做什么）:
+ *   对空数组和含提交数组做布尔判断。
+ */
+function testHasGitHistory(): void {
+  if (hasGitHistory([])) {
+    throw new Error('expected empty history to be false');
+  }
+  if (!hasGitHistory([{ hash: 'h' }])) {
+    throw new Error('expected non-empty history to be true');
+  }
+}
+
 testSessionsForWorktree();
 testActiveWorktreeRootPath();
 testWorktreeStatusTone();
 testCanCommitWorktreeIgnoresStaleCleanStatus();
+testFormatCommitRelativeTime();
+testHasGitHistory();

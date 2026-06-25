@@ -94,11 +94,12 @@ export function createEmptyPromptOptimizeResponse(): PromptOptimizeResponse {
  *   用户关闭再打开 Workbench Prompt 优化浮层时，所有可见文本都必须清空。
  *
  * Code Logic（这个函数做什么）:
- *   忽略传入的旧状态，返回空输入、空中英文结果和空状态消息。
+ *   兼容可传入旧状态的调用点，但固定返回空输入、空中英文结果和空状态消息。
  */
 export function resetPromptOptimizerTextState(
-  _state?: PromptOptimizerTextState,
+  state?: PromptOptimizerTextState,
 ): PromptOptimizerTextState {
+  void state;
   return {
     input: '',
     result: createEmptyPromptOptimizeResponse(),
@@ -164,7 +165,7 @@ function shortcutValueFromEvent(event: PromptOptimizerShortcutEvent): string {
   const modifierOnly = MODIFIER_SHORTCUT_BY_KEY[event.key];
   if (modifierOnly) return modifierOnly;
 
-  let key = '';
+  let key: string;
   if (event.key === ' ' || event.key === 'Spacebar' || event.key === 'Space') {
     key = '<space>';
   } else if (/^F\d{1,2}$/i.test(event.key)) {

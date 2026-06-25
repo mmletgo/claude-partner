@@ -3,12 +3,12 @@
  *
  * Business Logic（为什么需要这个页面）:
  *   用户需要指定一个项目文件夹，并在 cc-partner 内为该项目同时管理多个项目终端；
- *   右侧检查器本期展示当前会话状态和可交互项目文件夹，下一期再接入文件预览。
+ *   右侧检查器展示当前会话状态，并可在项目文件夹与 Git 提交历史之间切换。
  *
  * Code Logic（这个页面做什么）:
  *   - 拉取/添加/移除工作台项目，并按当前项目加载会话与根目录文件树
  *   - 用 xterm 渲染当前 session，监听后端 terminal output/status 事件同步 UI
- *   - 提供文件夹展开、选中、创建、重命名、删除等基础文件树交互
+ *   - 提供文件夹展开、选中、创建、重命名、删除和 Git 提交历史查看等检查器交互
  *   - hooks 全部在 early return 之前，避免 React hooks 调用顺序问题
  */
 
@@ -44,6 +44,7 @@ import {
 import type {
   PromptOptimizerFillLanguage,
   WorkbenchFileNode,
+  WorkbenchGitCommit,
   WorkbenchPathInfo,
   WorkbenchSession,
   WorkbenchTerminalStatusEvent,
@@ -66,6 +67,8 @@ import type { TerminalLayoutMode } from './terminalSizing';
 import {
   activeWorktreeRootPath,
   canCommitWorktree,
+  formatCommitRelativeTime,
+  hasGitHistory,
   sessionsForWorktree,
   worktreeStatusTone,
 } from './workbenchWorktrees';
@@ -75,6 +78,8 @@ interface TauriInternalsWindow extends Window {
     transformCallback?: unknown;
   };
 }
+
+type WorkbenchInspectorTab = 'files' | 'history';
 
 interface FileTreeProps {
   nodes: WorkbenchFileNode[];
@@ -604,6 +609,10 @@ export function Workbench() {
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [newEntryName, setNewEntryName] = useState<string>('');
   const [renameName, setRenameName] = useState<string>('');
+  const [inspectorTab, setInspectorTab] = useState<WorkbenchInspectorTab>('files');
+  const [gitCommits, setGitCommits] = useState<WorkbenchGitCommit[]>([]);
+  const [gitHistoryLoading, setGitHistoryLoading] = useState<boolean>(false);
+  const [gitHistoryError, setGitHistoryError] = useState<string | null>(null);
   const [runtimeNow, setRuntimeNow] = useState<number>(() => Date.now());
   const [promptPanelOpen, setPromptPanelOpen] = useState<boolean>(false);
   const [promptInput, setPromptInput] = useState<string>('');
@@ -800,6 +809,44 @@ export function Workbench() {
     [desktopUnavailableMessage, t],
   );
 
+  const loadGitHistory = useCallback(async () => {
+    const projectId = activeProjectIdRef.current;
+    if (!projectId) {
+      setGitCommits([]);
+      setGitHistoryError(null);
+      setGitHistoryLoading(false);
+      return;
+    }
+    const worktreeId = activeWorktreeIdRef.current;
+    try {
+      setGitHistoryLoading(true);
+      setGitHistoryError(null);
+      const commits = await workbenchApi.git.listCommits(projectId, worktreeId, 30);
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
+      setGitCommits(commits);
+    } catch (error) {
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
+      setGitCommits([]);
+      setGitHistoryError(
+        displayErrorMessage(error, t('workbench:errors.gitHistory'), desktopUnavailableMessage),
+      );
+    } finally {
+      if (activeProjectIdRef.current === projectId && activeWorktreeIdRef.current === worktreeId) {
+        setGitHistoryLoading(false);
+      }
+    }
+  }, [desktopUnavailableMessage, t]);
+
   const loadPathInfo = useCallback(
     async (path: string) => {
       const projectId = activeProjectIdRef.current;
@@ -843,9 +890,11 @@ export function Workbench() {
   }, [sessions]);
 
   useEffect(() => {
-    setActiveSessionId((current) => {
-      if (current && scopedSessions.some((session) => session.id === current)) return current;
-      return scopedSessions[0]?.id ?? null;
+    return deferEffect(() => {
+      setActiveSessionId((current) => {
+        if (current && scopedSessions.some((session) => session.id === current)) return current;
+        return scopedSessions[0]?.id ?? null;
+      });
     });
   }, [scopedSessions]);
 
@@ -900,6 +949,8 @@ export function Workbench() {
         setExpandedPaths(new Set());
         setSelectedPath(null);
         setSelectedInfo(null);
+        setGitCommits([]);
+        setGitHistoryError(null);
         return;
       }
       setRootNodes([]);
@@ -911,6 +962,8 @@ export function Workbench() {
       setSelectedPath(null);
       setSelectedInfo(null);
       setFileNotice(null);
+      setGitCommits([]);
+      setGitHistoryError(null);
       void loadWorktrees(activeProjectId);
       void loadSessions(activeProjectId);
     });
@@ -924,11 +977,20 @@ export function Workbench() {
       setSelectedPath(null);
       setSelectedInfo(null);
       setFileNotice(null);
+      setGitCommits([]);
+      setGitHistoryError(null);
       if (activeProjectId && activeWorktreeId) {
         void loadDir('');
       }
     });
   }, [activeProjectId, activeWorktreeId, loadDir]);
+
+  useEffect(() => {
+    if (inspectorTab !== 'history') return undefined;
+    return deferEffect(() => {
+      void loadGitHistory();
+    });
+  }, [activeProjectId, activeWorktreeId, inspectorTab, loadGitHistory]);
 
   useEffect(() => {
     if (!canListenToTauriEvents()) return undefined;
@@ -1244,6 +1306,7 @@ export function Workbench() {
       setWorktreeError(null);
       await workbenchApi.worktrees.commit(activeWorktree.id, null);
       await loadWorktrees(activeWorktree.projectId);
+      if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.commitWorktree'), desktopUnavailableMessage),
@@ -1251,7 +1314,7 @@ export function Workbench() {
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+  }, [activeWorktree, desktopUnavailableMessage, inspectorTab, loadGitHistory, loadWorktrees, t]);
 
   const handlePushWorktree = useCallback(async () => {
     if (!activeWorktree) return;
@@ -1260,6 +1323,7 @@ export function Workbench() {
       setWorktreeError(null);
       await workbenchApi.worktrees.push(activeWorktree.id);
       await loadWorktrees(activeWorktree.projectId);
+      if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.pushWorktree'), desktopUnavailableMessage),
@@ -1267,7 +1331,7 @@ export function Workbench() {
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+  }, [activeWorktree, desktopUnavailableMessage, inspectorTab, loadGitHistory, loadWorktrees, t]);
 
   const handleMergeWorktree = useCallback(async () => {
     if (!activeWorktree || activeWorktree.isMain) return;
@@ -1279,6 +1343,7 @@ export function Workbench() {
       setWorktreeError(null);
       await workbenchApi.worktrees.merge(activeWorktree.id);
       await loadWorktrees(activeWorktree.projectId);
+      if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.mergeWorktree'), desktopUnavailableMessage),
@@ -1286,7 +1351,7 @@ export function Workbench() {
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+  }, [activeWorktree, desktopUnavailableMessage, inspectorTab, loadGitHistory, loadWorktrees, t]);
 
   const handleRemoveWorktree = useCallback(async () => {
     if (!activeWorktree || activeWorktree.isMain) return;
@@ -1889,132 +1954,200 @@ export function Workbench() {
           </div>
         </Card>
 
-        <Card className={styles.filesCard} padding="sm">
-          <div className={styles.cardTitleRow}>
-            <h3 className={styles.cardTitle}>{t('workbench:filesTitle')}</h3>
-            <Button
-              variant="icon"
-              icon={<SyncIcon />}
-              title={t('workbench:refreshFiles')}
-              aria-label={t('workbench:refreshFiles')}
-              disabled={!activeProjectId}
-              onClick={() => void loadDir('')}
-            />
-          </div>
+        <div className={styles.inspectorTabs} role="tablist" aria-label={t('workbench:inspectorTabs')}>
+          <button
+            type="button"
+            className={styles.inspectorTab}
+            data-active={inspectorTab === 'files' || undefined}
+            role="tab"
+            aria-selected={inspectorTab === 'files'}
+            onClick={() => setInspectorTab('files')}
+          >
+            {t('workbench:filesTitle')}
+          </button>
+          <button
+            type="button"
+            className={styles.inspectorTab}
+            data-active={inspectorTab === 'history' || undefined}
+            role="tab"
+            aria-selected={inspectorTab === 'history'}
+            onClick={() => setInspectorTab('history')}
+          >
+            {t('workbench:gitHistoryTitle')}
+          </button>
+        </div>
 
-          {fileError ? <div className={styles.errorBox}>{fileError}</div> : null}
-          {fileNotice ? <div className={styles.noticeBox}>{fileNotice}</div> : null}
-
-          <div className={styles.fileActions}>
-            <Input
-              value={newEntryName}
-              onChange={(event) => setNewEntryName(event.target.value)}
-              placeholder={t('workbench:newEntryPlaceholder')}
-              size="sm"
-            />
-            <div className={styles.fileActionButtons}>
+        {inspectorTab === 'files' ? (
+          <Card className={styles.filesCard} padding="sm">
+            <div className={styles.cardTitleRow}>
+              <h3 className={styles.cardTitle}>{t('workbench:filesTitle')}</h3>
               <Button
-                size="sm"
-                variant="secondary"
-                icon={<FileIcon />}
-                disabled={!activeProjectId || !newEntryName.trim()}
-                onClick={() => void handleCreateEntry('file')}
-              >
-                {t('workbench:createFile')}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<FolderIcon />}
-                disabled={!activeProjectId || !newEntryName.trim()}
-                onClick={() => void handleCreateEntry('dir')}
-              >
-                {t('workbench:createFolder')}
-              </Button>
-            </div>
-          </div>
-
-          <div className={styles.treePanel}>
-            {!activeProjectId ? (
-              <div className={styles.treeEmpty}>{t('workbench:filesNoProject')}</div>
-            ) : rootNodes.length === 0 && fileLoadingPath === '' ? (
-              <div className={styles.treeEmpty}>{t('workbench:loading')}</div>
-            ) : rootNodes.length === 0 ? (
-              <div className={styles.treeEmpty}>{t('workbench:filesEmpty')}</div>
-            ) : (
-              <FileTree
-                nodes={rootNodes}
-                childrenByPath={childrenByPath}
-                expandedPaths={expandedPaths}
-                selectedPath={selectedPath}
-                loadingPath={fileLoadingPath}
-                onToggle={handleToggleNode}
-                onSelect={handleSelectNode}
+                variant="icon"
+                icon={<SyncIcon />}
+                title={t('workbench:refreshFiles')}
+                aria-label={t('workbench:refreshFiles')}
+                disabled={!activeProjectId}
+                onClick={() => void loadDir('')}
               />
-            )}
-          </div>
-
-          <div className={styles.pathInfo}>
-            <div className={styles.pathInfoHeader}>
-              <span className={styles.pathInfoName}>{basename(selectedDisplayPath, rootPath)}</span>
-              <span className={styles.pathInfoPath}>{selectedDisplayPath || emptyValue}</span>
             </div>
-            <dl className={styles.pathInfoGrid}>
-              <div>
-                <dt>{t('workbench:pathKind')}</dt>
-                <dd>{selectedKindLabel}</dd>
-              </div>
-              <div>
-                <dt>{t('workbench:pathSize')}</dt>
-                <dd>{formatSize(selectedInfo?.size ?? null, emptyValue)}</dd>
-              </div>
-              <div>
-                <dt>{t('workbench:pathModified')}</dt>
-                <dd>{formatDateTime(selectedInfo?.modifiedAt ?? null, emptyValue)}</dd>
-              </div>
-              <div>
-                <dt>{t('workbench:pathParent')}</dt>
-                <dd>{selectedParentPath || rootPath}</dd>
-              </div>
-            </dl>
-            <div className={styles.renameRow}>
+
+            {fileError ? <div className={styles.errorBox}>{fileError}</div> : null}
+            {fileNotice ? <div className={styles.noticeBox}>{fileNotice}</div> : null}
+
+            <div className={styles.fileActions}>
               <Input
-                value={renameName}
-                onChange={(event) => setRenameName(event.target.value)}
-                placeholder={t('workbench:renamePlaceholder')}
+                value={newEntryName}
+                onChange={(event) => setNewEntryName(event.target.value)}
+                placeholder={t('workbench:newEntryPlaceholder')}
                 size="sm"
-                disabled={!selectedInfo}
               />
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<CopyIcon />}
-                disabled={!selectedInfo}
-                onClick={() => void handleCopySelectedPath()}
-              >
-                {t('workbench:copyRelativePath')}
-              </Button>
-              <Button
-                size="sm"
-                variant="secondary"
-                icon={<EditIcon />}
-                disabled={!selectedInfo || !renameName.trim()}
-                onClick={() => void handleRenamePath()}
-              >
-                {t('workbench:rename')}
-              </Button>
-              <Button
-                size="sm"
-                variant="danger"
-                icon={<TrashIcon />}
-                disabled={!selectedInfo}
-                onClick={() => void handleDeletePath()}
-              >
-                {t('workbench:delete')}
-              </Button>
+              <div className={styles.fileActionButtons}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<FileIcon />}
+                  disabled={!activeProjectId || !newEntryName.trim()}
+                  onClick={() => void handleCreateEntry('file')}
+                >
+                  {t('workbench:createFile')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<FolderIcon />}
+                  disabled={!activeProjectId || !newEntryName.trim()}
+                  onClick={() => void handleCreateEntry('dir')}
+                >
+                  {t('workbench:createFolder')}
+                </Button>
+              </div>
             </div>
-          </div>
-        </Card>
+
+            <div className={styles.treePanel}>
+              {!activeProjectId ? (
+                <div className={styles.treeEmpty}>{t('workbench:filesNoProject')}</div>
+              ) : rootNodes.length === 0 && fileLoadingPath === '' ? (
+                <div className={styles.treeEmpty}>{t('workbench:loading')}</div>
+              ) : rootNodes.length === 0 ? (
+                <div className={styles.treeEmpty}>{t('workbench:filesEmpty')}</div>
+              ) : (
+                <FileTree
+                  nodes={rootNodes}
+                  childrenByPath={childrenByPath}
+                  expandedPaths={expandedPaths}
+                  selectedPath={selectedPath}
+                  loadingPath={fileLoadingPath}
+                  onToggle={handleToggleNode}
+                  onSelect={handleSelectNode}
+                />
+              )}
+            </div>
+
+            <div className={styles.pathInfo}>
+              <div className={styles.pathInfoHeader}>
+                <span className={styles.pathInfoName}>{basename(selectedDisplayPath, rootPath)}</span>
+                <span className={styles.pathInfoPath}>{selectedDisplayPath || emptyValue}</span>
+              </div>
+              <dl className={styles.pathInfoGrid}>
+                <div>
+                  <dt>{t('workbench:pathKind')}</dt>
+                  <dd>{selectedKindLabel}</dd>
+                </div>
+                <div>
+                  <dt>{t('workbench:pathSize')}</dt>
+                  <dd>{formatSize(selectedInfo?.size ?? null, emptyValue)}</dd>
+                </div>
+                <div>
+                  <dt>{t('workbench:pathModified')}</dt>
+                  <dd>{formatDateTime(selectedInfo?.modifiedAt ?? null, emptyValue)}</dd>
+                </div>
+                <div>
+                  <dt>{t('workbench:pathParent')}</dt>
+                  <dd>{selectedParentPath || rootPath}</dd>
+                </div>
+              </dl>
+              <div className={styles.renameRow}>
+                <Input
+                  value={renameName}
+                  onChange={(event) => setRenameName(event.target.value)}
+                  placeholder={t('workbench:renamePlaceholder')}
+                  size="sm"
+                  disabled={!selectedInfo}
+                />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<CopyIcon />}
+                  disabled={!selectedInfo}
+                  onClick={() => void handleCopySelectedPath()}
+                >
+                  {t('workbench:copyRelativePath')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  icon={<EditIcon />}
+                  disabled={!selectedInfo || !renameName.trim()}
+                  onClick={() => void handleRenamePath()}
+                >
+                  {t('workbench:rename')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="danger"
+                  icon={<TrashIcon />}
+                  disabled={!selectedInfo}
+                  onClick={() => void handleDeletePath()}
+                >
+                  {t('workbench:delete')}
+                </Button>
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <Card className={styles.historyCard} padding="sm">
+            <div className={styles.cardTitleRow}>
+              <h3 className={styles.cardTitle}>{t('workbench:gitHistoryTitle')}</h3>
+              <Button
+                variant="icon"
+                icon={<SyncIcon />}
+                title={t('workbench:refreshGitHistory')}
+                aria-label={t('workbench:refreshGitHistory')}
+                disabled={!activeProjectId || gitHistoryLoading}
+                onClick={() => void loadGitHistory()}
+              />
+            </div>
+
+            {gitHistoryError ? <div className={styles.errorBox}>{gitHistoryError}</div> : null}
+
+            <div className={styles.historyPanel}>
+              {!activeProjectId ? (
+                <div className={styles.treeEmpty}>{t('workbench:gitHistoryNoProject')}</div>
+              ) : gitHistoryLoading ? (
+                <div className={styles.treeEmpty}>{t('workbench:gitHistoryLoading')}</div>
+              ) : !hasGitHistory(gitCommits) ? (
+                <div className={styles.treeEmpty}>{t('workbench:gitHistoryEmpty')}</div>
+              ) : (
+                <div className={styles.commitList}>
+                  {gitCommits.map((commit) => (
+                    <article key={commit.hash} className={styles.commitItem}>
+                      <div className={styles.commitHeader}>
+                        <span className={styles.commitHash}>{commit.shortHash}</span>
+                        <span className={styles.commitTime}>
+                          {formatCommitRelativeTime(commit.authoredAt, emptyValue)}
+                        </span>
+                      </div>
+                      <div className={styles.commitSummary}>{commit.summary || emptyValue}</div>
+                      <div className={styles.commitMeta}>
+                        {commit.authorName || commit.authorEmail || emptyValue}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
       </aside>
     </div>
   );

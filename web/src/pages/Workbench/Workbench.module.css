@@ -71,8 +71,43 @@
 }
 
 .statusCard,
-.filesCard {
+.filesCard,
+.historyCard {
   flex: 0 0 auto;
+}
+
+.inspectorTabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-1);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: var(--space-1);
+  background: var(--bg);
+}
+
+.inspectorTab {
+  min-width: 0;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  transition: all var(--motion-fast) var(--ease-standard);
+}
+
+.inspectorTab:hover {
+  background: color-mix(in oklab, var(--accent) 6%, transparent);
+  color: var(--fg);
+}
+
+.inspectorTab[data-active='true'] {
+  background: var(--surface);
+  color: var(--fg);
+  box-shadow: var(--shadow-xs);
 }
 
 .fileActions,
@@ -577,6 +612,14 @@
   gap: var(--space-3);
 }
 
+.historyCard {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
 .treePanel {
   min-height: 220px;
   max-height: 42vh;
@@ -584,6 +627,70 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--surface);
+}
+
+.historyPanel {
+  min-height: 220px;
+  max-height: 54vh;
+  overflow: auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.commitList {
+  display: flex;
+  flex-direction: column;
+}
+
+.commitItem {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  border-bottom: 1px solid var(--border-soft);
+  padding: var(--space-3);
+}
+
+.commitItem:last-child {
+  border-bottom: 0;
+}
+
+.commitHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.commitHash {
+  min-width: 0;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.commitTime,
+.commitMeta {
+  color: var(--meta);
+  font-size: var(--text-xs);
+}
+
+.commitSummary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.commitMeta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .treeList {

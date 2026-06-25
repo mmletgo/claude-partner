@@ -8,7 +8,7 @@
 //!     封装系统 git CLI 调用、worktree/status 输出解析和工作台专用 worktree 路径生成。
 
 use crate::error::AppError;
-use crate::workbench::models::WorkbenchGitStatusDto;
+use crate::workbench::models::{WorkbenchGitCommitDto, WorkbenchGitStatusDto};
 use std::path::Path;
 use std::process::Command;
 
@@ -109,6 +109,34 @@ pub fn list_worktrees(repo_path: &Path, main_path: &str) -> Result<Vec<ParsedWor
 pub fn status(path: &Path) -> Result<WorkbenchGitStatusDto, AppError> {
     let output = run_git(path, &["status", "--porcelain", "--branch"])?;
     Ok(parse_status_porcelain(&output))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 右侧 Git 历史 tab 需要读取当前 active worktree 的最近提交。
+///
+/// Code Logic（这个函数做什么）:
+///     先确认目录是 Git 工作区；空仓库没有 HEAD 时返回空列表，否则执行 `git log` 并解析为 DTO。
+pub fn list_commits(path: &Path, limit: usize) -> Result<Vec<WorkbenchGitCommitDto>, AppError> {
+    run_git(path, &["rev-parse", "--is-inside-work-tree"])?;
+    let head = Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(path)
+        .output()?;
+    if !head.status.success() {
+        return Ok(Vec::new());
+    }
+    let safe_limit = limit.clamp(1, 100).to_string();
+    let output = run_git(
+        path,
+        &[
+            "log",
+            "--date=iso-strict",
+            "-n",
+            &safe_limit,
+            "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s",
+        ],
+    )?;
+    Ok(parse_git_log_output(&output))
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -418,6 +446,31 @@ pub fn parse_status_porcelain(output: &str) -> WorkbenchGitStatusDto {
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     Git log 原始文本不适合直接给 UI；右侧历史 tab 需要结构化提交项。
+///
+/// Code Logic（这个函数做什么）:
+///     按行读取，每行用 ASCII unit separator 拆成 6 个字段；字段不足的异常行跳过。
+pub fn parse_git_log_output(output: &str) -> Vec<WorkbenchGitCommitDto> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let fields = line.split('\x1f').collect::<Vec<_>>();
+            if fields.len() < 6 {
+                return None;
+            }
+            Some(WorkbenchGitCommitDto {
+                hash: fields[0].to_string(),
+                short_hash: fields[1].to_string(),
+                author_name: fields[2].to_string(),
+                author_email: fields[3].to_string(),
+                authored_at: fields[4].to_string(),
+                summary: fields[5].to_string(),
+            })
+        })
+        .collect()
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     用户输入的 Git 分支名会被用于本机目录名，需要转成稳定且可读的安全 slug。
 ///
 /// Code Logic（这个函数做什么）:
@@ -671,6 +724,73 @@ UU web/src/App.tsx
         let err = sanitize_commit_message("```text\n   \n```").expect_err("empty message");
 
         assert!(err.to_string().contains("Commit message 不能为空"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     右侧 Git 历史 tab 需要稳定解析 git log 输出，避免把原始文本直接交给前端。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造带字段分隔符的 git log 输出，断言解析出完整 hash、短 hash、作者、时间和标题。
+    #[test]
+    fn parse_git_log_output_extracts_commit_history_items() {
+        let output = "abcdef123456\x1fabcdef1\x1fAlice\x1fa@example.com\x1f2026-06-25T10:00:00+08:00\x1ffeat: add history\n";
+
+        let commits = parse_git_log_output(output);
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].hash, "abcdef123456");
+        assert_eq!(commits[0].short_hash, "abcdef1");
+        assert_eq!(commits[0].author_name, "Alice");
+        assert_eq!(commits[0].author_email, "a@example.com");
+        assert_eq!(commits[0].authored_at, "2026-06-25T10:00:00+08:00");
+        assert_eq!(commits[0].summary, "feat: add history");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     Git 历史 tab 必须读取 active worktree 的真实提交历史，且按 limit 控制数量。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建真实 Git 仓库和两个提交，断言 list_commits 只返回最近一条。
+    #[test]
+    fn list_commits_reads_recent_commits_with_limit() {
+        let root = temp_git_dir("workbench-git-history");
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "one\n").expect("write first");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "feat: first"]);
+        fs::write(repo.join("README.md"), "two\n").expect("write second");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "fix: second"]);
+
+        let commits = list_commits(&repo, 1).expect("list commits");
+
+        assert_eq!(commits.len(), 1);
+        assert_eq!(commits[0].summary, "fix: second");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     新建 Git 仓库尚无提交时，Git 历史 tab 应显示空态而不是错误提示。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     初始化空仓库但不创建提交，断言 list_commits 返回空列表。
+    #[test]
+    fn list_commits_returns_empty_for_unborn_branch() {
+        let root = temp_git_dir("workbench-git-empty-history");
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+
+        let commits = list_commits(&repo, 30).expect("list empty commits");
+
+        assert!(commits.is_empty());
+
+        let _ = fs::remove_dir_all(root);
     }
 
     /// Business Logic（为什么需要这个函数）:

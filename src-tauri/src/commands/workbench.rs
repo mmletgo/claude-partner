@@ -13,8 +13,9 @@ use crate::claude_cli;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::workbench::models::{
-    WorkbenchFileNode, WorkbenchGitStatusDto, WorkbenchPathInfo, WorkbenchProjectDto,
-    WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchWorktreeDto, WorkbenchWorktreeRow,
+    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchGitStatusDto, WorkbenchPathInfo,
+    WorkbenchProjectDto, WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchWorktreeDto,
+    WorkbenchWorktreeRow,
 };
 use crate::workbench::sessions::{
     kill_persisted_backend, pane_count_for_row, PaneCloseOutcome, PaneSplitDirection,
@@ -655,6 +656,26 @@ pub async fn remove_workbench_worktree(
     )?;
     state.workbench_worktree_repo.delete(&worktree_id).await?;
     Ok(serde_json::json!({ "ok": true, "worktreeId": worktree_id }))
+}
+
+/// 列出当前 worktree 的最近 Git 提交。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 右侧 Git 历史 tab 需要展示 active worktree 的提交历史，辅助用户确认 commit/merge 结果。
+///
+/// Code Logic（这个函数做什么）:
+///     解析 project/worktree 根路径，按 limit 调用 `git log` helper；limit 默认 30，最大 100。
+#[tauri::command]
+pub async fn list_workbench_git_commits(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<WorkbenchGitCommitDto>, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let limit = limit.unwrap_or(30).clamp(1, 100);
+    workbench_git::list_commits(Path::new(&worktree.path), limit)
 }
 
 /// 列出工作台终端会话。

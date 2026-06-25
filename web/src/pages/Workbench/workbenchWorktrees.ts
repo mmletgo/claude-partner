@@ -64,3 +64,37 @@ export function canCommitWorktree(
 ): boolean {
   return activeWorktree !== null && worktreeBusy === null;
 }
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 历史 tab 中每条提交需要紧凑时间标识，便于在窄侧栏内扫描最近提交。
+ *
+ * Code Logic（这个函数做什么）:
+ *   1 分钟内显示 now，1 小时内显示 Xm，24 小时内显示 Xh，更早显示 YYYY-MM-DD。
+ */
+export function formatCommitRelativeTime(
+  authoredAt: string,
+  emptyValue: string,
+  now = new Date(),
+): string {
+  const date = new Date(authoredAt);
+  if (Number.isNaN(date.getTime())) return emptyValue;
+  const diffMs = Math.max(0, now.getTime() - date.getTime());
+  const diffMinutes = Math.floor(diffMs / 60_000);
+  if (diffMinutes < 1) return 'now';
+  if (diffMinutes < 60) return `${diffMinutes}m`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h`;
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 历史 tab 需要区分空提交历史与加载失败，显示不同空态。
+ *
+ * Code Logic（这个函数做什么）:
+ *   对任意包含 length 的数组式列表做非空判断，便于测试和 UI 复用。
+ */
+export function hasGitHistory(commits: Array<unknown>): boolean {
+  return commits.length > 0;
+}

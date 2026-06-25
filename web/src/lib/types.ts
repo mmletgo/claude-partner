@@ -300,6 +300,24 @@ export interface WorkbenchWorktree {
   updatedAt: string;
 }
 
+/**
+ * 工作台 Git 提交历史项。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   右侧 Git 历史 tab 需要展示当前 active worktree 的最近提交，辅助确认 commit/merge 结果。
+ *
+ * Code Logic（字段说明）:
+ *   hash/shortHash 来自 git log；authoredAt 为 ISO 字符串，前端负责格式化显示。
+ */
+export interface WorkbenchGitCommit {
+  hash: string;
+  shortHash: string;
+  authorName: string;
+  authorEmail: string;
+  authoredAt: string;
+  summary: string;
+}
+
 /** 工作台终端会话状态。 */
 export type WorkbenchSessionStatus = 'running' | 'exited' | 'disconnected' | string;
 

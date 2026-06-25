@@ -13,6 +13,7 @@
 import { invoke } from './client';
 import type {
   WorkbenchFileNode,
+  WorkbenchGitCommit,
   WorkbenchPathInfo,
   WorkbenchProject,
   WorkbenchSession,
@@ -77,6 +78,16 @@ export const workbenchApi = {
       invoke<{ ok: boolean; worktreeId: string }>('remove_workbench_worktree', {
         worktreeId,
         force,
+      }),
+  },
+
+  git: {
+    /** 列出当前 worktree 最近 Git 提交历史。 */
+    listCommits: (projectId: string, worktreeId?: string | null, limit = 30) =>
+      invoke<WorkbenchGitCommit[]>('list_workbench_git_commits', {
+        projectId,
+        worktreeId: worktreeId ?? null,
+        limit,
       }),
   },
 

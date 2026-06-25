@@ -70,6 +70,24 @@ pub struct WorkbenchGitStatusDto {
     pub clean: bool,
 }
 
+/// Git 提交历史项 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Workbench 右侧 Git 历史 tab 需要展示 active worktree 的最近提交。
+///
+/// Code Logic（这个结构体做什么）:
+///     表达 `git log` 的单条提交摘要，字段使用 camelCase 序列化给前端。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchGitCommitDto {
+    pub hash: String,
+    pub short_hash: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub authored_at: String,
+    pub summary: String,
+}
+
 /// 工作台 Git worktree 数据库行模型。
 ///
 /// Business Logic（为什么需要这个结构体）:
