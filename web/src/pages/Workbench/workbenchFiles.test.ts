@@ -29,6 +29,11 @@ function assert(condition: boolean, message: string): void {
 async function main(): Promise<void> {
   assert(detectWorkbenchFileType('README.md', null) === 'markdown', 'markdown extension detected');
   assert(detectWorkbenchFileType('README.mdx', null) === 'markdown', 'mdx extension detected as markdown');
+  assert(detectWorkbenchFileType('Makefile', null) === 'code', 'Makefile detected as code');
+  assert(detectWorkbenchFileType('Dockerfile', null) === 'code', 'Dockerfile detected as code');
+  assert(detectWorkbenchFileType('README', null) === 'text', 'README without extension detected as text');
+  assert(detectWorkbenchFileType('LICENSE', null) === 'text', 'LICENSE without extension detected as text');
+  assert(detectWorkbenchFileType('.npmrc', null) === 'text', '.npmrc detected as text');
   assert(detectWorkbenchFileType('src/App.tsx', null) === 'code', 'tsx extension detected as code');
   assert(detectWorkbenchFileType('src/index.mjs', null) === 'code', 'mjs extension detected as code');
   assert(detectWorkbenchFileType('data.csv', null) === 'csv', 'csv extension detected');

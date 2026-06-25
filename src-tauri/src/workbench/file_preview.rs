@@ -333,8 +333,8 @@ fn csv_error(err: csv::Error) -> AppError {
 ///     CSV 是否带 header 不能交给 csv crate 默认值，否则无 header 文件会丢第一行数据。
 ///
 /// Code Logic（这个函数做什么）:
-///     根据首行判断 header 策略：全空首行作为空 header 排除；明显 header 作为列名；
-///     否则生成 fallback columns 且从第一行开始展示数据。
+///     根据首行和第二行判断 header 策略：全空首行作为空 header 排除；首行像列名且第二行有数据特征时
+///     才把首行作为列名；否则生成 fallback columns 且从第一行开始展示数据。
 fn csv_columns_and_data_start(records: &[Vec<String>], max_width: usize) -> (Vec<String>, usize) {
     let Some(first_row) = records.first() else {
         return (Vec::new(), 0);
@@ -344,7 +344,7 @@ fn csv_columns_and_data_start(records: &[Vec<String>], max_width: usize) -> (Vec
         return (fallback_columns(max_width), 1);
     }
 
-    if is_obvious_header_row(first_row) {
+    if is_obvious_header_row(first_row, records.get(1)) {
         return (columns_from_header_row(first_row, max_width), 1);
     }
 
@@ -361,26 +361,90 @@ fn is_empty_csv_row(row: &[String]) -> bool {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     CSV 第一行只有在明显像列名时才能作为 header，否则应保留为数据行。
+///     CSV 第一行只有在明显像列名且下一行明显像数据时才能作为 header，否则应保留为数据行。
 ///
 /// Code Logic（这个函数做什么）:
-///     要求每列非空、每列都不像纯数字，并且每列都包含字母或下划线这类列名信号。
-fn is_obvious_header_row(row: &[String]) -> bool {
-    !row.is_empty() && row.iter().all(|value| is_obvious_header_cell(value))
+///     要求首行每列都是 identifier-ish 列名，并且第二行至少一个字段呈现数字、布尔、日期时间或自然文本特征。
+fn is_obvious_header_row(row: &[String], next_row: Option<&Vec<String>>) -> bool {
+    !row.is_empty()
+        && row.iter().all(|value| is_header_name_cell(value))
+        && next_row
+            .map(|values| values.iter().any(|value| is_obvious_data_cell(value)))
+            .unwrap_or(false)
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     header heuristic 需要区分 `id,name` 与 `1,2`，减少静默丢数据风险。
+///     header heuristic 需要区分 `id,name` 与 `1,2`，同时允许 `created at` 这类常见列名。
 ///
 /// Code Logic（这个函数做什么）:
-///     trim 后拒绝空值和可解析数字；剩余内容必须包含 Unicode 字母或下划线。
-fn is_obvious_header_cell(value: &str) -> bool {
+///     trim 后拒绝空值、数字、布尔和日期时间；剩余内容必须包含字母或下划线，且只含列名常见字符。
+fn is_header_name_cell(value: &str) -> bool {
     let trimmed = value.trim();
     !trimmed.is_empty()
-        && trimmed.parse::<f64>().is_err()
+        && !is_number_cell(trimmed)
+        && !is_boolean_cell(trimmed)
+        && !is_date_or_time_cell(trimmed)
         && trimmed
             .chars()
             .any(|character| character.is_alphabetic() || character == '_')
+        && trimmed.chars().all(|character| {
+            character.is_alphanumeric()
+                || matches!(character, '_' | '-' | ' ')
+                || character.is_whitespace()
+        })
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     CSV header 判断需要第二行提供数据证据，避免 `Ada,Lovelace` 被误删为列名。
+///
+/// Code Logic（这个函数做什么）:
+///     识别数字、布尔、日期时间，以及包含空白的自然文本作为明显数据单元格。
+fn is_obvious_data_cell(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && (is_number_cell(trimmed)
+            || is_boolean_cell(trimmed)
+            || is_date_or_time_cell(trimmed)
+            || is_natural_text_cell(trimmed))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     数字数据是区分 header 与 rows 的强信号，例如 `id,name` 下一行的 `1,Ada`。
+///
+/// Code Logic（这个函数做什么）:
+///     使用 Rust 数字解析判断 trim 后字段是否为浮点或整数字面量。
+fn is_number_cell(value: &str) -> bool {
+    value.parse::<f64>().is_ok()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     布尔值常见于 CSV 数据行，不应被误当成列名。
+///
+/// Code Logic（这个函数做什么）:
+///     对 `true` / `false` 做 ASCII 大小写不敏感匹配。
+fn is_boolean_cell(value: &str) -> bool {
+    value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("false")
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     日期时间字段常作为数据出现，能帮助 `created at` 这类 header 被正确识别。
+///
+/// Code Logic（这个函数做什么）:
+///     保守识别包含数字且带日期/时间分隔符的字段，避免普通英文列名触发。
+fn is_date_or_time_cell(value: &str) -> bool {
+    value.chars().any(|character| character.is_ascii_digit())
+        && value
+            .chars()
+            .any(|character| matches!(character, '-' | '/' | ':'))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     第二行出现 `Ada Lovelace` 这类带空格自然文本时，首行更可能是真实 header。
+///
+/// Code Logic（这个函数做什么）:
+///     判断字段是否同时包含字母和空白字符。
+fn is_natural_text_cell(value: &str) -> bool {
+    value.chars().any(char::is_alphabetic) && value.chars().any(char::is_whitespace)
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -590,6 +654,30 @@ mod tests {
             vec![
                 vec!["1".to_string(), "2".to_string()],
                 vec!["3".to_string(), "4".to_string()],
+            ]
+        );
+        assert!(!preview.truncated);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     无 header 的纯文本 CSV 同样不能把第一行人名误判为表头，否则会静默丢用户数据。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     写入两行纯文本 CSV，断言使用 fallback columns 且 rows 从第一行开始展示。
+    #[test]
+    fn preview_csv_file_keeps_text_first_row_when_header_is_ambiguous() {
+        let dir = temp_dir();
+        let path = dir.path().join("names.csv");
+        fs::write(&path, "Ada,Lovelace\nGrace,Hopper\n").expect("write csv");
+
+        let preview = preview_csv_file(&path, 10).expect("preview csv");
+
+        assert_eq!(preview.columns, vec!["column_1", "column_2"]);
+        assert_eq!(
+            preview.rows,
+            vec![
+                vec!["Ada".to_string(), "Lovelace".to_string()],
+                vec!["Grace".to_string(), "Hopper".to_string()],
             ]
         );
         assert!(!preview.truncated);
