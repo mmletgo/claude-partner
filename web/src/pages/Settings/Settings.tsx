@@ -22,7 +22,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useSearchParams } from 'react-router-dom';
 import { Card, Button, Input, Pill } from '@/components/primitives';
-import { PermissionCard } from '@/components/domain';
+import { PermissionCard, WorkbenchDependencyCard } from '@/components/domain';
 import { CheckIcon, XIcon, DevicesIcon, FolderIcon, KeyboardIcon, SyncIcon, InfoIcon, DownloadIcon } from '@/lib/icons';
 import { configApi } from '@/api/config';
 import { healthApi } from '@/api/health';
@@ -69,7 +69,7 @@ import type {
 import styles from './Settings.module.css';
 
 /** Settings 页内子 tab id */
-type SettingsTabId = 'general' | 'health' | 'sync' | 'ai' | 'about';
+type SettingsTabId = 'general' | 'dependencies' | 'health' | 'sync' | 'ai' | 'about';
 
 /** Settings 页内子 tab 定义 */
 interface SettingsTab {
@@ -80,6 +80,7 @@ interface SettingsTab {
 /** Settings 页内子 tab 顺序：按用户查看任务组织，而不是按底层配置来源组织 */
 const SETTINGS_TABS: SettingsTab[] = [
   { id: 'general', labelKey: 'general' },
+  { id: 'dependencies', labelKey: 'dependencies' },
   { id: 'health', labelKey: 'health' },
   { id: 'sync', labelKey: 'sync' },
   { id: 'ai', labelKey: 'ai' },
@@ -144,7 +145,11 @@ export function Settings() {
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab');
   const [activeTab, setActiveTab] = useState<SettingsTabId>(
-    initialTab === 'health' || initialTab === 'sync' || initialTab === 'ai' || initialTab === 'about'
+    initialTab === 'dependencies' ||
+      initialTab === 'health' ||
+      initialTab === 'sync' ||
+      initialTab === 'ai' ||
+      initialTab === 'about'
       ? (initialTab as SettingsTabId)
       : 'general',
   );
@@ -972,6 +977,17 @@ export function Settings() {
               applying={applyingHealth}
               error={healthError}
             />
+          </div>
+        ) : null}
+
+        {activeTab === 'dependencies' ? (
+          <div
+            id="settings-panel-dependencies"
+            className={styles.tabPanel}
+            role="tabpanel"
+            aria-labelledby="settings-tab-dependencies"
+          >
+            <WorkbenchDependencyCard />
           </div>
         ) : null}
 

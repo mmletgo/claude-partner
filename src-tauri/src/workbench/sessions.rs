@@ -10,6 +10,7 @@
 #![allow(dead_code)]
 
 use crate::error::AppError;
+use crate::workbench::dependencies::{available_tmux_command, TmuxCommand};
 use crate::workbench::models::{WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchSessionRow};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 use serde::Serialize;
@@ -17,7 +18,6 @@ use std::collections::HashMap;
 use std::ffi::OsString;
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
-use std::process::Command as StdCommand;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -33,19 +33,6 @@ const TMUX_BACKEND: &str = "tmux";
 const FALLBACK_TERMINAL_COMMAND: &str = "cmd.exe";
 #[cfg(not(windows))]
 const FALLBACK_TERMINAL_COMMAND: &str = "/bin/sh";
-
-/// tmux 工作目录路径模式。
-///
-/// Business Logic（为什么需要这个枚举）:
-///     Windows 上的 tmux 运行在 WSL 内部，不能直接识别宿主 Windows 盘符路径。
-///
-/// Code Logic（这个枚举做什么）:
-///     标记 tmux 命令应使用原生项目路径，还是先把 Windows 项目路径转换为 WSL mount 路径。
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum TmuxCwdMode {
-    Native,
-    Wsl,
-}
 
 /// tmux pane 分屏方向。
 ///
@@ -129,126 +116,6 @@ fn pane_count_from_tmux_output(output: &str) -> usize {
         .lines()
         .filter(|line| !line.trim().is_empty())
         .count()
-}
-
-/// 可用 tmux 命令描述。
-///
-/// Business Logic（为什么需要这个结构体）:
-///     工作台需要在 macOS/Linux 调用原生 tmux，也需要在 Windows 复用 WSL 中的 tmux 来保留终端上下文。
-///
-/// Code Logic（这个结构体做什么）:
-///     保存可执行程序、固定前缀参数和 cwd 路径模式，统一生成 std::process::Command 与 portable-pty CommandBuilder。
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct TmuxCommand {
-    program: String,
-    prefix_args: Vec<String>,
-    cwd_mode: TmuxCwdMode,
-}
-
-impl TmuxCommand {
-    /// Business Logic（为什么需要这个函数）:
-    ///     macOS/Linux 上的 tmux 可以直接用原生命令执行，并使用项目的原生文件系统路径。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     构造无固定前缀参数、cwd 模式为 Native 的 tmux 命令描述。
-    fn native(program: impl Into<String>) -> Self {
-        Self {
-            program: program.into(),
-            prefix_args: Vec::new(),
-            cwd_mode: TmuxCwdMode::Native,
-        }
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     Windows 用户可把 tmux 安装在 WSL 中，工作台应通过 wsl.exe 调用它以获得可恢复上下文。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     构造 `wsl.exe --exec tmux` 命令描述，并标记 cwd 需要转换成 WSL mount 路径。
-    fn wsl() -> Self {
-        Self {
-            program: "wsl.exe".to_string(),
-            prefix_args: vec!["--exec".to_string(), "tmux".to_string()],
-            cwd_mode: TmuxCwdMode::Wsl,
-        }
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     探测、创建、查询和销毁 tmux session 都需要使用同一套命令前缀。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     创建 std::process::Command，并预先附加固定前缀参数。
-    fn std_command(&self) -> StdCommand {
-        let mut command = StdCommand::new(&self.program);
-        command.args(&self.prefix_args);
-        command
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     PTY attach 需要通过 portable-pty 的 CommandBuilder 启动，并复用 tmux 命令前缀。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     创建 CommandBuilder，并逐个追加固定前缀参数。
-    fn command_builder(&self) -> CommandBuilder {
-        let mut command = CommandBuilder::new(&self.program);
-        command.args(self.prefix_args.iter().map(String::as_str));
-        command
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     创建 tmux session 时，`-c` 工作目录必须是 tmux 所在环境可识别的路径。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     Native 模式原样返回项目路径；WSL 模式把 Windows 盘符路径转换为 `/mnt/<drive>/...`。
-    fn project_cwd(&self, project_path: &str) -> Result<String, AppError> {
-        match self.cwd_mode {
-            TmuxCwdMode::Native => Ok(project_path.to_string()),
-            TmuxCwdMode::Wsl => windows_path_to_wsl_path(project_path).ok_or_else(|| {
-                AppError::generic(format!("项目路径无法转换为 WSL 路径: {project_path}"))
-            }),
-        }
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     WSL 内的 tmux 应启动 Linux 默认 shell，而不能把 Windows 的 cmd.exe 当作 Linux 命令执行。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     Native 模式返回传入 shell 命令；WSL 模式返回 None，让 tmux 使用 WSL 用户默认 shell。
-    fn shell_command_for_new_session<'a>(&self, shell_command: &'a str) -> Option<&'a str> {
-        match self.cwd_mode {
-            TmuxCwdMode::Native => Some(shell_command),
-            TmuxCwdMode::Wsl => None,
-        }
-    }
-
-    /// Business Logic（为什么需要这个函数）:
-    ///     前端会展示会话命令，Windows+WSL tmux 会话不应误显示为宿主 Windows 的 `cmd.exe`。
-    ///
-    /// Code Logic（这个函数做什么）:
-    ///     Native 模式保留真实 shell 命令；WSL 模式展示实际 PTY attach 命令。
-    fn display_command_for_session(
-        &self,
-        session_name: &str,
-        window_target: Option<&str>,
-        shell_command: &str,
-    ) -> String {
-        match self.cwd_mode {
-            TmuxCwdMode::Native => shell_command.to_string(),
-            TmuxCwdMode::Wsl => {
-                let mut parts = Vec::with_capacity(self.prefix_args.len() + 4);
-                parts.push(self.program.clone());
-                parts.extend(self.prefix_args.clone());
-                match window_target {
-                    Some(target) => parts.extend(tmux_attach_window_args(session_name, target)),
-                    None => {
-                        parts.push("attach-session".to_string());
-                        parts.push("-t".to_string());
-                        parts.push(session_name.to_string());
-                    }
-                }
-                parts.join(" ")
-            }
-        }
-    }
 }
 
 /// 工作台终端输出事件 payload。
@@ -412,7 +279,7 @@ fn default_terminal_command_from_env(command: Option<OsString>) -> String {
 ///
 /// Code Logic（这个函数做什么）:
 ///     支持 `C:\dir`、`C:/dir` 和 `\\?\C:\dir` 三类常见绝对路径；UNC/相对路径返回 None。
-fn windows_path_to_wsl_path(path: &str) -> Option<String> {
+pub(crate) fn windows_path_to_wsl_path(path: &str) -> Option<String> {
     if path.is_empty() {
         return None;
     }
@@ -482,48 +349,6 @@ fn wsl_unc_path_to_linux_path(path: &str) -> Option<String> {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     重启应用后要继续已有终端上下文，普通 PTY 无法跨进程存活；可借助 tmux 保留 shell 进程。
-///
-/// Code Logic（这个函数做什么）:
-///     Windows 探测 WSL 内的 `tmux`；Unix 上依次探测 PATH 与常见 Homebrew/Linux tmux 路径，返回命令描述。
-fn available_tmux_command() -> Option<TmuxCommand> {
-    #[cfg(windows)]
-    {
-        let candidate = TmuxCommand::wsl();
-        if candidate
-            .std_command()
-            .args(["-V"])
-            .output()
-            .map(|output| output.status.success())
-            .unwrap_or(false)
-        {
-            Some(candidate)
-        } else {
-            None
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        let candidates = [
-            "tmux",
-            "/opt/homebrew/bin/tmux",
-            "/usr/local/bin/tmux",
-            "/usr/bin/tmux",
-        ];
-        candidates
-            .iter()
-            .find(|candidate| {
-                StdCommand::new(*candidate)
-                    .arg("-V")
-                    .output()
-                    .map(|output| output.status.success())
-                    .unwrap_or(false)
-            })
-            .map(|candidate| TmuxCommand::native(*candidate))
-    }
-}
-
-/// Business Logic（为什么需要这个函数）:
 ///     每个工作台终端 tab 需要稳定映射到一个 tmux session，才能跨应用重启重新 attach。
 ///
 /// Code Logic（这个函数做什么）:
@@ -566,7 +391,7 @@ fn apply_workbench_terminal_env(command: &mut CommandBuilder) {
 ///
 /// Code Logic（这个函数做什么）:
 ///     构造 `attach-session -t <session> ; switch-client -t <session:@window>` 参数。
-fn tmux_attach_window_args(session_name: &str, window_target: &str) -> Vec<String> {
+pub(crate) fn tmux_attach_window_args(session_name: &str, window_target: &str) -> Vec<String> {
     vec![
         "attach-session".to_string(),
         "-t".to_string(),

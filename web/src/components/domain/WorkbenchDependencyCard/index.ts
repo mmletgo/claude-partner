@@ -1,0 +1,1 @@
+export { WorkbenchDependencyCard } from './WorkbenchDependencyCard';

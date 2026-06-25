@@ -32,7 +32,7 @@ src/
 ├── net/               — mdns-sd 发现 + axum server + reqwest client [已实现 M3]
 ├── transfer/          — 分块传输 + SHA256 + 断点续传              [M5]
 ├── screenshot/        — xcap 抓屏 + 透明选区窗口                  [M6]
-├── workbench/         — 本机项目工作台：项目记录 + 可恢复 PTY/tmux 终端会话 + 安全文件树 [已实现]
+├── workbench/         — 本机项目工作台：项目记录 + tmux 依赖管理 + 可恢复 PTY/tmux 终端会话 + 安全文件树 [已实现]
 ├── permissions/       — macOS 权限 FFI（CGPreflight/CGRequest/CGEventTap） [M7 已实现]
 ├── hotkey.rs          — pynput→plugin 快捷键格式转换 + 注册/热更新  [M7 已实现]
 ├── tray.rs            — 系统托盘（Tauri 2 tray API）              [M7 已实现]
@@ -41,17 +41,18 @@ src/
 migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TABLE IF NOT EXISTS 兼容旧库）
 ```
 
-## 工作台已落地行为约定（workbench/ + storage/workbench_project_repo.rs + commands/workbench.rs）
+## 工作台已落地行为约定（workbench/ + storage/workbench_project_repo.rs + commands/workbench.rs + commands/workbench_dependencies.rs）
 
 - **功能定位**：Workbench 是本机项目运行态工作台，前端入口 `/workbench`。一期只覆盖本机或已挂载局域网目录；远端 cc-partner 项目浏览、远端 PTY 和文件预览后续单独扩展。
 - **项目记录**：`workbench_projects` 表持久化最近项目，字段 `id/name/kind/device_id/device_name/path/last_opened_at/created_at/updated_at`；`add_workbench_project(path)` 在 blocking pool 中 canonicalize 并要求目录存在，同一路径复用项目 id，只更新时间；`remove_workbench_project` 只移除记录，不删除磁盘项目。
+- **tmux 依赖管理**：`workbench/dependencies.rs` 是 tmux 探测与安装状态的单一来源，`sessions.rs` 只复用 `available_tmux_command()` 和 `TmuxCommand`，不要再维护第二套候选路径或 WSL 逻辑。`commands/workbench_dependencies.rs` 暴露 `check_workbench_dependency` / `install_workbench_dependency` / `get_workbench_dependency_install_status` / `cancel_workbench_dependency_install` 四个命令，DTO camelCase 字段为 `status/available/version/backend/path/installable/installCommandPreview/error/output`。macOS 探测 `/opt/homebrew/bin/tmux`、`/usr/local/bin/tmux` 和 PATH，Linux 探测 PATH，Windows 通过 `wsl.exe --exec tmux -V` 探测默认 WSL 发行版；缺失时仅在可见包管理器/WSL 存在时返回安装命令预览，安装任务在后台运行并可取消，结束后重新探测写回状态。无 tmux 时 Workbench 仍允许 raw PTY fallback，但不能承诺重启恢复 shell 上下文。
 - **会话恢复**：`workbench_sessions` 表现在持久化“window tab”元数据（项目、名称、命令、状态、尺寸、backend/backend_id/backend_window_id）；`WorkbenchSessionRegistry` 只保存运行期 PTY attach 句柄。真实 tmux 映射为：一个项目优先对应一个 tmux session（`backend_id`），前端 tab 对应 tmux window（`backend_window_id`），window 内分屏对应 tmux pane。恢复/创建运行期 attach 时必须先 `attach-session -t <项目 session>`，再 `switch-client -t <项目 session>:@<window_id>`，否则 app tab 会落到项目 session 的当前 window 而不是绑定 window；前端切换 app tab 时还必须调用 `focus_workbench_session`，由后端执行 `tmux select-window -t <项目 session>:@<window_id>`，同步项目 session 的 current window；用户在 tmux status bar/快捷键切换 window 后，前端通过 `get_focused_workbench_session(projectId)` 读取 `display-message #{window_id}` 并映射回顶部 app tab。`list_workbench_sessions(projectId?)` 会从 SQLite 恢复缺失 window，再合并持久化列表与 registry 实时状态，DTO 的 `paneCount` 对 tmux window 由 `list-panes` 读取真实 pane 数、raw/disconnected window 兜底为 1。macOS/Linux 优先用原生 `tmux` 承载真实 shell 上下文（常见路径含 `/opt/homebrew/bin/tmux`）；Windows 优先探测默认 WSL 发行版的 `wsl.exe --exec tmux -V`，用 WSL 内的 tmux 承载上下文，盘符项目路径转换为 `/mnt/<drive>/...`，`\\wsl$\<distro>\...` / `\\wsl.localhost\<distro>\...` 转为 Linux 路径。应用退出只 kill 当前 attach，重启后重新 attach 到原 window；无 tmux、WSL 路径不可转换或恢复失败时回退普通 PTY，新 shell 仍在项目根目录启动。
 - **会话创建**：`create_workbench_session(projectId, initialCols?, initialRows?)` API 名保留兼容前端封装，但语义是创建一个 terminal window：读取项目根路径，在项目 tmux session 内 `new-window`（session 不存在则 `new-session`），没有 tmux 时才通过 `portable-pty` 启动普通 shell（macOS/Linux 取 `SHELL`，Windows 取 `ComSpec`，缺失时回退 `/bin/sh`/`cmd.exe`）；工作台只打开普通终端，不自动运行 `claude`。所有 Workbench PTY 客户端必须显式设置 `TERM=xterm-256color`、`COLORTERM=truecolor`、`TERM_PROGRAM=cc-partner`，不能继承 GUI/agent 父进程的 `TERM=dumb`，否则 tmux 设备能力响应可能被错误送进 pane。前端应在创建前测量当前终端 viewport 的真实 cols/rows 并传给后端，且 xterm/FitAddon 的父节点必须是无 padding viewport，避免交互式程序首屏按默认尺寸或错误列宽绘制后错位。
 - **终端事件**：后端 emit `workbench:terminal-output`（`sessionId/chunk/seq/ts`）和 `workbench:terminal-status`（`sessionId/status/exitCode/ts`）；PTY reader 必须跨 read chunk 做流式 UTF-8 解码，避免中文/符号被拆包后在前端显示为 `�`；前端按 sessionId 维护 buffer。普通 Vite 浏览器无 Tauri event internals 时前端必须跳过 listen，避免调试白屏。
 - **会话操作**：支持 `write_workbench_session_input`、`resize_workbench_session`、`focus_workbench_session`、`get_focused_workbench_session`、`split_workbench_pane(direction=right|down)`、`close_workbench_pane`、`close_workbench_session`、`rename_workbench_session`；resize/rename 写回 `workbench_sessions`，rename 同步 `tmux rename-window`，focus 对 tmux-backed window 执行 `select-window`，raw PTY fallback 直接 no-op，get-focused 对项目 tmux session 执行 `display-message -p -t <session> #{window_id}` 后映射 sessionId。`split_workbench_pane` 必须读取会话所属项目根路径并用 `tmux split-window -c <项目根目录>` 创建 pane，Windows/WSL 路径先转换为发行版内路径，不能继承当前 pane 中用户 `cd` 后的 cwd。`close_workbench_pane` 多 pane 时执行 `kill-pane`，只有最后一个 pane 时关闭所属 window、删除 SQLite window 记录并让前端移除 tab，不应向用户报“只有一个 pane”；关闭 tab 会从 registry 移除、删除 SQLite window 记录，多 window 项目用 `kill-window` 销毁真实 window，项目 tmux session 只剩最后一个 window 或旧记录缺 window id 时用 `kill-session`。`child.kill()` 返回 No such process / raw os error 3 代表子进程已被系统回收，应视为已停止，不向前端展示 IO 错误。
 - **退出清理**：`RunEvent::Exit` 必须调用 `state.workbench_sessions.shutdown_all()`，kill 当前运行期 PTY attach 并把内存状态标记为 disconnected；不得删除 `workbench_sessions` 元数据、不得销毁 tmux window 或项目 tmux session，否则重启后无法恢复上下文。
 - **文件树安全边界**：`workbench/fs.rs` 对所有相对路径做项目根内解析，拒绝 `..` 越界、绝对路径、跨根 symlink、覆盖重命名和删除项目根。文件系统命令全部用 `spawn_blocking` 包裹同步 IO。
-- **命令层**：`commands/workbench.rs` 是 thin layer，负责读取项目 row、包裹 blocking FS、返回 camelCase DTO；不要在前端直接访问文件系统或绕过 `web/src/api/workbench.ts`。
+- **命令层**：`commands/workbench.rs` 是项目/terminal/files thin layer，负责读取项目 row、包裹 blocking FS、返回 camelCase DTO；`commands/workbench_dependencies.rs` 是 tmux dependency manager thin layer，状态保存在 `AppState.workbench_dependency`。不要在前端直接访问文件系统或绕过 `web/src/api/workbench.ts` / `web/src/api/workbenchDependency.ts`。
 - **验证命令**：相关 Rust 验证优先跑 `cd src-tauri && cargo test workbench:: && cargo check`；前端联动验证跑 `cd web && npm run build`，必要时再用浏览器检查 `/workbench`。
 
 ## M1 已落地行为约定（移植自 Python，逐方法对照）

@@ -6,6 +6,7 @@
   "tabsLabel": "设置分区",
   "tabs": {
     "general": "常规",
+    "dependencies": "依赖环境",
     "health": "健康提醒",
     "sync": "同步",
     "ai": "AI",

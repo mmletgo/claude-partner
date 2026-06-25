@@ -19,8 +19,11 @@ import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { promptOptimizerApi } from '@/api/promptOptimizer';
 import { workbenchApi } from '@/api/workbench';
+import { WorkbenchDependencyCard } from '@/components/domain';
 import { Button, Card, Input, Pill } from '@/components/primitives';
+import { useWorkbenchDependency } from '@/hooks/workbenchDependencyContext';
 import { useWorkbenchProjects } from '@/hooks/workbenchProjectsContext';
 import {
   ChevronRightIcon,
@@ -34,8 +37,10 @@ import {
   SyncIcon,
   TrashIcon,
   XIcon,
+  SendIcon,
 } from '@/lib/icons';
 import type {
+  PromptOptimizeResponse,
   WorkbenchFileNode,
   WorkbenchPathInfo,
   WorkbenchSession,
@@ -43,6 +48,11 @@ import type {
   WorkbenchTerminalStatusEvent,
 } from '@/lib/types';
 import styles from './Workbench.module.css';
+import {
+  canFillPromptIntoTerminal,
+  promptOptimizerInsertPayload,
+  selectPromptOptimizerInsertText,
+} from './promptOptimizerWidget';
 import { visibleTerminalSessions } from './terminalSessionOrder';
 import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOptions';
 import { shouldForwardTerminalInput, writeTerminalReplay } from './terminalReplay';
@@ -498,7 +508,8 @@ function FileTree(props: NestedFileTreeProps) {
  *   聚合项目、会话、终端输出 buffer、文件树与文件操作状态，并组合三栏布局。
  */
 export function Workbench() {
-  const { t } = useTranslation(['workbench', 'common']);
+  const { t } = useTranslation(['workbench', 'common', 'promptOptimizer']);
+  const { status: dependencyStatus } = useWorkbenchDependency();
   const { activeProjectId, activeProject, refreshProjectSessionStats } = useWorkbenchProjects();
   const [sessions, setSessions] = useState<WorkbenchSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -518,6 +529,14 @@ export function Workbench() {
   const [terminalBuffers, setTerminalBuffers] = useState<Record<string, string>>({});
   const [terminalRevision, setTerminalRevision] = useState<number>(0);
   const [runtimeNow, setRuntimeNow] = useState<number>(() => Date.now());
+  const [promptPanelOpen, setPromptPanelOpen] = useState<boolean>(false);
+  const [promptInput, setPromptInput] = useState<string>('');
+  const [promptResult, setPromptResult] = useState<PromptOptimizeResponse>({
+    optimizedZh: '',
+    optimizedEn: '',
+  });
+  const [promptOptimizing, setPromptOptimizing] = useState<boolean>(false);
+  const [promptWidgetMessage, setPromptWidgetMessage] = useState<string | null>(null);
   const activeProjectIdRef = useRef<string | null>(null);
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
   const terminalPanelRef = useRef<HTMLElement | null>(null);
@@ -550,6 +569,9 @@ export function Workbench() {
   const canUsePanes = Boolean(
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
+  const promptInsertText = selectPromptOptimizerInsertText(promptResult);
+  const canOptimizePrompt = promptInput.trim().length > 0 && !promptOptimizing;
+  const canFillPrompt = canFillPromptIntoTerminal(activeSession) && promptInsertText.length > 0;
 
   const updateActiveSession = useCallback((nextSessions: WorkbenchSession[]) => {
     setActiveSessionId((current) => {
@@ -849,6 +871,45 @@ export function Workbench() {
     }
   }, []);
 
+  const handleOptimizePrompt = useCallback(async () => {
+    if (!promptInput.trim()) return;
+    try {
+      setPromptOptimizing(true);
+      setPromptWidgetMessage(null);
+      const result = await promptOptimizerApi.optimize(promptInput);
+      setPromptResult(result);
+    } catch (error) {
+      setPromptWidgetMessage(
+        displayErrorMessage(
+          error,
+          t('workbench:promptOptimizer.optimizeFailed'),
+          desktopUnavailableMessage,
+        ),
+      );
+    } finally {
+      setPromptOptimizing(false);
+    }
+  }, [desktopUnavailableMessage, promptInput, t]);
+
+  const handleFillPromptToTerminal = useCallback(async () => {
+    if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
+    const payload = promptOptimizerInsertPayload(promptResult);
+    if (!payload) return;
+    try {
+      setPromptWidgetMessage(null);
+      await workbenchApi.sessions.writeInput(activeSession.id, payload);
+      setPromptWidgetMessage(t('workbench:promptOptimizer.filled'));
+    } catch (error) {
+      setPromptWidgetMessage(
+        displayErrorMessage(
+          error,
+          t('workbench:promptOptimizer.fillFailed'),
+          desktopUnavailableMessage,
+        ),
+      );
+    }
+  }, [activeSession, desktopUnavailableMessage, promptResult, t]);
+
   const handleResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
     try {
       await workbenchApi.sessions.resize(
@@ -1086,7 +1147,12 @@ export function Workbench() {
           <span className={styles.contextPath}>{contextPath}</span>
         </section>
 
-        {sessionError ? <div className={styles.errorBox}>{sessionError}</div> : null}
+        <div className={styles.noticeStack}>
+          {sessionError ? <div className={styles.errorBox}>{sessionError}</div> : null}
+          {dependencyStatus.status !== 'ready' ? (
+            <WorkbenchDependencyCard compact className={styles.dependencyNotice} />
+          ) : null}
+        </div>
 
         <section className={styles.sessionTabs} aria-label={t('workbench:terminalTabs')}>
           {sessions.map((session) => (
@@ -1125,6 +1191,14 @@ export function Workbench() {
           <div className={styles.paneActions} aria-label={t('workbench:paneActions')}>
             <Button
               variant="icon"
+              icon={<EditIcon />}
+              title={t('workbench:promptOptimizer.open')}
+              aria-label={t('workbench:promptOptimizer.open')}
+              data-active={promptPanelOpen || undefined}
+              onClick={() => setPromptPanelOpen((current) => !current)}
+            />
+            <Button
+              variant="icon"
               icon={<SplitRightIcon />}
               title={t('workbench:splitPaneRight')}
               aria-label={t('workbench:splitPaneRight')}
@@ -1150,57 +1224,143 @@ export function Workbench() {
           </div>
         </section>
 
-        <section
-          className={styles.terminalPanel}
-          data-layout="single"
-          ref={terminalPanelRef}
-        >
-          {visibleSessions.length === 0 ? (
-            <TerminalPane
-              session={null}
-              buffer=""
-              revision={terminalRevision}
-              placeholder={
-                activeProject
-                  ? t('workbench:terminalPlaceholder')
-                  : t('workbench:terminalNoProject')
-              }
-              onInput={handleInput}
-              onResize={handleResize}
-            />
-          ) : (
-            visibleSessions.map((session) => (
-              <div
-                key={session.id}
-                className={styles.terminalPaneFrame}
-                data-active={session.id === renderedActiveSessionId || undefined}
-                onClick={() => focusSession(session.id)}
-              >
-                <div className={styles.terminalPaneHeader}>
-                  <span className={styles.sessionDot} data-status={session.status} />
-                  <span className={styles.sessionName}>{session.name}</span>
-                  <span className={styles.terminalPaneStatus}>
-                    {session.status === 'running'
-                      ? t('workbench:sessionStatus.running')
-                      : session.status === 'exited'
-                        ? t('workbench:sessionStatus.exited')
-                        : session.status === 'disconnected'
-                          ? t('workbench:sessionStatus.disconnected')
-                          : session.status}
-                  </span>
+        <div className={styles.terminalArea}>
+          {promptPanelOpen ? (
+            <aside
+              className={styles.promptOptimizerPanel}
+              aria-label={t('workbench:promptOptimizer.panelAriaLabel')}
+            >
+              <div className={styles.promptOptimizerHeader}>
+                <div>
+                  <h2 className={styles.promptOptimizerTitle}>
+                    {t('workbench:promptOptimizer.title')}
+                  </h2>
+                  <p className={styles.promptOptimizerSubtitle}>
+                    {t('workbench:promptOptimizer.subtitle')}
+                  </p>
                 </div>
-                <TerminalPane
-                  session={session}
-                  buffer={terminalBuffers[session.id] ?? ''}
-                  revision={terminalRevision}
-                  placeholder={t('workbench:terminalPlaceholder')}
-                  onInput={handleInput}
-                  onResize={handleResize}
+                <Button
+                  variant="icon"
+                  icon={<XIcon />}
+                  title={t('workbench:promptOptimizer.close')}
+                  aria-label={t('workbench:promptOptimizer.close')}
+                  onClick={() => setPromptPanelOpen(false)}
                 />
               </div>
-            ))
-          )}
-        </section>
+              <textarea
+                className={styles.promptOptimizerInput}
+                value={promptInput}
+                onChange={(event) => setPromptInput(event.target.value)}
+                placeholder={t('promptOptimizer:inputPlaceholder')}
+                aria-label={t('promptOptimizer:inputAriaLabel')}
+                disabled={promptOptimizing}
+              />
+              <div className={styles.promptOptimizerActions}>
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon={<EditIcon />}
+                  loading={promptOptimizing}
+                  disabled={!canOptimizePrompt}
+                  onClick={() => void handleOptimizePrompt()}
+                >
+                  {promptOptimizing
+                    ? t('promptOptimizer:optimizing')
+                    : t('promptOptimizer:optimize')}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  icon={<SendIcon />}
+                  disabled={!canFillPrompt}
+                  onClick={() => void handleFillPromptToTerminal()}
+                >
+                  {t('workbench:promptOptimizer.fillTerminal')}
+                </Button>
+              </div>
+              <div className={styles.promptOptimizerStatus} aria-live="polite">
+                {promptWidgetMessage
+                  ? promptWidgetMessage
+                  : t('workbench:promptOptimizer.fillHint')}
+              </div>
+              <div
+                className={styles.promptOptimizerResults}
+                aria-label={t('promptOptimizer:resultsAriaLabel')}
+              >
+                <section className={styles.promptOptimizerResult}>
+                  <h3>{t('promptOptimizer:zhTitle')}</h3>
+                  <textarea
+                    value={promptResult.optimizedZh}
+                    readOnly
+                    placeholder={t('promptOptimizer:resultPlaceholder')}
+                    aria-label={t('promptOptimizer:zhAriaLabel')}
+                  />
+                </section>
+                <section className={styles.promptOptimizerResult}>
+                  <h3>{t('promptOptimizer:enTitle')}</h3>
+                  <textarea
+                    value={promptResult.optimizedEn}
+                    readOnly
+                    placeholder={t('promptOptimizer:resultPlaceholder')}
+                    aria-label={t('promptOptimizer:enAriaLabel')}
+                  />
+                </section>
+              </div>
+            </aside>
+          ) : null}
+
+          <section
+            className={styles.terminalPanel}
+            data-layout="single"
+            ref={terminalPanelRef}
+          >
+            {visibleSessions.length === 0 ? (
+              <TerminalPane
+                session={null}
+                buffer=""
+                revision={terminalRevision}
+                placeholder={
+                  activeProject
+                    ? t('workbench:terminalPlaceholder')
+                    : t('workbench:terminalNoProject')
+                }
+                onInput={handleInput}
+                onResize={handleResize}
+              />
+            ) : (
+              visibleSessions.map((session) => (
+                <div
+                  key={session.id}
+                  className={styles.terminalPaneFrame}
+                  data-active={session.id === renderedActiveSessionId || undefined}
+                  onClick={() => focusSession(session.id)}
+                >
+                  <div className={styles.terminalPaneHeader}>
+                    <span className={styles.sessionDot} data-status={session.status} />
+                    <span className={styles.sessionName}>{session.name}</span>
+                    <span className={styles.terminalPaneStatus}>
+                      {session.status === 'running'
+                        ? t('workbench:sessionStatus.running')
+                        : session.status === 'exited'
+                          ? t('workbench:sessionStatus.exited')
+                          : session.status === 'disconnected'
+                            ? t('workbench:sessionStatus.disconnected')
+                            : session.status}
+                    </span>
+                  </div>
+                  <TerminalPane
+                    session={session}
+                    buffer={terminalBuffers[session.id] ?? ''}
+                    revision={terminalRevision}
+                    placeholder={t('workbench:terminalPlaceholder')}
+                    onInput={handleInput}
+                    onResize={handleResize}
+                  />
+                </div>
+              ))
+            )}
+          </section>
+        </div>
       </main>
 
       <aside className={styles.inspectorPane}>

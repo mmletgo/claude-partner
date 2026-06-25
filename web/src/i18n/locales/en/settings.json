@@ -6,6 +6,7 @@
   "tabsLabel": "Settings sections",
   "tabs": {
     "general": "General",
+    "dependencies": "Dependencies",
     "health": "Health",
     "sync": "Sync",
     "ai": "AI",

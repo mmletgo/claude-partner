@@ -24,3 +24,4 @@ pub mod sync;
 pub mod transfer;
 pub mod updater;
 pub mod workbench;
+pub mod workbench_dependencies;

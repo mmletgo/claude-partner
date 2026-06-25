@@ -253,6 +253,7 @@ function Button({ prompt, onDelete }) { /* ❌ prompt 是业务数据 */ }
 | ClaudeAssetRow | asset, onToggle, onRemove, onSelect | Claude Code 资产行 |
 | RemoteAssetPicker | assets, selectedKeys, kind, search, onSelectMany | 局域网远端资产选择器 |
 | WorkbenchProjectRail | - | 侧栏设置项下方的项目文件夹入口 |
+| WorkbenchDependencyCard | compact, className | Workbench tmux 依赖状态与安装引导卡片 |
 
 ## 5. 开发规范
 

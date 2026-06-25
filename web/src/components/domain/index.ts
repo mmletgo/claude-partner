@@ -44,3 +44,4 @@ export { RemoteAssetPicker, remoteAssetKey } from './RemoteAssetPicker';
 export type { RemoteAssetPickerProps } from './RemoteAssetPicker';
 
 export { WorkbenchProjectRail } from './WorkbenchProjectRail';
+export { WorkbenchDependencyCard } from './WorkbenchDependencyCard';

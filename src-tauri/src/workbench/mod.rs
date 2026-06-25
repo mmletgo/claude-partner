@@ -7,6 +7,7 @@
 //! Code Logic（这个模块做什么）:
 //!     导出本机项目、文件系统、PTY sessions 与 DTO 模块。
 
+pub mod dependencies;
 pub mod fs;
 pub mod models;
 pub mod projects;

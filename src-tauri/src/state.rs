@@ -88,6 +88,9 @@ pub struct AppState {
     /// 工作台 PTY 会话注册表（运行期 PTY/tmux attach 句柄，元数据由 workbench_session_repo 持久化）
     #[allow(dead_code)]
     pub workbench_sessions: Arc<crate::workbench::sessions::WorkbenchSessionRegistry>,
+    /// 工作台 tmux 依赖安装/检测状态机（供 check/install/status/cancel 四个命令共享）
+    pub workbench_dependency:
+        Arc<crate::workbench::dependencies::WorkbenchDependencyInstallRuntime>,
     /// CC 历史采集器的取消令牌（应用退出时 cancel 优雅停止后台扫描任务）
     pub cc_collector_cancel: Arc<Mutex<Option<tokio_util::sync::CancellationToken>>>,
     /// 云端同步（GitHub 私有仓库）后台 scheduler 的取消令牌（应用退出时 cancel 优雅停止）

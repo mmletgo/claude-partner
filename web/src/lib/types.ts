@@ -91,6 +91,38 @@ export interface AppConfig {
   httpPort: number;
 }
 
+export type WorkbenchDependencyState =
+  | 'checking'
+  | 'ready'
+  | 'missing'
+  | 'installing'
+  | 'installedNeedsRecheck'
+  | 'unsupported'
+  | 'failed';
+
+export type WorkbenchDependencyBackend = 'native' | 'wsl' | string;
+
+/**
+ * 工作台运行时依赖状态（tmux）。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   Workbench 的真实 window/pane 体验依赖 tmux，前端需要展示检测、安装、失败和重检状态。
+ *
+ * Code Logic（字段说明）:
+ *   对齐后端 dependency manager DTO；installCommandPreview 是只读预览，不代表前端可直接执行命令。
+ */
+export interface WorkbenchDependencyStatus {
+  status: WorkbenchDependencyState;
+  available: boolean;
+  version: string | null;
+  backend: WorkbenchDependencyBackend;
+  path: string | null;
+  installable: boolean;
+  installCommandPreview: string[];
+  error: string | null;
+  output: string[];
+}
+
 /**
  * GitHub 私有仓库云端同步配置
  * 字段与 Rust 后端 get_cloud_sync_config / update_cloud_sync_config 命令返回对齐（camelCase）。

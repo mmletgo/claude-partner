@@ -23,6 +23,7 @@ import HealthOverlay from './pages/HealthOverlay';
 import { configApi } from './api/config';
 import { PERMISSION_ONBOARDED_KEY } from './hooks/usePermissions';
 import { WorkbenchProjectsProvider } from './hooks/useWorkbenchProjects';
+import { WorkbenchDependencyProvider } from './hooks/useWorkbenchDependency';
 import { checkNotificationGranted } from './lib/notification';
 
 const isDev = import.meta.env.DEV;
@@ -178,9 +179,11 @@ export default function App() {
         <Route element={<OnboardingGuard />}>
           <Route
             element={
-              <WorkbenchProjectsProvider>
-                <AppShell />
-              </WorkbenchProjectsProvider>
+              <WorkbenchDependencyProvider>
+                <WorkbenchProjectsProvider>
+                  <AppShell />
+                </WorkbenchProjectsProvider>
+              </WorkbenchDependencyProvider>
             }
           >
             <Route path="/" element={<Home />} />

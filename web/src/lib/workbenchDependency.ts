@@ -1,0 +1,52 @@
+import type { WorkbenchDependencyStatus } from './types';
+
+export type WorkbenchDependencyTone = 'success' | 'warning' | 'danger' | 'neutral';
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench 和 Settings 都需要用一致的视觉语义展示 tmux 依赖状态。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将后端状态映射为 UI tone，供 Pill/Card 样式复用。
+ */
+export function dependencyStatusTone(status: WorkbenchDependencyStatus): WorkbenchDependencyTone {
+  if (status.status === 'ready') return 'success';
+  if (status.status === 'missing' || status.status === 'unsupported') return 'warning';
+  if (status.status === 'failed') return 'danger';
+  return 'neutral';
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   缺少 tmux 时用户应能主动安装，但安装中或不可安装平台不应重复触发安装。
+ *
+ * Code Logic（这个函数做什么）:
+ *   根据状态、installable 和 available 判断是否展示可点击安装动作。
+ */
+export function canInstallWorkbenchDependency(status: WorkbenchDependencyStatus): boolean {
+  return !status.available && status.installable && status.status === 'missing';
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   用户完成手动安装、安装失败或安装命令结束后，需要能重新检测 tmux。
+ *
+ * Code Logic（这个函数做什么）:
+ *   排除 checking/installing 两个进行中状态，其余状态允许 recheck。
+ */
+export function canRecheckWorkbenchDependency(status: WorkbenchDependencyStatus): boolean {
+  return status.status !== 'checking' && status.status !== 'installing';
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   安装确认框需要展示即将执行的命令，带空格的参数必须可读且不误导用户。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将 argv 格式化为 shell-like 预览；包含空白的参数使用双引号包裹。
+ */
+export function formatInstallCommandPreview(command: string[]): string {
+  return command
+    .map((part) => (/\s/.test(part) ? `"${part.replaceAll('"', '\\"')}"` : part))
+    .join(' ');
+}

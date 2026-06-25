@@ -44,6 +44,7 @@ use crate::commands::{
     prompts as prompt_cmd, scratchpad as scratchpad_cmd, screenshot as screenshot_cmd,
     ssh_target as ssh_target_cmd, sync as sync_cmd, transfer as transfer_cmd,
     updater as updater_cmd, workbench as workbench_cmd,
+    workbench_dependencies as workbench_dependency_cmd,
 };
 use crate::net::{discovery, http_server, peer_client::PeerClient};
 use crate::state::AppState;
@@ -331,6 +332,9 @@ pub fn run() {
                 let workbench_session_repo = Arc::new(WorkbenchSessionRepo::new(pool.clone()));
                 let workbench_sessions =
                     Arc::new(crate::workbench::sessions::WorkbenchSessionRegistry::new());
+                let workbench_dependency = Arc::new(
+                    crate::workbench::dependencies::WorkbenchDependencyInstallRuntime::new(),
+                );
                 // 健康提醒：仓库（共享 pool）+ 运行时（状态机/贪睡/暂停）+ daemon 取消令牌占位
                 let health_repo =
                     Arc::new(crate::storage::health_repo::HealthRepo::new(pool.clone()));
@@ -365,6 +369,7 @@ pub fn run() {
                     workbench_project_repo,
                     workbench_session_repo,
                     workbench_sessions,
+                    workbench_dependency,
                     cc_collector_cancel: Arc::new(Mutex::new(None)),
                     // 云端同步：后台 scheduler 取消令牌（start 在 manage 之后调用）
                     cloud_sync_cancel: Arc::new(Mutex::new(None)),
@@ -577,6 +582,11 @@ pub fn run() {
             workbench_cmd::create_workbench_dir,
             workbench_cmd::rename_workbench_path,
             workbench_cmd::delete_workbench_path,
+            // 工作台运行时依赖（tmux 检测 / 安装 / 状态 / 取消）
+            workbench_dependency_cmd::check_workbench_dependency,
+            workbench_dependency_cmd::install_workbench_dependency,
+            workbench_dependency_cmd::get_workbench_dependency_install_status,
+            workbench_dependency_cmd::cancel_workbench_dependency_install,
         ])
         .build(tauri::generate_context!())
         .map_err(|e| {

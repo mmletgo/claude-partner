@@ -30,7 +30,7 @@
 
 .centerPane {
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   gap: 0;
   padding: 0;
   overflow: hidden;
@@ -148,6 +148,23 @@
   line-height: var(--leading-normal);
 }
 
+.noticeStack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: 0 var(--space-6);
+  background: var(--bg);
+}
+
+.noticeStack:not(:empty) {
+  padding-top: var(--space-4);
+}
+
+.dependencyNotice {
+  max-width: 820px;
+}
+
 .workspaceHeader {
   min-height: 104px;
   padding: var(--space-7) var(--space-6) var(--space-3);
@@ -260,6 +277,11 @@
   flex: 0 0 auto;
 }
 
+.paneActions :global(button[data-active='true']) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
 .sessionDot {
   width: 7px;
   height: 7px;
@@ -274,6 +296,125 @@
 
 .sessionDot[data-status='disconnected'] {
   background: var(--danger);
+}
+
+.terminalArea {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+}
+
+.promptOptimizerPanel {
+  position: absolute;
+  z-index: var(--z-overlay);
+  top: var(--space-6);
+  right: var(--space-8);
+  width: min(560px, calc(100% - var(--space-12)));
+  max-height: calc(100% - var(--space-12));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  color: var(--fg);
+  overflow: auto;
+}
+
+.promptOptimizerHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.promptOptimizerTitle {
+  margin: 0;
+  color: var(--fg);
+  font-size: var(--text-lg);
+  font-weight: var(--weight-semibold);
+  line-height: var(--leading-tight);
+}
+
+.promptOptimizerSubtitle {
+  margin: var(--space-1) 0 0;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+}
+
+.promptOptimizerInput,
+.promptOptimizerResult textarea {
+  width: 100%;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-relaxed);
+  outline: none;
+  resize: vertical;
+  transition: all var(--motion-fast) var(--ease-standard);
+}
+
+.promptOptimizerInput:focus,
+.promptOptimizerResult textarea:focus {
+  border-color: var(--accent);
+}
+
+.promptOptimizerInput::placeholder,
+.promptOptimizerResult textarea::placeholder {
+  color: var(--meta);
+}
+
+.promptOptimizerInput:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.promptOptimizerActions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.promptOptimizerStatus {
+  min-height: 18px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+  line-height: var(--leading-normal);
+}
+
+.promptOptimizerResults {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.promptOptimizerResult {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.promptOptimizerResult h3 {
+  margin: 0;
+  color: var(--fg-2);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-semibold);
+}
+
+.promptOptimizerResult textarea {
+  min-height: 180px;
+  resize: vertical;
 }
 
 .terminalPanel {
