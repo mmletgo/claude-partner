@@ -59,7 +59,7 @@ pub struct WorkbenchProjectDto {
 ///
 /// Code Logic（这个结构体做什么）:
 ///     表达 `git status --porcelain --branch` 解析后的轻量状态，字段使用 camelCase 序列化给前端；
-///     can_push 由后端按 upstream/origin/唯一 remote 规则派生，供 UI 禁用不可推送项目。
+///     can_push 由后端按 upstream/origin 规则派生，供 UI 禁用不可推送项目。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchGitStatusDto {

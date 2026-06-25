@@ -65,7 +65,7 @@ export const workbenchApi = {
         message: message ?? null,
       }),
 
-    /** 推送当前 worktree 分支到 upstream/origin/唯一 remote。 */
+    /** 推送当前 worktree 分支到已有 upstream；没有 upstream 时只默认推送到 origin。 */
     push: (worktreeId: string) =>
       invoke<WorkbenchWorktree>('push_workbench_worktree', { worktreeId }),
 

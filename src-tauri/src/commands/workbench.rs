@@ -557,7 +557,7 @@ fn build_commit_message_instruction(changes: &workbench_git::StagedCommitChanges
 ///     用户提交后需要把功能分支推送到 Git remote，以便备份或协作。
 ///
 /// Code Logic（这个函数做什么）:
-///     获取 row.branch 或当前 Git 分支，委托 workbench_git 按 upstream/origin/唯一 remote 选择推送目标。
+///     获取 row.branch 或当前 Git 分支，委托 workbench_git 按 upstream/origin 选择推送目标。
 #[tauri::command]
 pub async fn push_workbench_worktree(
     state: State<'_, AppState>,

@@ -281,7 +281,7 @@ fn truncate_for_commit_message(diff: &str) -> (String, bool) {
 ///     用户完成 worktree commit 后，需要把对应分支推送到远端以便协作或备份。
 ///
 /// Code Logic（这个函数做什么）:
-///     已有 upstream 时执行普通 `git push`；否则选择 origin 或唯一 remote 执行 `git push -u <remote> <branch>`。
+///     已有 upstream 时执行普通 `git push`；否则只选择 origin 执行 `git push -u origin <branch>`。
 pub fn push_branch(path: &Path, branch: &str) -> Result<(), AppError> {
     if branch.trim().is_empty() {
         return Err(AppError::generic("当前 worktree 没有可推送的分支"));
@@ -298,10 +298,10 @@ pub fn push_branch(path: &Path, branch: &str) -> Result<(), AppError> {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     Push 按钮应尊重用户仓库已有远端配置，不能假设所有项目都有 origin。
+///     Push 按钮不能把 fork 的 upstream remote 当作用户自己的发布 remote。
 ///
 /// Code Logic（这个函数做什么）:
-///     若当前分支已有 upstream，返回 Upstream；否则从 `git remote` 中选择 origin 或唯一 remote。
+///     若当前分支已有 upstream，返回 Upstream；否则只在存在 origin 时返回 Remote("origin")。
 fn resolve_push_target(path: &Path) -> Result<PushTarget, AppError> {
     if has_upstream(path) {
         return Ok(PushTarget::Upstream);
@@ -310,18 +310,15 @@ fn resolve_push_target(path: &Path) -> Result<PushTarget, AppError> {
     let remotes = list_remotes(path)?;
     if remotes.is_empty() {
         return Err(AppError::generic(
-            "当前 Git 仓库没有配置 Git remote，无法推送。请先在项目目录执行 `git remote add origin <url>` 后重试。",
+            "当前分支没有 upstream，且 Git 仓库没有配置 origin remote，无法推送。请先在项目目录执行 `git remote add origin <url>`，或设置当前分支 upstream 后重试。",
         ));
     }
     if remotes.iter().any(|remote| remote == "origin") {
         return Ok(PushTarget::Remote("origin".to_string()));
     }
-    if remotes.len() == 1 {
-        return Ok(PushTarget::Remote(remotes[0].clone()));
-    }
 
     Err(AppError::generic(format!(
-        "当前 Git 仓库有多个 Git remote（{}），但当前分支没有 upstream。请先在终端设置 upstream，或添加/使用 origin 后重试。",
+        "当前分支没有 upstream，且 Git 仓库没有 origin remote（现有 remote：{}），无法判断安全的发布目标。请先设置当前分支 upstream，或添加 origin 后重试。",
         remotes.join(", ")
     )))
 }
@@ -330,7 +327,7 @@ fn resolve_push_target(path: &Path) -> Result<PushTarget, AppError> {
 ///     本地未发布仓库没有 remote 时，Workbench 的 Push 按钮应直接禁用，而不是等用户点击后报错。
 ///
 /// Code Logic（这个函数做什么）:
-///     当前 status 有分支且 resolve_push_target 能找到 upstream/origin/唯一 remote 时返回 true。
+///     当前 status 有分支且 resolve_push_target 能找到 upstream/origin 时返回 true。
 fn can_push_from_status(path: &Path, status: &WorkbenchGitStatusDto) -> bool {
     status
         .branch
@@ -765,6 +762,46 @@ UU web/src/App.tsx
     }
 
     /// Business Logic（为什么需要这个测试）:
+    ///     fork/upstream-only 仓库没有发布到用户自己的 remote 时，Push 按钮不能误判为可推送。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建只有 `excalidraw-upstream` remote 且分支无 upstream 的真实仓库，断言 can_push=false。
+    #[test]
+    fn status_marks_can_push_false_with_upstream_only_remote() {
+        let root = temp_git_dir("workbench-status-upstream-only");
+        let repo = root.join("repo");
+        let remote = root.join("excalidraw-upstream.git");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["checkout", "-b", "main"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "hello\n").expect("write readme");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "initial"]);
+        git_test_command(
+            &root,
+            &["init", "--bare", remote.to_string_lossy().as_ref()],
+        );
+        git_test_command(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "excalidraw-upstream",
+                remote.to_string_lossy().as_ref(),
+            ],
+        );
+
+        let status = status(&repo).expect("read status");
+
+        assert_eq!(status.branch.as_deref(), Some("main"));
+        assert!(!status.can_push);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
     ///     用户输入分支名可能包含斜杠和符号，生成本地 worktree 目录时必须稳定、安全、可读。
     ///
     /// Code Logic（这个测试做什么）:
@@ -777,15 +814,15 @@ UU web/src/App.tsx
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     用户项目可能只配置了非 origin 的单个远端，Workbench push 不应硬编码 origin。
+    ///     用户项目配置了 origin 但当前分支尚未设置 upstream 时，Workbench push 应能完成首次发布。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     创建真实 Git 仓库和 bare remote，只添加 backup remote，断言 push_branch 可以推送当前分支。
+    ///     创建真实 Git 仓库和 bare origin remote，断言 push_branch 可以推送当前分支并设置 upstream。
     #[test]
-    fn push_branch_uses_single_configured_remote_when_origin_missing() {
-        let root = temp_git_dir("workbench-push-single-remote");
+    fn push_branch_uses_origin_remote_when_upstream_missing() {
+        let root = temp_git_dir("workbench-push-origin-remote");
         let repo = root.join("repo");
-        let remote = root.join("backup.git");
+        let remote = root.join("origin.git");
         fs::create_dir_all(&repo).expect("create repo dir");
         git_test_command(&repo, &["init"]);
         git_test_command(&repo, &["checkout", "-b", "feature/worktree-push"]);
@@ -800,10 +837,10 @@ UU web/src/App.tsx
         );
         git_test_command(
             &repo,
-            &["remote", "add", "backup", remote.to_string_lossy().as_ref()],
+            &["remote", "add", "origin", remote.to_string_lossy().as_ref()],
         );
 
-        push_branch(&repo, "feature/worktree-push").expect("push with single non-origin remote");
+        push_branch(&repo, "feature/worktree-push").expect("push with origin remote");
         git_test_command(
             &remote,
             &["rev-parse", "--verify", "refs/heads/feature/worktree-push"],
@@ -832,8 +869,49 @@ UU web/src/App.tsx
 
         let err = push_branch(&repo, "feature/local-only").expect_err("missing remote should fail");
         let message = err.to_string();
-        assert!(message.contains("没有配置 Git remote"));
+        assert!(message.contains("没有配置 origin remote"));
+        assert!(message.contains("upstream"));
         assert!(message.contains("git remote add origin <url>"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     上游源码 remote 不等于用户自己的发布 remote，Workbench 不应默认把分支 push 到 upstream。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建只有 `excalidraw-upstream` remote 的真实仓库，断言 push_branch 返回配置 origin/upstream 的提示。
+    #[test]
+    fn push_branch_rejects_upstream_only_remote() {
+        let root = temp_git_dir("workbench-push-upstream-only");
+        let repo = root.join("repo");
+        let remote = root.join("excalidraw-upstream.git");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["checkout", "-b", "main"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "hello\n").expect("write readme");
+        git_test_command(&repo, &["add", "README.md"]);
+        git_test_command(&repo, &["commit", "-m", "initial"]);
+        git_test_command(
+            &root,
+            &["init", "--bare", remote.to_string_lossy().as_ref()],
+        );
+        git_test_command(
+            &repo,
+            &[
+                "remote",
+                "add",
+                "excalidraw-upstream",
+                remote.to_string_lossy().as_ref(),
+            ],
+        );
+
+        let err = push_branch(&repo, "main").expect_err("upstream-only remote should fail");
+        let message = err.to_string();
+        assert!(message.contains("origin"));
+        assert!(message.contains("upstream"));
 
         let _ = fs::remove_dir_all(root);
     }
