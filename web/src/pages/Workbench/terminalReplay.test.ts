@@ -1,4 +1,5 @@
 import {
+  planTerminalBufferWrite,
   shouldForwardTerminalInput,
   writeTerminalReplay,
   type TerminalReplayGate,
@@ -71,5 +72,9 @@ assert(
   !shouldForwardTerminalInput(gate, false),
   'inactive mounted terminals must not forward xterm-generated input',
 );
+
+const cappedAppendPlan = planTerminalBufferWrite('bcdefghijk', 'defghijklm');
+assert(cappedAppendPlan.mode === 'append', 'capped buffer shift should append live tail');
+assert(cappedAppendPlan.data === 'lm', 'capped buffer shift should append only new output');
 
 console.log('terminalReplay.test.ts passed');

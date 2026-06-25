@@ -61,7 +61,11 @@ import {
 } from './promptOptimizerWidget';
 import { mountedTerminalSessions, visibleTerminalSessions } from './terminalSessionOrder';
 import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOptions';
-import { shouldForwardTerminalInput, writeTerminalReplay } from './terminalReplay';
+import {
+  planTerminalBufferWrite,
+  shouldForwardTerminalInput,
+  writeTerminalReplay,
+} from './terminalReplay';
 import { terminalPanePixelSize } from './terminalSizing';
 import type { TerminalLayoutMode } from './terminalSizing';
 import {
@@ -432,7 +436,7 @@ function TerminalPane(props: TerminalPaneProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const bufferRef = useRef<string>('');
-  const writtenLengthRef = useRef<number>(0);
+  const writtenBufferRef = useRef<string>('');
   const replayGateRef = useRef<boolean>(false);
   const inputEnabledRef = useRef<boolean>(inputEnabled);
   const resizeTimerRef = useRef<number | null>(null);
@@ -482,7 +486,7 @@ function TerminalPane(props: TerminalPaneProps) {
     });
     const cursorDisposable = terminal.onCursorMove(emitCursorAnchor);
     writeTerminalReplay(terminal, bufferRef.current, replayGateRef);
-    writtenLengthRef.current = bufferRef.current.length;
+    writtenBufferRef.current = bufferRef.current;
     emitCursorAnchor();
     const resize = () => {
       try {
@@ -518,7 +522,7 @@ function TerminalPane(props: TerminalPaneProps) {
       cursorAnchorCallbackRef.current?.(null);
       terminal.dispose();
       terminalRef.current = null;
-      writtenLengthRef.current = 0;
+      writtenBufferRef.current = '';
       replayGateRef.current = false;
     };
   }, [onInput, onResize, sessionId]);
@@ -541,16 +545,16 @@ function TerminalPane(props: TerminalPaneProps) {
   useEffect(() => {
     const terminal = terminalRef.current;
     if (!terminal || !sessionId) return;
-    const previousLength = writtenLengthRef.current;
-    if (buffer.length < previousLength) {
+    const plan = planTerminalBufferWrite(writtenBufferRef.current, buffer);
+    if (plan.mode === 'replay') {
       terminal.clear();
-      writeTerminalReplay(terminal, buffer, replayGateRef);
-      writtenLengthRef.current = buffer.length;
+      writeTerminalReplay(terminal, plan.data, replayGateRef);
+      writtenBufferRef.current = buffer;
       return;
     }
-    if (buffer.length > previousLength) {
-      terminal.write(buffer.slice(previousLength));
-      writtenLengthRef.current = buffer.length;
+    if (plan.mode === 'append') {
+      terminal.write(plan.data);
+      writtenBufferRef.current = buffer;
     }
   }, [buffer, revision, sessionId]);
 
