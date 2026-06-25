@@ -477,6 +477,88 @@ export interface WorkbenchPathInfo {
   modifiedAt: string | null;
 }
 
+/** Workbench 文件内容检测类型，和 Rust WorkbenchDetectedFileType 对齐。 */
+export type WorkbenchDetectedFileType =
+  | 'image'
+  | 'markdown'
+  | 'code'
+  | 'json'
+  | 'toml'
+  | 'csv'
+  | 'sqlite'
+  | 'text'
+  | 'binary'
+  | 'unsupported';
+
+/** Workbench 文件工作区显示模式，和 Rust WorkbenchFileMode 对齐。 */
+export type WorkbenchFileMode = 'viewer' | 'editor' | 'wysiwyg' | 'source' | 'split';
+
+/** 文件可执行操作能力，用于控制预览、编辑、格式化和默认打开模式。 */
+export interface WorkbenchFileCapabilities {
+  canPreview: boolean;
+  canEdit: boolean;
+  canFormat: boolean;
+  mustValidateBeforeSave: boolean;
+  defaultMode: WorkbenchFileMode;
+  availableModes: WorkbenchFileMode[];
+}
+
+/** 可编辑文本文件内容与保存基线。 */
+export interface WorkbenchTextContent {
+  content: string;
+  baseHash: string;
+  baseModifiedAt: string | null;
+}
+
+/** 图片只读预览数据。 */
+export interface WorkbenchImagePreview {
+  dataUrl: string;
+  mime: string;
+  width: number | null;
+  height: number | null;
+}
+
+/** CSV/TSV 只读表格预览数据。 */
+export interface WorkbenchCsvPreview {
+  columns: string[];
+  rows: string[][];
+  truncated: boolean;
+}
+
+/** SQLite 只读表格预览数据。 */
+export interface WorkbenchSqlitePreview {
+  tables: string[];
+  selectedTable: string | null;
+  columns: string[];
+  rows: string[][];
+  truncated: boolean;
+}
+
+/** 打开文件响应：包含 metadata、类型能力与某一种内容/预览载荷。 */
+export interface WorkbenchOpenFile {
+  metadata: WorkbenchPathInfo;
+  detectedType: WorkbenchDetectedFileType;
+  capabilities: WorkbenchFileCapabilities;
+  text: WorkbenchTextContent | null;
+  image: WorkbenchImagePreview | null;
+  csv: WorkbenchCsvPreview | null;
+  sqlite: WorkbenchSqlitePreview | null;
+  truncated: boolean;
+  notice: string | null;
+}
+
+/** 保存文本文件后的最新 metadata 与下一次保存基线。 */
+export interface WorkbenchSaveTextResult {
+  metadata: WorkbenchPathInfo;
+  baseHash: string;
+  baseModifiedAt: string | null;
+}
+
+/** JSON/TOML 格式化结果。 */
+export interface WorkbenchFormatResult {
+  formatted: string;
+}
+
 /** 工作台终端输出事件 payload（listen('workbench:terminal-output')）。 */
 export interface WorkbenchTerminalOutputEvent {
   sessionId: string;

@@ -12,12 +12,17 @@
 
 import { invoke } from './client';
 import type {
+  WorkbenchDetectedFileType,
   WorkbenchFileNode,
+  WorkbenchFormatResult,
   WorkbenchGitCommit,
   WorkbenchMergeResult,
+  WorkbenchOpenFile,
   WorkbenchPathInfo,
   WorkbenchProject,
+  WorkbenchSaveTextResult,
   WorkbenchSession,
+  WorkbenchSqlitePreview,
   WorkbenchWorktree,
 } from '@/lib/types';
 
@@ -178,6 +183,52 @@ export const workbenchApi = {
         projectId,
         worktreeId: worktreeId ?? null,
         path,
+      }),
+
+    /** 打开项目内文件，返回类型能力与可用内容或预览。 */
+    open: (projectId: string, path: string, worktreeId?: string | null) =>
+      invoke<WorkbenchOpenFile>('open_workbench_file', {
+        projectId,
+        worktreeId: worktreeId ?? null,
+        path,
+      }),
+
+    /** 保存可编辑文本文件；baseHash 用于后端乐观锁校验。 */
+    saveText: (
+      projectId: string,
+      path: string,
+      content: string,
+      baseHash: string,
+      detectedType: WorkbenchDetectedFileType,
+      worktreeId?: string | null,
+    ) =>
+      invoke<WorkbenchSaveTextResult>('save_workbench_text_file', {
+        projectId,
+        worktreeId: worktreeId ?? null,
+        path,
+        content,
+        baseHash,
+        detectedType,
+      }),
+
+    /** 格式化 JSON/TOML 内容，不直接保存文件。 */
+    formatStructured: (kind: 'json' | 'toml', content: string) =>
+      invoke<WorkbenchFormatResult>('format_workbench_structured_content', { kind, content }),
+
+    /** 重新预览 SQLite 文件的指定表。 */
+    previewSqlite: (
+      projectId: string,
+      path: string,
+      table?: string | null,
+      limitRows = 100,
+      worktreeId?: string | null,
+    ) =>
+      invoke<WorkbenchSqlitePreview>('preview_workbench_sqlite', {
+        projectId,
+        worktreeId: worktreeId ?? null,
+        path,
+        table: table ?? null,
+        limitRows,
       }),
 
     /** 在父目录下创建空文件。 */

@@ -13,14 +13,17 @@ use crate::claude_cli;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::workbench::models::{
-    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchGitStatusDto, WorkbenchPathInfo,
-    WorkbenchProjectDto, WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchWorktreeDto,
-    WorkbenchWorktreeRow,
+    WorkbenchDetectedFileType, WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchGitStatusDto,
+    WorkbenchOpenFileDto, WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchProjectRow,
+    WorkbenchSaveTextResultDto, WorkbenchSessionDto, WorkbenchSqlitePreview, WorkbenchTextContent,
+    WorkbenchWorktreeDto, WorkbenchWorktreeRow,
 };
 use crate::workbench::sessions::{
     kill_persisted_backend, pane_count_for_row, PaneCloseOutcome, PaneSplitDirection,
 };
-use crate::workbench::{fs as workbench_fs, git as workbench_git, projects};
+use crate::workbench::{
+    file_content, file_preview, fs as workbench_fs, git as workbench_git, projects, sqlite_preview,
+};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -125,6 +128,19 @@ struct WorkbenchMergeResolutionResponse {
 struct WorkbenchMergeResolvedFile {
     path: String,
     content: String,
+}
+
+/// Workbench 结构化内容格式化结果 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     前端编辑 JSON/TOML 时需要后端返回权威格式化文本，用同一套解析器保证保存前校验一致。
+///
+/// Code Logic（这个结构体做什么）:
+///     使用 camelCase 序列化 `{formatted}`，承载格式化后的 UTF-8 文本。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchFormatResult {
+    formatted: String,
 }
 
 /// 传给 Claude Code 的单个冲突文件输入。
@@ -475,6 +491,29 @@ where
     tauri::async_runtime::spawn_blocking(task)
         .await
         .map_err(|error| AppError::generic(format!("工作台文件任务执行失败: {error}")))?
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     打开、保存和 SQLite 预览都必须先确认目标是当前 worktree 根内的既有文件，不能读取目录或越界路径。
+///
+/// Code Logic（这个函数做什么）:
+///     在 blocking pool 中先读取 path_info，再用 resolve_project_path 取得 canonical 文件路径；
+///     非 file 类型返回业务错误，成功时返回 metadata 与安全绝对路径。
+async fn resolve_workbench_file_path(
+    root: PathBuf,
+    path: String,
+) -> Result<(WorkbenchPathInfo, PathBuf), AppError> {
+    run_blocking_fs(move || {
+        let metadata = workbench_fs::path_info(&root, &path)?;
+        if metadata.kind != "file" {
+            return Err(AppError::generic(
+                "只能打开项目内文件，不能把目录作为文件处理",
+            ));
+        }
+        let file_path = projects::resolve_project_path(&root, &path)?;
+        Ok((metadata, file_path))
+    })
+    .await
 }
 
 /// 列出工作台最近项目。
@@ -1564,6 +1603,200 @@ pub async fn list_workbench_git_commits(
     let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
     let limit = limit.unwrap_or(30).clamp(1, 100);
     workbench_git::list_commits(Path::new(&worktree.path), limit)
+}
+
+/// 打开当前 worktree 内的文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     文件工作区需要一次拿到文件 metadata、类型能力和可用的内容/预览数据，供前端打开 tab。
+///
+/// Code Logic（这个函数做什么）:
+///     解析 project/worktree 和安全文件路径，按后端检测类型分发到文本、图片、CSV 或 SQLite 预览；
+///     内容超限、非 UTF-8 或预览失败时返回 notice，不让一次预览失败阻断文件 tab 打开。
+#[tauri::command]
+pub async fn open_workbench_file(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+) -> Result<WorkbenchOpenFileDto, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let (metadata, file_path) = resolve_workbench_file_path(root, path).await?;
+    let detected_type = file_preview::detect_file_type(&metadata.name);
+    let capabilities = file_preview::capabilities_for_type(&detected_type);
+    let mut response = WorkbenchOpenFileDto {
+        metadata,
+        detected_type: detected_type.clone(),
+        capabilities,
+        text: None,
+        image: None,
+        csv: None,
+        sqlite: None,
+        truncated: false,
+        notice: None,
+    };
+
+    match detected_type {
+        WorkbenchDetectedFileType::Markdown
+        | WorkbenchDetectedFileType::Code
+        | WorkbenchDetectedFileType::Json
+        | WorkbenchDetectedFileType::Toml
+        | WorkbenchDetectedFileType::Text => {
+            let base_modified_at = response.metadata.modified_at.clone();
+            let read_path = file_path.clone();
+            match run_blocking_fs(move || file_content::read_text_file(&read_path)).await {
+                Ok((content, base_hash)) => {
+                    response.text = Some(WorkbenchTextContent {
+                        content,
+                        base_hash,
+                        base_modified_at,
+                    });
+                }
+                Err(error) => {
+                    response.notice = Some(error.to_string());
+                }
+            }
+        }
+        WorkbenchDetectedFileType::Image => {
+            let preview_path = file_path.clone();
+            match run_blocking_fs(move || file_preview::preview_image_file(&preview_path)).await {
+                Ok(image) => {
+                    response.image = Some(image);
+                }
+                Err(error) => {
+                    response.notice = Some(error.to_string());
+                }
+            }
+        }
+        WorkbenchDetectedFileType::Csv => {
+            let preview_path = file_path.clone();
+            match run_blocking_fs(move || file_preview::preview_csv_file(&preview_path, 100)).await
+            {
+                Ok(csv) => {
+                    response.truncated = csv.truncated;
+                    response.csv = Some(csv);
+                }
+                Err(error) => {
+                    response.notice = Some(error.to_string());
+                }
+            }
+        }
+        WorkbenchDetectedFileType::Sqlite => {
+            match sqlite_preview::preview_sqlite_file(&file_path, None, 100).await {
+                Ok(sqlite) => {
+                    response.truncated = sqlite.truncated;
+                    response.sqlite = Some(sqlite);
+                }
+                Err(error) => {
+                    response.notice = Some(error.to_string());
+                }
+            }
+        }
+        WorkbenchDetectedFileType::Binary | WorkbenchDetectedFileType::Unsupported => {
+            response.notice = Some("此文件类型暂不支持 Workbench 预览".to_string());
+        }
+    }
+
+    Ok(response)
+}
+
+/// 保存当前 worktree 内的文本文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     文件工作区编辑器需要安全保存 Markdown、代码、文本和结构化配置，同时防止覆盖外部修改。
+///
+/// Code Logic（这个函数做什么）:
+///     只允许文本类检测类型；JSON/TOML 先做语义校验但不强制格式化用户内容；
+///     随后解析安全文件路径，调用原子保存 helper，并返回最新 metadata 与 hash 基线。
+#[tauri::command]
+pub async fn save_workbench_text_file(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    content: String,
+    base_hash: String,
+    detected_type: WorkbenchDetectedFileType,
+) -> Result<WorkbenchSaveTextResultDto, AppError> {
+    match detected_type {
+        WorkbenchDetectedFileType::Json => {
+            file_content::format_structured_content("json", &content)?;
+        }
+        WorkbenchDetectedFileType::Toml => {
+            file_content::format_structured_content("toml", &content)?;
+        }
+        WorkbenchDetectedFileType::Markdown
+        | WorkbenchDetectedFileType::Code
+        | WorkbenchDetectedFileType::Text => {}
+        WorkbenchDetectedFileType::Image
+        | WorkbenchDetectedFileType::Csv
+        | WorkbenchDetectedFileType::Sqlite
+        | WorkbenchDetectedFileType::Binary
+        | WorkbenchDetectedFileType::Unsupported => {
+            return Err(AppError::generic("此文件类型不支持文本保存"));
+        }
+    }
+
+    let project = get_project(&state, &project_id).await?;
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let save_root = root.clone();
+    let save_path = path.clone();
+    let (_, file_path) = resolve_workbench_file_path(root, path).await?;
+    let base_hash = run_blocking_fs(move || {
+        file_content::save_text_file_atomic(&file_path, &content, &base_hash)
+    })
+    .await?;
+    let metadata = run_blocking_fs(move || workbench_fs::path_info(&save_root, &save_path)).await?;
+    let base_modified_at = metadata.modified_at.clone();
+
+    Ok(WorkbenchSaveTextResultDto {
+        metadata,
+        base_hash,
+        base_modified_at,
+    })
+}
+
+/// 格式化 JSON 或 TOML 内容。
+///
+/// Business Logic（为什么需要这个函数）:
+///     前端编辑结构化配置时应复用后端保存前校验的同一套解析器，避免前后端格式化结果不一致。
+///
+/// Code Logic（这个函数做什么）:
+///     根据 kind 调用 file_content::format_structured_content，并把格式化文本包装为 `{formatted}`。
+#[tauri::command]
+pub async fn format_workbench_structured_content(
+    kind: String,
+    content: String,
+) -> Result<WorkbenchFormatResult, AppError> {
+    let formatted =
+        run_blocking_fs(move || file_content::format_structured_content(&kind, &content)).await?;
+    Ok(WorkbenchFormatResult { formatted })
+}
+
+/// 预览当前 worktree 内的 SQLite 文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户切换 SQLite 表或调整预览行数时，需要重新读取只读预览，而不重新打开整个文件工作区。
+///
+/// Code Logic（这个函数做什么）:
+///     解析安全文件路径后调用 SQLite 只读预览 helper；只允许枚举表和 LIMIT 查询，不执行用户 SQL。
+#[tauri::command]
+pub async fn preview_workbench_sqlite(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    table: Option<String>,
+    limit_rows: Option<i64>,
+) -> Result<WorkbenchSqlitePreview, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let (_, file_path) = resolve_workbench_file_path(root, path).await?;
+    sqlite_preview::preview_sqlite_file(&file_path, table, limit_rows.unwrap_or(100)).await
 }
 
 /// 列出工作台终端会话。
