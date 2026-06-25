@@ -39,6 +39,22 @@ enum PushTarget {
     Remote(String),
 }
 
+/// 已暂存改动的 commit message 输入摘要。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Claude Code 生成 commit message 时需要看到真实会进入 commit 的改动内容。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存 staged diff 的 stat、正文和正文是否因长度上限被截断。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StagedCommitChanges {
+    pub stat: String,
+    pub diff: String,
+    pub truncated: bool,
+}
+
+const MAX_COMMIT_DIFF_CHARS: usize = 24_000;
+
 /// Business Logic（为什么需要这个函数）:
 ///     Git worktree 管理命令都需要执行系统 git，并在失败时返回可读错误。
 ///
@@ -132,17 +148,98 @@ pub fn create_worktree(
 /// Code Logic（这个函数做什么）:
 ///     执行 `git add -A` 后检查 staged/working 状态；有变更时执行 `git commit -m`，无变更返回 false。
 pub fn commit_all(path: &Path, message: &str) -> Result<bool, AppError> {
-    let trimmed = message.trim();
-    if trimmed.is_empty() {
-        return Err(AppError::generic("Commit message 不能为空"));
-    }
-    run_git(path, &["add", "-A"])?;
-    let pending = run_git(path, &["status", "--porcelain"])?;
-    if pending.trim().is_empty() {
+    if !stage_all_for_commit(path)? {
         return Ok(false);
     }
-    run_git(path, &["commit", "-m", trimmed])?;
+    commit_staged(path, message)?;
     Ok(true)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Commit 按钮需要把所有本地改动纳入本次提交，包括删除、修改和未跟踪文件。
+///
+/// Code Logic（这个函数做什么）:
+///     执行 `git add -A` 后读取 `git status --porcelain`，返回是否存在待提交改动。
+pub fn stage_all_for_commit(path: &Path) -> Result<bool, AppError> {
+    run_git(path, &["add", "-A"])?;
+    let pending = run_git(path, &["status", "--porcelain"])?;
+    Ok(!pending.trim().is_empty())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Claude Code 生成 commit message 时应基于 staged diff，而不是基于可能变化的工作区状态。
+///
+/// Code Logic（这个函数做什么）:
+///     读取 `git diff --cached --stat` 和 `git diff --cached`；diff 正文超过上限时按字符截断并标记。
+pub fn staged_changes_for_commit_message(path: &Path) -> Result<StagedCommitChanges, AppError> {
+    let stat = run_git(
+        path,
+        &["diff", "--cached", "--stat", "--no-ext-diff", "--no-color"],
+    )?;
+    let diff = run_git(path, &["diff", "--cached", "--no-ext-diff", "--no-color"])?;
+    let (diff, truncated) = truncate_for_commit_message(&diff);
+    Ok(StagedCommitChanges {
+        stat: stat.trim().to_string(),
+        diff,
+        truncated,
+    })
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Claude Code 输出可能包含代码围栏、首尾空白或空文本，Git commit 前必须归一化。
+///
+/// Code Logic（这个函数做什么）:
+///     去掉 markdown 代码围栏和首尾空白；清洗后为空则返回业务错误。
+pub fn sanitize_commit_message(message: &str) -> Result<String, AppError> {
+    let mut lines = message.trim().lines().collect::<Vec<_>>();
+    if lines
+        .first()
+        .map(|line| line.trim_start().starts_with("```"))
+        .unwrap_or(false)
+    {
+        lines.remove(0);
+        if lines
+            .last()
+            .map(|line| line.trim() == "```")
+            .unwrap_or(false)
+        {
+            lines.pop();
+        }
+    }
+    let cleaned = lines.join("\n").trim().replace("\r\n", "\n");
+    if cleaned.trim().is_empty() {
+        return Err(AppError::generic("Commit message 不能为空"));
+    }
+    Ok(cleaned)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     AI 或手写 message 准备好后，Workbench 需要提交当前 staged 改动。
+///
+/// Code Logic（这个函数做什么）:
+///     清洗 message 后执行 `git commit -m <message>`；不再重新 stage，避免 message 与 diff 不一致。
+pub fn commit_staged(path: &Path, message: &str) -> Result<(), AppError> {
+    let cleaned = sanitize_commit_message(message)?;
+    run_git(path, &["commit", "-m", &cleaned])?;
+    Ok(())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     大型 diff 不能完整塞给 Claude CLI，否则容易超时或超出上下文。
+///
+/// Code Logic（这个函数做什么）:
+///     按 Unicode scalar 截断 diff，返回截断文本与是否截断。
+fn truncate_for_commit_message(diff: &str) -> (String, bool) {
+    let mut chars = diff.chars();
+    let truncated = chars
+        .by_ref()
+        .take(MAX_COMMIT_DIFF_CHARS)
+        .collect::<String>();
+    if chars.next().is_some() {
+        (truncated, true)
+    } else {
+        (diff.to_string(), false)
+    }
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -202,12 +299,7 @@ fn resolve_push_target(path: &Path) -> Result<PushTarget, AppError> {
 fn has_upstream(path: &Path) -> bool {
     run_git(
         path,
-        &[
-            "rev-parse",
-            "--abbrev-ref",
-            "--symbolic-full-name",
-            "@{u}",
-        ],
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
     )
     .map(|output| !output.trim().is_empty())
     .unwrap_or(false)
@@ -486,7 +578,10 @@ UU web/src/App.tsx
         fs::write(repo.join("README.md"), "hello\n").expect("write readme");
         git_test_command(&repo, &["add", "README.md"]);
         git_test_command(&repo, &["commit", "-m", "initial"]);
-        git_test_command(&root, &["init", "--bare", remote.to_string_lossy().as_ref()]);
+        git_test_command(
+            &root,
+            &["init", "--bare", remote.to_string_lossy().as_ref()],
+        );
         git_test_command(
             &repo,
             &["remote", "add", "backup", remote.to_string_lossy().as_ref()],
@@ -525,6 +620,57 @@ UU web/src/App.tsx
         assert!(message.contains("git remote add origin <url>"));
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     AI commit message 生成必须基于 commit 将实际包含的 staged diff，且要覆盖未跟踪文件。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建真实 Git 仓库，新增未跟踪文件后 stage_all_for_commit，再断言 staged diff 摘要包含该文件。
+    #[test]
+    fn stage_all_for_commit_includes_untracked_files_in_staged_diff() {
+        let root = temp_git_dir("workbench-commit-diff");
+        let repo = root.join("repo");
+        fs::create_dir_all(&repo).expect("create repo dir");
+        git_test_command(&repo, &["init"]);
+        git_test_command(&repo, &["config", "user.email", "test@example.com"]);
+        git_test_command(&repo, &["config", "user.name", "Workbench Test"]);
+        fs::write(repo.join("README.md"), "hello\n").expect("write readme");
+
+        assert!(stage_all_for_commit(&repo).expect("stage changes"));
+        let diff = staged_changes_for_commit_message(&repo).expect("read staged diff");
+
+        assert!(diff.stat.contains("README.md"));
+        assert!(diff.diff.contains("hello"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     Claude Code 可能返回带代码围栏或多余空白的文本，Git commit 前必须清洗成稳定 message。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     传入代码围栏包裹的 commit message，断言输出只保留真实 message 内容。
+    #[test]
+    fn sanitize_generated_commit_message_strips_code_fences() {
+        let message = sanitize_commit_message(
+            "```text\nfeat: add worktree commits\n\n- generate message\n```",
+        )
+        .expect("sanitize message");
+
+        assert_eq!(message, "feat: add worktree commits\n\n- generate message");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     空 AI 输出不能进入 git commit，否则用户会看到底层 Git 编辑器或失败信息。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     传入空白和空代码围栏，断言返回业务错误。
+    #[test]
+    fn sanitize_generated_commit_message_rejects_empty_text() {
+        let err = sanitize_commit_message("```text\n   \n```").expect_err("empty message");
+
+        assert!(err.to_string().contains("Commit message 不能为空"));
     }
 
     /// Business Logic（为什么需要这个函数）:

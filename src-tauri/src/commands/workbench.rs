@@ -9,6 +9,7 @@
 //!     项目与会话命令直接操作共享状态；文件系统命令用 spawn_blocking 包裹同步 IO，
 //!     避免阻塞 Tauri async runtime。
 
+use crate::claude_cli;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::workbench::models::{
@@ -20,8 +21,24 @@ use crate::workbench::sessions::{
 };
 use crate::workbench::{fs as workbench_fs, git as workbench_git, projects};
 use chrono::Utc;
+use serde::Deserialize;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
+
+const COMMIT_MESSAGE_TIMEOUT_SECS: u64 = 180;
+
+/// Claude Code 生成的 Workbench commit message 结构化响应。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Workbench Commit 按钮需要从 Claude Code 获得可直接用于 git commit 的提交信息。
+///
+/// Code Logic（这个结构体做什么）:
+///     对齐 JSON schema 的 `message` 字段，供 serde 从 Claude CLI 结构化输出反序列化。
+#[derive(Debug, Clone, Deserialize)]
+struct WorkbenchCommitMessageResponse {
+    message: String,
+}
 
 /// Business Logic（为什么需要这个函数）:
 ///     多个命令都需要用 project_id 查找最近项目记录，并在缺失时给前端明确错误。
@@ -415,23 +432,122 @@ pub async fn create_workbench_worktree(
 /// 提交当前 worktree 的全部改动。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     用户需要在 Workbench 中完成普通 commit，不必切回外部终端执行 git add/commit。
+///     用户需要在 Workbench 中点击 Commit 后，由 Claude Code 根据项目上下文和 staged diff 生成提交信息并提交。
 ///
 /// Code Logic（这个函数做什么）:
-///     对 worktree 路径执行 `git add -A` 和 `git commit -m`；没有改动时返回当前 DTO。
+///     message 为空时 stage 全部改动、读取 staged diff、在 worktree cwd 下调用 Claude Code 生成 message 后提交；
+///     message 非空时保留手写 message 兼容路径。
 #[tauri::command]
 pub async fn commit_workbench_worktree(
     state: State<'_, AppState>,
     worktree_id: String,
-    message: String,
+    message: Option<String>,
 ) -> Result<WorkbenchWorktreeDto, AppError> {
     let row = state
         .workbench_worktree_repo
         .get(&worktree_id)
         .await?
         .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
-    let _committed = workbench_git::commit_all(Path::new(&row.path), &message)?;
+    let path = Path::new(&row.path);
+    let committed = match message
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        Some(manual_message) => workbench_git::commit_all(path, manual_message)?,
+        None => commit_worktree_with_generated_message(&state, path).await?,
+    };
+    if !committed {
+        return Err(AppError::generic("当前 worktree 没有可提交的改动"));
+    }
     Ok(worktree_to_dto(&row))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Commit 按钮应自动根据当前 staged diff 生成 commit message，且让 Claude Code 读取项目上下文。
+///
+/// Code Logic（这个函数做什么）:
+///     stage 全部改动；无改动返回 false；有改动时读取 diff，使用配置里的 Claude CLI 路径和模型，
+///     在 worktree cwd 下执行项目上下文 headless JSON 调用，清洗 message 后提交 staged 内容。
+async fn commit_worktree_with_generated_message(
+    state: &AppState,
+    path: &Path,
+) -> Result<bool, AppError> {
+    if !workbench_git::stage_all_for_commit(path)? {
+        return Ok(false);
+    }
+    let changes = workbench_git::staged_changes_for_commit_message(path)?;
+    let (cli_path, model) = {
+        let cfg = state.config.read().unwrap();
+        (
+            cfg.github_trending.claude_cli_path.clone(),
+            cfg.github_trending.claude_model.clone(),
+        )
+    };
+    let schema = workbench_commit_message_schema();
+    let instruction = build_commit_message_instruction(&changes);
+    let generated = claude_cli::run_structured_json_with_cwd::<WorkbenchCommitMessageResponse>(
+        &cli_path,
+        &model,
+        &schema.to_string(),
+        &instruction,
+        Some(path),
+        COMMIT_MESSAGE_TIMEOUT_SECS,
+        "生成 commit message",
+    )
+    .await?;
+    let message = workbench_git::sanitize_commit_message(&generated.message)?;
+    workbench_git::commit_staged(path, &message)?;
+    Ok(true)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Claude CLI 结构化输出需要固定 schema，避免自由文本或解释性内容进入 git commit。
+///
+/// Code Logic（这个函数做什么）:
+///     返回只允许 `{message:string}` 的 JSON schema，message 是最终 git commit 文本。
+fn workbench_commit_message_schema() -> Value {
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["message"],
+        "properties": {
+            "message": {
+                "type": "string",
+                "minLength": 1,
+                "description": "A ready-to-use git commit message. It may contain a concise subject and an optional body."
+            }
+        }
+    })
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Claude Code 需要明确知道本次 commit 的 staged diff、输出格式和提交信息风格要求。
+///
+/// Code Logic（这个函数做什么）:
+///     把 staged stat/diff 组装为英文任务指令；diff 被截断时显式告知模型只能基于可见内容概括。
+fn build_commit_message_instruction(changes: &workbench_git::StagedCommitChanges) -> String {
+    let truncated_note = if changes.truncated {
+        "\n注意：下面的 diff 已被截断，请基于可见内容和文件摘要生成准确但保守的 commit message。"
+    } else {
+        ""
+    };
+    format!(
+        "You are generating a git commit message for the staged changes in the current Claude Code project context.\n\
+         Use the repository context available from the current working directory, but base the message on the staged diff below.\n\
+         Requirements:\n\
+         - Return only the structured JSON object required by the schema.\n\
+         - The `message` value must be ready for `git commit -m`.\n\
+         - Prefer a concise Conventional Commit style subject when the change type is clear.\n\
+         - Keep the first line under 72 characters when possible.\n\
+         - Add a short body only if it materially clarifies a multi-part change.\n\
+         - Do not wrap the message in Markdown fences, quotes, or explanations.{truncated_note}\n\n\
+         Staged file summary:\n\
+         ```text\n{}\n```\n\n\
+         Staged diff:\n\
+         ```diff\n{}\n```",
+        changes.stat, changes.diff
+    )
 }
 
 /// 推送当前 worktree 分支。
@@ -894,4 +1010,44 @@ pub async fn delete_workbench_path(
     let deleted_path = path.clone();
     run_blocking_fs(move || workbench_fs::delete_path(&root, &path)).await?;
     Ok(serde_json::json!({ "ok": true, "path": deleted_path }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     Workbench AI commit 必须让 Claude 基于 staged diff 生成提交信息，而不是泛泛猜测。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造 staged changes，断言生成指令包含 stat、diff、截断提示和只返回 commit message 的约束。
+    #[test]
+    fn commit_message_instruction_contains_staged_diff_and_output_contract() {
+        let changes = workbench_git::StagedCommitChanges {
+            stat: "README.md | 1 +".to_string(),
+            diff: "+hello".to_string(),
+            truncated: true,
+        };
+
+        let instruction = build_commit_message_instruction(&changes);
+
+        assert!(instruction.contains("README.md | 1 +"));
+        assert!(instruction.contains("+hello"));
+        assert!(instruction.contains("diff 已被截断"));
+        assert!(instruction.contains("Return only"));
+        assert!(instruction.contains("message"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     Claude CLI 结构化输出必须稳定落到单个 commit message 字段，避免前端解析自由文本。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     读取 schema JSON，断言 required 包含 message 且 message 类型为 string。
+    #[test]
+    fn commit_message_schema_requires_message_string() {
+        let schema = workbench_commit_message_schema();
+
+        assert_eq!(schema["required"][0], "message");
+        assert_eq!(schema["properties"]["message"]["type"], "string");
+    }
 }

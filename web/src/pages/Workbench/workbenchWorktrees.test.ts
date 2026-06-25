@@ -1,6 +1,7 @@
 import type { WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
 import {
   activeWorktreeRootPath,
+  canCommitWorktree,
   sessionsForWorktree,
   worktreeStatusTone,
 } from './workbenchWorktrees';
@@ -99,6 +100,26 @@ function testWorktreeStatusTone(): void {
   }
 }
 
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   Workbench 的 Git 状态可能是旧快照；Commit 按钮应允许点击，由后端实时 stage 并判断是否有改动。
+ *
+ * Code Logic（这个测试做什么）:
+ *   断言 clean worktree 在没有其他 worktree 操作进行时仍可提交；busy 或无 active worktree 时不可提交。
+ */
+function testCanCommitWorktreeIgnoresStaleCleanStatus(): void {
+  if (!canCommitWorktree(mainWorktree, null)) {
+    throw new Error('expected clean snapshot to still allow commit click');
+  }
+  if (canCommitWorktree(mainWorktree, 'push')) {
+    throw new Error('expected busy worktree actions to block commit');
+  }
+  if (canCommitWorktree(null, null)) {
+    throw new Error('expected missing worktree to block commit');
+  }
+}
+
 testSessionsForWorktree();
 testActiveWorktreeRootPath();
 testWorktreeStatusTone();
+testCanCommitWorktreeIgnoresStaleCleanStatus();

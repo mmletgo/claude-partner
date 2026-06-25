@@ -65,6 +65,7 @@ import { terminalPanePixelSize } from './terminalSizing';
 import type { TerminalLayoutMode } from './terminalSizing';
 import {
   activeWorktreeRootPath,
+  canCommitWorktree,
   sessionsForWorktree,
   worktreeStatusTone,
 } from './workbenchWorktrees';
@@ -1238,12 +1239,10 @@ export function Workbench() {
 
   const handleCommitWorktree = useCallback(async () => {
     if (!activeWorktree) return;
-    const message = window.prompt(t('workbench:worktrees.commitPrompt'));
-    if (!message?.trim()) return;
     try {
       setWorktreeBusy('commit');
       setWorktreeError(null);
-      await workbenchApi.worktrees.commit(activeWorktree.id, message.trim());
+      await workbenchApi.worktrees.commit(activeWorktree.id, null);
       await loadWorktrees(activeWorktree.projectId);
     } catch (error) {
       setWorktreeError(
@@ -1588,7 +1587,7 @@ export function Workbench() {
               variant="secondary"
               icon={<EditIcon />}
               loading={worktreeBusy === 'commit'}
-              disabled={!activeWorktree || activeWorktree.status.clean || worktreeBusy !== null}
+              disabled={!canCommitWorktree(activeWorktree, worktreeBusy)}
               onClick={() => void handleCommitWorktree()}
             >
               {t('workbench:worktrees.commit')}

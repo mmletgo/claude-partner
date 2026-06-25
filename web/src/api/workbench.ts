@@ -57,11 +57,14 @@ export const workbenchApi = {
         baseBranch: baseBranch ?? null,
       }),
 
-    /** 提交当前 worktree 的全部本地改动。 */
-    commit: (worktreeId: string, message: string) =>
-      invoke<WorkbenchWorktree>('commit_workbench_worktree', { worktreeId, message }),
+    /** 提交当前 worktree 的全部本地改动；message 为空时由后端 Claude Code 生成。 */
+    commit: (worktreeId: string, message?: string | null) =>
+      invoke<WorkbenchWorktree>('commit_workbench_worktree', {
+        worktreeId,
+        message: message ?? null,
+      }),
 
-    /** 推送当前 worktree 分支到 origin。 */
+    /** 推送当前 worktree 分支到 upstream/origin/唯一 remote。 */
     push: (worktreeId: string) =>
       invoke<WorkbenchWorktree>('push_workbench_worktree', { worktreeId }),
 

@@ -50,3 +50,17 @@ export function worktreeStatusTone(worktree: WorkbenchWorktree): WorktreeTone {
   }
   return 'neutral';
 }
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Git 状态来自轮询快照，用户在终端里改文件后快照可能暂时仍是 clean；Commit 点击应交给后端实时判断。
+ *
+ * Code Logic（这个函数做什么）:
+ *   只检查是否有 active worktree 以及是否已有 worktree 操作进行，不依赖可能过期的 clean 状态。
+ */
+export function canCommitWorktree(
+  activeWorktree: WorkbenchWorktree | null,
+  worktreeBusy: string | null,
+): boolean {
+  return activeWorktree !== null && worktreeBusy === null;
+}
