@@ -7,7 +7,7 @@
  *
  * Code Logic（这个模块做什么）:
  *   提供无 React 依赖的纯函数：中文结果优先、英文结果兜底、仅 running session 可填入，
- *   并保持写入文本原样，不主动追加 Enter。
+ *   打开时清空可见文本，并保持写入文本原样，不主动追加 Enter。
  */
 
 import type {
@@ -37,6 +37,12 @@ export interface PromptOptimizerShortcutResult {
   triggered: boolean;
 }
 
+export interface PromptOptimizerTextState {
+  input: string;
+  result: PromptOptimizeResponse;
+  message: string | null;
+}
+
 const MODIFIER_SHORTCUT_BY_KEY: Record<string, string> = {
   Alt: '<alt>',
   AltGraph: '<alt>',
@@ -59,6 +65,37 @@ const SPECIAL_KEY_BY_KEY: Record<string, string> = {
   PageUp: '<page_up>',
   Tab: '<tab>',
 };
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Prompt 优化小组件每次重新打开都应是干净输入态，不能残留上一次输入或结果。
+ *
+ * Code Logic（这个函数做什么）:
+ *   返回空的 PromptOptimizeResponse，供 React state 初始化和重新打开时复用。
+ */
+export function createEmptyPromptOptimizeResponse(): PromptOptimizeResponse {
+  return {
+    optimizedZh: '',
+    optimizedEn: '',
+  };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   用户关闭再打开 Workbench Prompt 优化浮层时，所有可见文本都必须清空。
+ *
+ * Code Logic（这个函数做什么）:
+ *   忽略传入的旧状态，返回空输入、空中英文结果和空状态消息。
+ */
+export function resetPromptOptimizerTextState(
+  _state?: PromptOptimizerTextState,
+): PromptOptimizerTextState {
+  return {
+    input: '',
+    result: createEmptyPromptOptimizeResponse(),
+    message: null,
+  };
+}
 
 /**
  * Business Logic（为什么需要这个函数）:

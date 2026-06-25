@@ -52,10 +52,12 @@ import type {
 import styles from './Workbench.module.css';
 import {
   canFillPromptIntoTerminal,
+  createEmptyPromptOptimizeResponse,
   createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
   promptOptimizerWorkingDirectory,
   reducePromptOptimizerShortcut,
+  resetPromptOptimizerTextState,
   selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
 import { visibleTerminalSessions } from './terminalSessionOrder';
@@ -594,10 +596,9 @@ export function Workbench() {
   const [runtimeNow, setRuntimeNow] = useState<number>(() => Date.now());
   const [promptPanelOpen, setPromptPanelOpen] = useState<boolean>(false);
   const [promptInput, setPromptInput] = useState<string>('');
-  const [promptResult, setPromptResult] = useState<PromptOptimizeResponse>({
-    optimizedZh: '',
-    optimizedEn: '',
-  });
+  const [promptResult, setPromptResult] = useState<PromptOptimizeResponse>(
+    createEmptyPromptOptimizeResponse,
+  );
   const [promptOptimizing, setPromptOptimizing] = useState<boolean>(false);
   const [promptWidgetMessage, setPromptWidgetMessage] = useState<string | null>(null);
   const [promptOptimizerHotkey, setPromptOptimizerHotkey] = useState<string>('<ctrl>');
@@ -975,6 +976,14 @@ export function Workbench() {
     }
   }, []);
 
+  const openPromptOptimizerPanel = useCallback(() => {
+    const reset = resetPromptOptimizerTextState();
+    setPromptInput(reset.input);
+    setPromptResult(reset.result);
+    setPromptWidgetMessage(reset.message);
+    setPromptPanelOpen(true);
+  }, []);
+
   const handleCursorAnchorChange = useCallback((anchor: TerminalCursorAnchor | null) => {
     const area = terminalAreaRef.current;
     if (!area || !anchor) return;
@@ -1053,11 +1062,11 @@ export function Workbench() {
   const triggerPromptOptimizerShortcut = useCallback(() => {
     if (!activeProjectIdRef.current) return;
     if (!promptPanelOpen) {
-      setPromptPanelOpen(true);
+      openPromptOptimizerPanel();
       return;
     }
     void runPromptOptimization(true);
-  }, [promptPanelOpen, runPromptOptimization]);
+  }, [openPromptOptimizerPanel, promptPanelOpen, runPromptOptimization]);
 
   useEffect(() => {
     const handleShortcutEvent = (event: KeyboardEvent) => {
@@ -1378,7 +1387,13 @@ export function Workbench() {
               title={t('workbench:promptOptimizer.open')}
               aria-label={t('workbench:promptOptimizer.open')}
               data-active={promptPanelOpen || undefined}
-              onClick={() => setPromptPanelOpen((current) => !current)}
+              onClick={() => {
+                if (promptPanelOpen) {
+                  setPromptPanelOpen(false);
+                } else {
+                  openPromptOptimizerPanel();
+                }
+              }}
             />
             <Button
               variant="icon"

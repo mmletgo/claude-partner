@@ -1,6 +1,7 @@
 import type { WorkbenchProject, WorkbenchSession } from '../../lib/types';
 import {
   canFillPromptIntoTerminal,
+  resetPromptOptimizerTextState,
   createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
   reducePromptOptimizerShortcut,
@@ -138,6 +139,26 @@ assertEqual(
 assertEqual(canFillPromptIntoTerminal(session('running')), true, 'running session can fill');
 assertEqual(canFillPromptIntoTerminal(null), false, 'missing session cannot fill');
 assertEqual(canFillPromptIntoTerminal(session('exited')), false, 'non-running session cannot fill');
+
+assertEqual(
+  resetPromptOptimizerTextState({
+    input: '上一次输入',
+    result: {
+      optimizedZh: '上一次中文结果',
+      optimizedEn: 'previous English result',
+    },
+    message: '上一次状态',
+  }),
+  {
+    input: '',
+    result: {
+      optimizedZh: '',
+      optimizedEn: '',
+    },
+    message: null,
+  },
+  'opening prompt optimizer resets all visible text',
+);
 
 assertEqual(
   promptOptimizerWorkingDirectory(project('/Users/hans/project/Pando')),
