@@ -59,7 +59,7 @@ import {
   reducePromptOptimizerShortcut,
   resetPromptOptimizerTextState,
 } from './promptOptimizerWidget';
-import { visibleTerminalSessions } from './terminalSessionOrder';
+import { mountedTerminalSessions, visibleTerminalSessions } from './terminalSessionOrder';
 import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOptions';
 import { shouldForwardTerminalInput, writeTerminalReplay } from './terminalReplay';
 import { terminalPanePixelSize } from './terminalSizing';
@@ -704,6 +704,10 @@ export function Workbench() {
   const visibleSessions = useMemo(
     () => visibleTerminalSessions({ sessions: scopedSessions, activeSessionId }),
     [activeSessionId, scopedSessions],
+  );
+  const mountedSessions = useMemo(
+    () => mountedTerminalSessions({ sessions }),
+    [sessions],
   );
   const gitGraphRows = useMemo(() => buildGitGraphRows(gitCommits), [gitCommits]);
   const renderedActiveSessionId = activeSession?.id ?? visibleSessions[0]?.id ?? null;
@@ -1956,41 +1960,40 @@ export function Workbench() {
                 onResize={handleResize}
                 onCursorAnchorChange={handleCursorAnchorChange}
               />
-            ) : (
-              visibleSessions.map((session) => (
-                <div
-                  key={session.id}
-                  className={styles.terminalPaneFrame}
-                  data-active={session.id === renderedActiveSessionId || undefined}
-                  onClick={() => focusSession(session.id)}
-                >
-                  <div className={styles.terminalPaneHeader}>
-                    <span className={styles.sessionDot} data-status={session.status} />
-                    <span className={styles.sessionName}>{session.name}</span>
-                    <span className={styles.terminalPaneStatus}>
-                      {session.status === 'running'
-                        ? t('workbench:sessionStatus.running')
-                        : session.status === 'exited'
-                          ? t('workbench:sessionStatus.exited')
-                          : session.status === 'disconnected'
-                            ? t('workbench:sessionStatus.disconnected')
-                            : session.status}
-                    </span>
-                  </div>
-                  <TerminalPane
-                    session={session}
-                    buffer={terminalBuffers[session.id] ?? ''}
-                    revision={terminalRevision}
-                    placeholder={t('workbench:terminalPlaceholder')}
-                    onInput={handleInput}
-                    onResize={handleResize}
-                    onCursorAnchorChange={
-                      session.id === renderedActiveSessionId ? handleCursorAnchorChange : undefined
-                    }
-                  />
+            ) : null}
+            {mountedSessions.map((session) => (
+              <div
+                key={session.id}
+                className={styles.terminalPaneFrame}
+                data-active={session.id === renderedActiveSessionId || undefined}
+                onClick={() => focusSession(session.id)}
+              >
+                <div className={styles.terminalPaneHeader}>
+                  <span className={styles.sessionDot} data-status={session.status} />
+                  <span className={styles.sessionName}>{session.name}</span>
+                  <span className={styles.terminalPaneStatus}>
+                    {session.status === 'running'
+                      ? t('workbench:sessionStatus.running')
+                      : session.status === 'exited'
+                        ? t('workbench:sessionStatus.exited')
+                        : session.status === 'disconnected'
+                          ? t('workbench:sessionStatus.disconnected')
+                          : session.status}
+                  </span>
                 </div>
-              ))
-            )}
+                <TerminalPane
+                  session={session}
+                  buffer={terminalBuffers[session.id] ?? ''}
+                  revision={terminalRevision}
+                  placeholder={t('workbench:terminalPlaceholder')}
+                  onInput={handleInput}
+                  onResize={handleResize}
+                  onCursorAnchorChange={
+                    session.id === renderedActiveSessionId ? handleCursorAnchorChange : undefined
+                  }
+                />
+              </div>
+            ))}
           </section>
         </div>
       </main>

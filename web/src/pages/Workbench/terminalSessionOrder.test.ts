@@ -1,5 +1,5 @@
 import type { WorkbenchSession } from '../../lib/types';
-import { visibleTerminalSessions } from './terminalSessionOrder';
+import { mountedTerminalSessions, visibleTerminalSessions } from './terminalSessionOrder';
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -8,11 +8,16 @@ import { visibleTerminalSessions } from './terminalSessionOrder';
  * Code Logic（这个函数做什么）:
  *   接收 id、name 和 startedAt，返回满足排序测试所需字段的 WorkbenchSession。
  */
-function session(id: string, name: string, startedAt: string): WorkbenchSession {
+function session(
+  id: string,
+  name: string,
+  startedAt: string,
+  worktreeId: string | null = null,
+): WorkbenchSession {
   return {
     id,
     projectId: 'project-1',
-    worktreeId: null,
+    worktreeId,
     name,
     command: 'claude',
     cwd: '/repo',
@@ -81,6 +86,19 @@ assertIds(
     activeSessionId: null,
   }),
   ['first', 'second', 'third', 'fourth', 'fifth'],
+);
+
+const crossWorktreeSessions = [
+  session('feature-a', 'Feature A', '2026-06-24T09:05:00.000Z', 'project-1:feature'),
+  session('main-a', 'Main A', '2026-06-24T09:00:00.000Z', 'project-1:main'),
+  session('feature-b', 'Feature B', '2026-06-24T09:10:00.000Z', 'project-1:feature'),
+];
+
+assertIds(
+  mountedTerminalSessions({
+    sessions: crossWorktreeSessions,
+  }),
+  ['main-a', 'feature-a', 'feature-b'],
 );
 
 console.log('terminalSessionOrder.test.ts passed');

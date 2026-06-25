@@ -5,6 +5,10 @@ interface VisibleTerminalSessionsInput {
   activeSessionId: string | null;
 }
 
+interface MountedTerminalSessionsInput {
+  sessions: WorkbenchSession[];
+}
+
 /**
  * Business Logic（为什么需要这个函数）:
  *   工作台多终端布局中的 pane 位置应当稳定，用户点击终端只改变焦点，不应把终端挪到第一位。
@@ -41,5 +45,16 @@ function sortSessionsByCreatedOrder(sessions: WorkbenchSession[]): WorkbenchSess
  *   按创建时间返回所有 window，activeSessionId 不参与重排；调用方用 activeSessionId 控制可见性。
  */
 export function visibleTerminalSessions(input: VisibleTerminalSessionsInput): WorkbenchSession[] {
+  return sortSessionsByCreatedOrder(input.sessions);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   切换 worktree 时也要保留其它 worktree 的 xterm 实例，避免回切时重新 replay 历史输出。
+ *
+ * Code Logic（这个函数做什么）:
+ *   返回当前项目下所有 terminal window，并保持与 tab 列表一致的创建顺序；调用方用 active worktree/window 控制可见性。
+ */
+export function mountedTerminalSessions(input: MountedTerminalSessionsInput): WorkbenchSession[] {
   return sortSessionsByCreatedOrder(input.sessions);
 }
