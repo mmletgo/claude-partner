@@ -2,8 +2,22 @@ interface TerminalReplayWriter {
   write(data: string, callback?: () => void): void;
 }
 
+type TerminalReplayReleaseScheduler = (release: () => void) => void;
+
 export interface TerminalReplayGate {
   current: boolean;
+  releaseId?: number;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   xterm replay 写入完成回调后，同一轮事件循环中仍可能冒出设备能力响应，不能立刻恢复输入转发。
+ *
+ * Code Logic（这个函数做什么）:
+ *   把 gate 释放推迟到下一轮 macrotask，让 replay 引发的 terminal-generated data 先被屏蔽。
+ */
+function scheduleTerminalReplayGateRelease(release: () => void): void {
+  globalThis.setTimeout(release, 0);
 }
 
 /**
@@ -28,6 +42,7 @@ export function writeTerminalReplay(
   terminal: TerminalReplayWriter,
   data: string,
   gate: TerminalReplayGate,
+  scheduleRelease: TerminalReplayReleaseScheduler = scheduleTerminalReplayGateRelease,
 ): void {
   if (data.length === 0) {
     gate.current = false;
@@ -35,7 +50,12 @@ export function writeTerminalReplay(
   }
 
   gate.current = true;
+  const releaseId = (gate.releaseId ?? 0) + 1;
+  gate.releaseId = releaseId;
   terminal.write(data, () => {
-    gate.current = false;
+    scheduleRelease(() => {
+      if (gate.releaseId !== releaseId) return;
+      gate.current = false;
+    });
   });
 }

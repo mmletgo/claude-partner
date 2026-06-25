@@ -41,8 +41,11 @@ function assert(condition: boolean, message: string): void {
 
 const gate: TerminalReplayGate = { current: false };
 const terminal = new FakeTerminalWriter();
+const scheduledReleases: Array<() => void> = [];
 
-writeTerminalReplay(terminal, '\x1b[c', gate);
+writeTerminalReplay(terminal, '\x1b[c', gate, (release) => {
+  scheduledReleases.push(release);
+});
 
 assert(gate.current, 'replay should suppress terminal-generated input while pending');
 assert(!shouldForwardTerminalInput(gate), 'input must not be forwarded during replay');
@@ -50,7 +53,19 @@ assert(JSON.stringify(terminal.writes) === JSON.stringify(['\x1b[c']), 'replay s
 
 terminal.callback?.();
 
-assert(!gate.current, 'replay should release suppression after xterm write callback');
+assert(
+  gate.current,
+  'replay should keep suppressing terminal-generated input until delayed release runs',
+);
+assert(
+  !shouldForwardTerminalInput(gate),
+  'input must not be forwarded between xterm callback and delayed release',
+);
+assert(scheduledReleases.length === 1, 'replay should schedule one delayed gate release');
+
+scheduledReleases[0]?.();
+
+assert(!gate.current, 'replay should release suppression after delayed gate release');
 assert(shouldForwardTerminalInput(gate), 'live input should be forwarded after replay');
 
 console.log('terminalReplay.test.ts passed');
