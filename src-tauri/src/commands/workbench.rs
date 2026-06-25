@@ -437,7 +437,7 @@ pub async fn create_workbench_worktree(
 ///
 /// Code Logic（这个函数做什么）:
 ///     message 为空时 stage 全部改动、读取 staged diff、在 worktree cwd 下调用 Claude Code 生成 message 后提交；
-///     message 非空时保留手写 message 兼容路径。
+///     message 非空时保留手写 message 兼容路径；无改动时返回最新 DTO，让前端刷新 stale 状态。
 #[tauri::command]
 pub async fn commit_workbench_worktree(
     state: State<'_, AppState>,
@@ -459,7 +459,7 @@ pub async fn commit_workbench_worktree(
         None => commit_worktree_with_generated_message(&state, path).await?,
     };
     if !committed {
-        return Err(AppError::generic("当前 worktree 没有可提交的改动"));
+        return Ok(worktree_to_dto(&row));
     }
     Ok(worktree_to_dto(&row))
 }

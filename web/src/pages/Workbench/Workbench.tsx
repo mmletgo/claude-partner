@@ -87,8 +87,8 @@ interface TauriInternalsWindow extends Window {
 type WorkbenchInspectorTab = 'files' | 'history';
 
 const GIT_GRAPH_LANE_WIDTH = 14;
-const GIT_GRAPH_ROW_HEIGHT = 44;
-const GIT_GRAPH_DOT_Y = 20;
+const GIT_GRAPH_ROW_HEIGHT = 58;
+const GIT_GRAPH_DOT_Y = 22;
 const GIT_GRAPH_DOT_RADIUS = 4;
 
 interface FileTreeProps {
@@ -1354,6 +1354,8 @@ export function Workbench() {
       await loadWorktrees(activeWorktree.projectId);
       if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
+      await loadWorktrees(activeWorktree.projectId);
+      if (inspectorTab === 'history') await loadGitHistory();
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.commitWorktree'), desktopUnavailableMessage),
       );

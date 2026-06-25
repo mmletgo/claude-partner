@@ -10,6 +10,7 @@ Workbench 右侧检查器需要在当前 active worktree 下查看类似 VS Code
 - 项目文件夹 tab 保持现有文件树、刷新、新建、重命名、删除和路径信息能力。
 - Git 历史 tab 绑定当前 active worktree，切换项目或 worktree 后重新加载。
 - Git 历史 tab 顶部提供当前 active worktree 的状态、Commit、Push、Merge；顶部 worktree 管理层只保留切换、新建和移除 worktree。
+- Commit 无可提交改动时按 no-op 处理并刷新 status，不向用户展示失败错误；commit 失败也要刷新 status，避免旧的改动数继续残留。
 - Push 按钮只在当前 worktree 有分支且后端 status 判定存在可用推送目标时启用；本地未发布、没有 origin/upstream 的项目保持禁用，只有 `*-upstream` 这类源码上游 remote 也不能启用。
 - 每条提交显示 VS Code 风格多 lane graph、短 hash、标题、作者和相对时间；最多展示最近 30 条。
 - 提交旁展示 local / remote / tag ref badge：本地分支用 local 色，远端分支用云端色与上传图标，tag 用独立色。
