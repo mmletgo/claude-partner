@@ -380,8 +380,6 @@ git commit -m "feat: add workbench file helpers"
 - Modify: `src-tauri/src/workbench/mod.rs`
 - Modify: `src-tauri/src/workbench/models.rs`
 - Create: `src-tauri/src/workbench/file_content.rs`
-- Create: `src-tauri/src/workbench/file_preview.rs`
-- Create: `src-tauri/src/workbench/sqlite_preview.rs`
 
 - [ ] **Step 1: Add Rust dependencies**
 
@@ -542,8 +540,6 @@ Edit `src-tauri/src/workbench/mod.rs`:
 
 ```rust
 pub mod file_content;
-pub mod file_preview;
-pub mod sqlite_preview;
 ```
 
 - [ ] **Step 4: Create failing Rust tests for text/hash/format**
@@ -747,8 +743,8 @@ git commit -m "feat: add workbench file content core"
 ## Task 3: Rust CSV, Image, and SQLite Preview
 
 **Files:**
-- Modify: `src-tauri/src/workbench/file_preview.rs`
-- Modify: `src-tauri/src/workbench/sqlite_preview.rs`
+- Create: `src-tauri/src/workbench/file_preview.rs`
+- Create: `src-tauri/src/workbench/sqlite_preview.rs`
 - Modify: `src-tauri/src/workbench/models.rs`
 
 - [ ] **Step 1: Write failing preview tests**
