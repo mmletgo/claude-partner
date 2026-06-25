@@ -61,24 +61,53 @@ export interface FormatResult {
   message: string | null;
 }
 
-const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'webp']);
-const MARKDOWN_EXTENSIONS = new Set(['markdown', 'md', 'mdown', 'mkd']);
+const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp']);
+const MARKDOWN_EXTENSIONS = new Set(['markdown', 'md', 'mdown', 'mdx', 'mkd']);
 const JSON_EXTENSIONS = new Set(['json']);
 const UNSUPPORTED_JSON_EXTENSIONS = new Set(['jsonc']);
 const TOML_EXTENSIONS = new Set(['toml']);
 const CSV_EXTENSIONS = new Set(['csv', 'tsv']);
 const SQLITE_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3']);
-const TEXT_EXTENSIONS = new Set(['env', 'gitignore', 'log', 'txt']);
+const TEXT_EXTENSIONS = new Set([
+  'config',
+  'conf',
+  'dockerignore',
+  'editorconfig',
+  'env',
+  'gitattributes',
+  'gitignore',
+  'ini',
+  'lock',
+  'log',
+  'properties',
+  'text',
+  'txt',
+]);
 const CODE_EXTENSIONS = new Set([
   'bash',
   'c',
   'cc',
+  'cjs',
+  'clj',
+  'cljs',
   'cpp',
   'cs',
   'css',
+  'cxx',
+  'dart',
+  'erl',
+  'ex',
+  'exs',
+  'fish',
+  'fs',
+  'fsx',
+  'gql',
+  'gradle',
+  'graphql',
   'go',
   'h',
   'hpp',
+  'hrl',
   'html',
   'htm',
   'java',
@@ -88,8 +117,14 @@ const CODE_EXTENSIONS = new Set([
   'kts',
   'less',
   'lua',
+  'mjs',
+  'pl',
+  'pm',
   'php',
+  'proto',
   'py',
+  'ps1',
+  'r',
   'rb',
   'rs',
   'sass',

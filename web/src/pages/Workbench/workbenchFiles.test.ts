@@ -28,11 +28,14 @@ function assert(condition: boolean, message: string): void {
  */
 async function main(): Promise<void> {
   assert(detectWorkbenchFileType('README.md', null) === 'markdown', 'markdown extension detected');
+  assert(detectWorkbenchFileType('README.mdx', null) === 'markdown', 'mdx extension detected as markdown');
   assert(detectWorkbenchFileType('src/App.tsx', null) === 'code', 'tsx extension detected as code');
+  assert(detectWorkbenchFileType('src/index.mjs', null) === 'code', 'mjs extension detected as code');
   assert(detectWorkbenchFileType('data.csv', null) === 'csv', 'csv extension detected');
   assert(detectWorkbenchFileType('config.toml', null) === 'toml', 'toml extension detected');
   assert(detectWorkbenchFileType('data.sqlite', null) === 'sqlite', 'sqlite extension detected');
   assert(detectWorkbenchFileType('logo.png', null) === 'image', 'png extension detected');
+  assert(detectWorkbenchFileType('scan.tiff', null) === 'image', 'tiff extension detected');
   assert(detectWorkbenchFileType('settings.jsonc', null) === 'unsupported', 'jsonc is not treated as strict json');
   assert(
     detectWorkbenchFileType('settings.jsonc', 'application/json') === 'unsupported',

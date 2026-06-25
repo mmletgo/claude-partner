@@ -12,7 +12,7 @@ use std::path::Path;
 
 use crate::error::AppError;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteRow};
-use sqlx::{Row, TypeInfo, ValueRef};
+use sqlx::{Column, Row, TypeInfo, ValueRef};
 
 use super::models::WorkbenchSqlitePreview;
 
@@ -58,15 +58,15 @@ pub async fn preview_sqlite_file(
         });
     };
 
-    let quoted_table = quote_identifier(&table_name);
-    let columns = table_columns(&pool, &quoted_table).await?;
     let clamped_limit = limit_rows.clamp(0, 500);
     let fetch_limit = clamped_limit + 1;
+    let quoted_table = quote_identifier(&table_name);
     let query = format!("SELECT * FROM {quoted_table} LIMIT ?");
     let fetched_rows = sqlx::query(&query)
         .bind(fetch_limit)
         .fetch_all(&pool)
         .await?;
+    let columns = select_columns_or_schema_fallback(&pool, &quoted_table, &fetched_rows).await?;
     let truncated = fetched_rows.len() as i64 > clamped_limit;
     let rows = fetched_rows
         .iter()
@@ -154,19 +154,35 @@ fn select_table(
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     前端表格需要列名才能渲染表头，且列名必须来自 SQLite schema 而不是用户输入。
+///     SQLite `SELECT *` 的可见列集合可能不同于 `PRAGMA table_info`，表头必须与 row cells 对齐。
 ///
 /// Code Logic（这个函数做什么）:
-///     用 PRAGMA table_info 读取指定已转义表名的列定义，并按 cid 顺序返回 name 字段。
-async fn table_columns(
+///     优先从实际 SELECT 返回的第一行 metadata 读取列名；空表没有 row metadata 时，
+///     回退到 PRAGMA table_xinfo 并排除真正 hidden 列，保留 generated columns。
+async fn select_columns_or_schema_fallback(
     pool: &sqlx::SqlitePool,
     quoted_table: &str,
+    fetched_rows: &[SqliteRow],
 ) -> Result<Vec<String>, AppError> {
-    let query = format!("PRAGMA table_info({quoted_table})");
+    if let Some(row) = fetched_rows.first() {
+        return Ok(row
+            .columns()
+            .iter()
+            .map(|column| column.name().to_string())
+            .collect());
+    }
+
+    let query = format!("PRAGMA table_xinfo({quoted_table})");
     let rows = sqlx::query(&query).fetch_all(pool).await?;
-    rows.into_iter()
-        .map(|row| row.try_get::<String, _>("name").map_err(AppError::from))
-        .collect()
+    let mut columns = Vec::new();
+    for row in rows {
+        let hidden = row.try_get::<i64, _>("hidden").unwrap_or(0);
+        if hidden == 1 {
+            continue;
+        }
+        columns.push(row.try_get::<String, _>("name")?);
+    }
+    Ok(columns)
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -421,5 +437,43 @@ mod tests {
                 "".to_string(),
             ]]
         );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     SQLite generated column 会出现在 SELECT * 结果中，Workbench 表头必须与可见行单元格完全对齐。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     创建包含 generated column 的表并插入一行，断言 columns 包含 generated 列且列数等于行 cell 数。
+    #[tokio::test]
+    async fn preview_sqlite_file_keeps_columns_aligned_with_generated_columns() {
+        let dir = temp_dir();
+        let path = dir.path().join("data.sqlite");
+        let pool = writable_pool(&path).await;
+        sqlx::query(
+            "CREATE TABLE generated_values (
+                a INTEGER,
+                b INTEGER,
+                sum_value INTEGER GENERATED ALWAYS AS (a + b) VIRTUAL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create generated table");
+        sqlx::query("INSERT INTO generated_values (a, b) VALUES (2, 3)")
+            .execute(&pool)
+            .await
+            .expect("insert generated values");
+        pool.close().await;
+
+        let preview = preview_sqlite_file(&path, Some("generated_values".to_string()), 10)
+            .await
+            .expect("preview sqlite");
+
+        assert_eq!(preview.columns, vec!["a", "b", "sum_value"]);
+        assert_eq!(
+            preview.rows,
+            vec![vec!["2".to_string(), "3".to_string(), "5".to_string()]]
+        );
+        assert_eq!(preview.columns.len(), preview.rows[0].len());
     }
 }

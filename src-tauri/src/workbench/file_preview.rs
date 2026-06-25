@@ -70,7 +70,7 @@ pub fn detect_file_type(name: &str) -> WorkbenchDetectedFileType {
     match extension.as_str() {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "svg" | "tif" | "tiff"
         | "avif" => WorkbenchDetectedFileType::Image,
-        "md" | "markdown" | "mdx" => WorkbenchDetectedFileType::Markdown,
+        "md" | "markdown" | "mdx" | "mdown" | "mkd" => WorkbenchDetectedFileType::Markdown,
         "json" => WorkbenchDetectedFileType::Json,
         "toml" => WorkbenchDetectedFileType::Toml,
         "csv" | "tsv" => WorkbenchDetectedFileType::Csv,
@@ -164,8 +164,8 @@ pub fn preview_image_file(path: &Path) -> Result<WorkbenchImagePreview, AppError
 ///     用户打开 CSV/TSV 文件时需要快速浏览表格前几行，第一版不提供写回能力。
 ///
 /// Code Logic（这个函数做什么）:
-///     拒绝超过 2MB 的表格文件，用 csv crate 以 flexible 模式读取 header 和最多 limit_rows 行；
-///     空 header 自动生成 column_N，额外一行探测用于标记 truncated。
+///     拒绝超过 2MB 的表格文件，用 csv crate 以 flexible + has_headers(false) 读取全部记录；
+///     再按首行 heuristic 判断 header / 空 header / 无 header，并基于最终展示 rows 计算 truncated。
 pub fn preview_csv_file(path: &Path, limit_rows: usize) -> Result<WorkbenchCsvPreview, AppError> {
     let metadata = fs::metadata(path)?;
     if metadata.len() > MAX_CSV_BYTES {
@@ -177,33 +177,22 @@ pub fn preview_csv_file(path: &Path, limit_rows: usize) -> Result<WorkbenchCsvPr
 
     let mut reader = csv::ReaderBuilder::new()
         .flexible(true)
+        .has_headers(false)
         .delimiter(csv_delimiter(path))
         .from_path(path)
         .map_err(csv_error)?;
-    let headers = reader.headers().map_err(csv_error)?.clone();
-    let has_usable_headers = headers.iter().any(|value| !value.trim().is_empty());
-
-    let mut rows: Vec<Vec<String>> = Vec::new();
-    let mut max_width = 0usize;
-    let mut truncated = false;
-
+    let mut records: Vec<Vec<String>> = Vec::new();
+    let mut max_width = 0;
     for result in reader.records() {
         let record = result.map_err(csv_error)?;
         max_width = max_width.max(record.len());
-        if rows.len() < limit_rows {
-            rows.push(record.iter().map(ToOwned::to_owned).collect());
-        } else {
-            truncated = true;
-            break;
-        }
+        records.push(record.iter().map(ToOwned::to_owned).collect());
     }
 
-    let column_count = headers.len().max(max_width);
-    let columns = if has_usable_headers {
-        columns_from_headers(&headers, column_count)
-    } else {
-        fallback_columns(column_count)
-    };
+    let (columns, data_start_index) = csv_columns_and_data_start(&records, max_width);
+    let data_records = records.get(data_start_index..).unwrap_or(&[]);
+    let truncated = data_records.len() > limit_rows;
+    let rows = data_records.iter().take(limit_rows).cloned().collect();
 
     Ok(WorkbenchCsvPreview {
         columns,
@@ -341,16 +330,70 @@ fn csv_error(err: csv::Error) -> AppError {
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     CSV 是否带 header 不能交给 csv crate 默认值，否则无 header 文件会丢第一行数据。
+///
+/// Code Logic（这个函数做什么）:
+///     根据首行判断 header 策略：全空首行作为空 header 排除；明显 header 作为列名；
+///     否则生成 fallback columns 且从第一行开始展示数据。
+fn csv_columns_and_data_start(records: &[Vec<String>], max_width: usize) -> (Vec<String>, usize) {
+    let Some(first_row) = records.first() else {
+        return (Vec::new(), 0);
+    };
+
+    if is_empty_csv_row(first_row) {
+        return (fallback_columns(max_width), 1);
+    }
+
+    if is_obvious_header_row(first_row) {
+        return (columns_from_header_row(first_row, max_width), 1);
+    }
+
+    (fallback_columns(max_width), 0)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     空 header 行只用于说明文件有表头占位，不能作为数据展示给用户。
+///
+/// Code Logic（这个函数做什么）:
+///     判断一行所有字段 trim 后都为空。
+fn is_empty_csv_row(row: &[String]) -> bool {
+    row.iter().all(|value| value.trim().is_empty())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     CSV 第一行只有在明显像列名时才能作为 header，否则应保留为数据行。
+///
+/// Code Logic（这个函数做什么）:
+///     要求每列非空、每列都不像纯数字，并且每列都包含字母或下划线这类列名信号。
+fn is_obvious_header_row(row: &[String]) -> bool {
+    !row.is_empty() && row.iter().all(|value| is_obvious_header_cell(value))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     header heuristic 需要区分 `id,name` 与 `1,2`，减少静默丢数据风险。
+///
+/// Code Logic（这个函数做什么）:
+///     trim 后拒绝空值和可解析数字；剩余内容必须包含 Unicode 字母或下划线。
+fn is_obvious_header_cell(value: &str) -> bool {
+    let trimmed = value.trim();
+    !trimmed.is_empty()
+        && trimmed.parse::<f64>().is_err()
+        && trimmed
+            .chars()
+            .any(|character| character.is_alphabetic() || character == '_')
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     CSV header 部分列为空时，前端仍需要非空列名展示和定位。
 ///
 /// Code Logic（这个函数做什么）:
 ///     在目标列数范围内读取 header，空白或缺失字段回退为 column_N。
-fn columns_from_headers(headers: &csv::StringRecord, column_count: usize) -> Vec<String> {
+fn columns_from_header_row(headers: &[String], column_count: usize) -> Vec<String> {
     (0..column_count)
         .map(|index| {
             headers
                 .get(index)
-                .map(str::trim)
+                .map(|value| value.trim())
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
                 .unwrap_or_else(|| fallback_column_name(index))
@@ -401,6 +444,14 @@ mod tests {
     fn detect_file_type_covers_supported_extensions_and_jsonc_exception() {
         assert_eq!(
             detect_file_type("README.md"),
+            WorkbenchDetectedFileType::Markdown
+        );
+        assert_eq!(
+            detect_file_type("README.mdown"),
+            WorkbenchDetectedFileType::Markdown
+        );
+        assert_eq!(
+            detect_file_type("README.mkd"),
             WorkbenchDetectedFileType::Markdown
         );
         assert_eq!(
@@ -505,16 +556,40 @@ mod tests {
     fn preview_csv_file_reads_headers_and_rows() {
         let dir = temp_dir();
         let path = dir.path().join("people.csv");
-        fs::write(&path, "name,age\nAda,37\nLinus,54\n").expect("write csv");
+        fs::write(&path, "id,name\n1,Ada\n2,Linus\n").expect("write csv");
 
         let preview = preview_csv_file(&path, 10).expect("preview csv");
 
-        assert_eq!(preview.columns, vec!["name", "age"]);
+        assert_eq!(preview.columns, vec!["id", "name"]);
         assert_eq!(
             preview.rows,
             vec![
-                vec!["Ada".to_string(), "37".to_string()],
-                vec!["Linus".to_string(), "54".to_string()]
+                vec!["1".to_string(), "Ada".to_string()],
+                vec!["2".to_string(), "Linus".to_string()]
+            ]
+        );
+        assert!(!preview.truncated);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     无 header 的数字 CSV 是常见数据文件，Workbench 不能静默把第一行当表头丢掉。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     写入两行纯数字 CSV，断言使用 fallback columns 且 rows 包含第一行和第二行。
+    #[test]
+    fn preview_csv_file_keeps_first_row_when_file_has_no_header() {
+        let dir = temp_dir();
+        let path = dir.path().join("numbers.csv");
+        fs::write(&path, "1,2\n3,4\n").expect("write csv");
+
+        let preview = preview_csv_file(&path, 10).expect("preview csv");
+
+        assert_eq!(preview.columns, vec!["column_1", "column_2"]);
+        assert_eq!(
+            preview.rows,
+            vec![
+                vec!["1".to_string(), "2".to_string()],
+                vec!["3".to_string(), "4".to_string()],
             ]
         );
         assert!(!preview.truncated);
@@ -579,5 +654,28 @@ mod tests {
         assert_eq!(preview.width, Some(1));
         assert_eq!(preview.height, Some(1));
         assert!(preview.data_url.starts_with("data:image/png;base64,"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     SVG 图片同样需要在 Workbench 图片预览中展示，但不应强制走 raster 解码。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     写入简单 SVG，断言返回 svg MIME、data URL，宽高保持 None。
+    #[test]
+    fn preview_image_file_returns_svg_data_url_without_dimensions() {
+        let dir = temp_dir();
+        let path = dir.path().join("icon.svg");
+        fs::write(
+            &path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"></svg>"#,
+        )
+        .expect("write svg");
+
+        let preview = preview_image_file(&path).expect("preview svg");
+
+        assert_eq!(preview.mime, "image/svg+xml");
+        assert_eq!(preview.width, None);
+        assert_eq!(preview.height, None);
+        assert!(preview.data_url.starts_with("data:image/svg+xml;base64,"));
     }
 }
