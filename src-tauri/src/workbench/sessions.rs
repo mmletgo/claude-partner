@@ -349,25 +349,64 @@ fn wsl_unc_path_to_linux_path(path: &str) -> Option<String> {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     每个工作台终端 tab 需要稳定映射到一个 tmux session，才能跨应用重启重新 attach。
+///     worktree 级 tmux session 名需要规避 `:`、`/` 等 tmux target 特殊字符，避免解析歧义。
 ///
 /// Code Logic（这个函数做什么）:
-///     用 session_id 派生 tmux session 名称，并去掉 UUID 中的连字符减少 shell 工具兼容风险。
-fn tmux_session_name(session_id: &str) -> String {
-    format!("cc-partner-{}", session_id.replace('-', ""))
+///     只保留 ASCII 字母数字作为 session name 组件；空值使用 `root` 兜底。
+fn tmux_session_component(value: &str) -> String {
+    let component: String = value
+        .chars()
+        .filter(|value| value.is_ascii_alphanumeric())
+        .collect();
+    if component.is_empty() {
+        "root".to_string()
+    } else {
+        component
+    }
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     真实 tmux 映射下，一个工作台项目应稳定对应一个 tmux session，项目内 tab 才能成为 window。
+///     缺少 worktree_id 的旧 terminal window 应视为主工作区，保证恢复和聚焦过滤有稳定归属。
 ///
 /// Code Logic（这个函数做什么）:
-///     用 project_id 派生项目级 tmux session 名称，并去掉连字符减少 tmux target 兼容风险。
-fn tmux_project_session_name(project_id: &str) -> String {
-    format!("cc-partner-project-{}", project_id.replace('-', ""))
+///     返回 row 或请求中的 worktree_id；空值 fallback 到 `{project_id}:main`。
+fn effective_worktree_id(project_id: &str, worktree_id: Option<&str>) -> String {
+    worktree_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{project_id}:main"))
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     后端 attach、split、kill-pane、rename-window 都需要指向项目 tmux session 内的特定 window。
+///     不同 worktree 的 terminal window 必须互相隔离，不能共享 tmux 底部 window 列表。
+///
+/// Code Logic（这个函数做什么）:
+///     用 project_id + worktree_id 派生 worktree 级 tmux session 名称；主工作区使用确定性 fallback。
+fn tmux_worktree_session_name(project_id: &str, worktree_id: Option<&str>) -> String {
+    let worktree_id = effective_worktree_id(project_id, worktree_id);
+    format!(
+        "cc-partner-worktree-{}-{}",
+        tmux_session_component(project_id),
+        tmux_session_component(&worktree_id)
+    )
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     focused-window 同步必须只在当前 active worktree 内映射，避免跨 worktree 抢占顶部 tab。
+///
+/// Code Logic（这个函数做什么）:
+///     把 None worktree 归一化成主工作区后比较。
+fn worktree_id_matches(
+    project_id: &str,
+    row_worktree_id: Option<&str>,
+    target: Option<&str>,
+) -> bool {
+    effective_worktree_id(project_id, row_worktree_id) == effective_worktree_id(project_id, target)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     后端 attach、split、kill-pane、rename-window 都需要指向 worktree tmux session 内的特定 window。
 ///
 /// Code Logic（这个函数做什么）:
 ///     组合 tmux session 名与 window id，生成 `session:@window` target。
@@ -387,7 +426,7 @@ fn apply_workbench_terminal_env(command: &mut CommandBuilder) {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     app 里的 terminal window 必须绑定到对应 tmux window，不能只 attach 到项目 session 的当前 window。
+///     app 里的 terminal window 必须绑定到对应 tmux window，不能只 attach 到 worktree session 的当前 window。
 ///
 /// Code Logic（这个函数做什么）:
 ///     构造 `attach-session -t <session> ; switch-client -t <session:@window>` 参数。
@@ -407,7 +446,7 @@ pub(crate) fn tmux_attach_window_args(session_name: &str, window_target: &str) -
 ///     app 顶部 tab 切换时，用户看到的 tmux 当前 window 必须同步切到该 tab 绑定的真实 window。
 ///
 /// Code Logic（这个函数做什么）:
-///     构造 `select-window -t <session:@window>` 参数列表，切换项目 tmux session 的 current window。
+///     构造 `select-window -t <session:@window>` 参数列表，切换 worktree tmux session 的 current window。
 fn tmux_select_window_args(window_target: &str) -> Vec<String> {
     vec![
         "select-window".to_string(),
@@ -420,7 +459,7 @@ fn tmux_select_window_args(window_target: &str) -> Vec<String> {
 ///     用户可通过 tmux 底部状态栏或快捷键切换 window，cc-partner 需要读取真实 current window。
 ///
 /// Code Logic（这个函数做什么）:
-///     构造 `display-message -p -t <session> #{window_id}` 参数，查询项目 tmux session 当前 window id。
+///     构造 `display-message -p -t <session> #{window_id}` 参数，查询 worktree tmux session 当前 window id。
 fn tmux_current_window_args(session_name: &str) -> Vec<String> {
     vec![
         "display-message".to_string(),
@@ -435,16 +474,18 @@ fn tmux_current_window_args(session_name: &str) -> Vec<String> {
 ///     后端读到 tmux current window 后，需要映射回前端顶部 app tab 的 sessionId。
 ///
 /// Code Logic（这个函数做什么）:
-///     在同一 project/backend_id 下按 backend_window_id 匹配当前 window，命中时返回 Workbench session id。
+///     在同一 project/worktree/backend_id 下按 backend_window_id 匹配当前 window，命中时返回 Workbench session id。
 fn focused_session_id_for_tmux_window<'a>(
     rows: impl IntoIterator<Item = &'a WorkbenchSessionRow>,
     project_id: &str,
+    worktree_id: Option<&str>,
     backend_id: &str,
     window_id: &str,
 ) -> Option<String> {
     rows.into_iter()
         .find(|row| {
             row.project_id == project_id
+                && worktree_id_matches(project_id, row.worktree_id.as_deref(), worktree_id)
                 && row.backend == TMUX_BACKEND
                 && row.backend_id.as_deref() == Some(backend_id)
                 && row.backend_window_id.as_deref() == Some(window_id)
@@ -453,7 +494,7 @@ fn focused_session_id_for_tmux_window<'a>(
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     创建 window 前需要知道项目级 tmux session 是否已存在，存在则 new-window，不存在则 new-session。
+///     创建 window 前需要知道 worktree 级 tmux session 是否已存在，存在则 new-window，不存在则 new-session。
 ///
 /// Code Logic（这个函数做什么）:
 ///     执行 `tmux has-session -t <name>`，返回 status 是否成功。
@@ -479,7 +520,7 @@ fn tmux_target_exists(tmux: &TmuxCommand, target: &str) -> bool {
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     新建或恢复 tab 时，需要在项目级 tmux session 内创建一个 window 承载真实 shell 上下文。
+///     新建或恢复 tab 时，需要在 worktree 级 tmux session 内创建一个 window 承载真实 shell 上下文。
 ///
 /// Code Logic（这个函数做什么）:
 ///     session 不存在时执行 `tmux new-session -d -s <session> -n <window>`；存在时执行 `tmux new-window`；
@@ -548,7 +589,7 @@ fn create_tmux_window(
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     关闭最后一个 pane 会关闭所属 window；项目 tmux session 只剩最后一个 window 时必须销毁整个 session。
+///     关闭最后一个 pane 会关闭所属 window；worktree tmux session 只剩最后一个 window 时必须销毁整个 session。
 ///
 /// Code Logic（这个函数做什么）:
 ///     根据 window_id 与当前 window_count 构造 kill-window 或 kill-session 参数。
@@ -891,24 +932,25 @@ impl WorkbenchSessionRegistry {
         let terminal_command = default_terminal_command();
         let (backend, backend_id, backend_window_id, command) = match available_tmux_command() {
             Some(tmux) => {
-                let project_tmux_id = tmux_project_session_name(&project.id);
+                let worktree_tmux_id =
+                    tmux_worktree_session_name(&project.id, worktree_id.as_deref());
                 match create_tmux_window(
                     &tmux,
-                    &project_tmux_id,
+                    &worktree_tmux_id,
                     &project.name,
                     &cwd,
                     &terminal_command,
                 ) {
                     Ok(window_id) => {
-                        let target = tmux_window_target(&project_tmux_id, &window_id);
+                        let target = tmux_window_target(&worktree_tmux_id, &window_id);
                         let display_command = tmux.display_command_for_session(
-                            &project_tmux_id,
+                            &worktree_tmux_id,
                             Some(&target),
                             &terminal_command,
                         );
                         (
                             TMUX_BACKEND.to_string(),
-                            Some(project_tmux_id),
+                            Some(worktree_tmux_id),
                             Some(window_id),
                             display_command,
                         )
@@ -970,10 +1012,9 @@ impl WorkbenchSessionRegistry {
         }
         if row.backend == TMUX_BACKEND {
             if let Some(tmux) = available_tmux_command() {
-                let session_name = row
-                    .backend_id
-                    .clone()
-                    .unwrap_or_else(|| tmux_project_session_name(&project.id));
+                let session_name =
+                    tmux_worktree_session_name(&project.id, row.worktree_id.as_deref());
+                let terminal_command = default_terminal_command();
                 let target_exists = if tmux_row_requires_window_recreation(&row) {
                     false
                 } else {
@@ -985,21 +1026,19 @@ impl WorkbenchSessionRegistry {
                         .unwrap_or_else(|| tmux_target_exists(&tmux, &session_name))
                 };
                 if !target_exists {
-                    let terminal_command = default_terminal_command();
                     match create_tmux_window(
                         &tmux,
-                        &tmux_project_session_name(&project.id),
+                        &session_name,
                         &row.name,
                         &row.cwd,
                         &terminal_command,
                     ) {
                         Ok(window_id) => {
-                            let project_tmux_id = tmux_project_session_name(&project.id);
-                            let target = tmux_window_target(&project_tmux_id, &window_id);
-                            row.backend_id = Some(project_tmux_id.clone());
+                            let target = tmux_window_target(&session_name, &window_id);
+                            row.backend_id = Some(session_name.clone());
                             row.backend_window_id = Some(window_id);
                             row.command = tmux.display_command_for_session(
-                                &project_tmux_id,
+                                &session_name,
                                 Some(&target),
                                 &terminal_command,
                             );
@@ -1013,7 +1052,16 @@ impl WorkbenchSessionRegistry {
                         }
                     }
                 } else if row.backend == TMUX_BACKEND {
+                    let target = row
+                        .backend_window_id
+                        .as_deref()
+                        .map(|window_id| tmux_window_target(&session_name, window_id));
                     row.backend_id = Some(session_name);
+                    row.command = tmux.display_command_for_session(
+                        row.backend_id.as_deref().expect("tmux session name"),
+                        target.as_deref(),
+                        &terminal_command,
+                    );
                 }
             } else {
                 tracing::warn!("恢复工作台终端时未找到 tmux，回退普通 PTY");
@@ -1138,8 +1186,12 @@ impl WorkbenchSessionRegistry {
     ///     用户可在 tmux status bar 内切换 window，顶部 app tab 应跟随真实 tmux current window。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     找出项目 tmux session，读取当前 window id，并映射回 registry 中的 Workbench session id。
-    pub fn focused_session_id(&self, project_id: &str) -> Result<Option<String>, AppError> {
+    ///     找出当前 worktree tmux session，读取当前 window id，并映射回 registry 中的 Workbench session id。
+    pub fn focused_session_id(
+        &self,
+        project_id: &str,
+        worktree_id: Option<&str>,
+    ) -> Result<Option<String>, AppError> {
         let rows: Vec<WorkbenchSessionRow> = self
             .sessions
             .lock()
@@ -1149,7 +1201,11 @@ impl WorkbenchSessionRegistry {
             .collect();
         let Some(backend_id) = rows
             .iter()
-            .find(|row| row.project_id == project_id && row.backend == TMUX_BACKEND)
+            .find(|row| {
+                row.project_id == project_id
+                    && worktree_id_matches(project_id, row.worktree_id.as_deref(), worktree_id)
+                    && row.backend == TMUX_BACKEND
+            })
             .and_then(|row| row.backend_id.clone())
         else {
             return Ok(None);
@@ -1166,6 +1222,7 @@ impl WorkbenchSessionRegistry {
         Ok(focused_session_id_for_tmux_window(
             rows.iter(),
             project_id,
+            worktree_id,
             &backend_id,
             &window_id,
         ))
@@ -1545,12 +1602,17 @@ mod tests {
     ///     tmux window 映射测试需要快速构造持久化 row，避免启动真实 PTY 或 tmux。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     返回一个 running tmux WorkbenchSessionRow，backend_id 使用 project_id 派生的项目 session 名。
-    fn fake_tmux_row(session_id: &str, project_id: &str, window_id: &str) -> WorkbenchSessionRow {
+    ///     返回一个 running tmux WorkbenchSessionRow，backend_id 使用 project_id + worktree_id 派生的 worktree session 名。
+    fn fake_tmux_row(
+        session_id: &str,
+        project_id: &str,
+        worktree_id: Option<&str>,
+        window_id: &str,
+    ) -> WorkbenchSessionRow {
         WorkbenchSessionRow {
             id: session_id.to_string(),
             project_id: project_id.to_string(),
-            worktree_id: None,
+            worktree_id: worktree_id.map(str::to_string),
             name: session_id.to_string(),
             command: "/bin/sh".to_string(),
             cwd: "/tmp/project".to_string(),
@@ -1561,7 +1623,7 @@ mod tests {
             exited_at: None,
             exit_code: None,
             backend: TMUX_BACKEND.to_string(),
-            backend_id: Some(tmux_project_session_name(project_id)),
+            backend_id: Some(tmux_worktree_session_name(project_id, worktree_id)),
             backend_window_id: Some(window_id.to_string()),
             created_at: "2026-06-24T00:00:00Z".to_string(),
             updated_at: "2026-06-24T00:00:00Z".to_string(),
@@ -1717,19 +1779,38 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     真实 tmux 映射下，一个项目应稳定对应一个 tmux session，项目内 tab 对应 window。
+    ///     真实 tmux 映射下，一个 worktree 应稳定对应一个 tmux session，worktree 内 tab 对应 window。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     断言项目 ID 派生出稳定 session 名，window target 使用 `session:@window` 语法。
+    ///     断言 project + worktree 派生出稳定 session 名，window target 使用 `session:@window` 语法。
     #[test]
-    fn tmux_project_session_and_window_target_are_stable() {
-        let project_session = tmux_project_session_name("project-1234-abcd");
+    fn tmux_worktree_session_and_window_target_are_stable() {
+        let worktree_session =
+            tmux_worktree_session_name("project-1234-abcd", Some("project-1234-abcd:main"));
 
-        assert_eq!(project_session, "cc-partner-project-project1234abcd");
         assert_eq!(
-            tmux_window_target(&project_session, "@7"),
-            "cc-partner-project-project1234abcd:@7"
+            worktree_session,
+            "cc-partner-worktree-project1234abcd-project1234abcdmain"
         );
+        assert_eq!(
+            tmux_window_target(&worktree_session, "@7"),
+            "cc-partner-worktree-project1234abcd-project1234abcdmain:@7"
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     同一项目下不同 worktree 的 tmux status/window 列表必须互相隔离。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言同一 project_id 搭配不同 worktree_id 会生成不同 backend_id。
+    #[test]
+    fn tmux_worktree_session_differs_between_worktrees() {
+        let main_session = tmux_worktree_session_name("project-1", Some("project-1:main"));
+        let feature_session = tmux_worktree_session_name("project-1", Some("worktree-2"));
+
+        assert_ne!(main_session, feature_session);
+        assert_eq!(main_session, "cc-partner-worktree-project1-project1main");
+        assert_eq!(feature_session, "cc-partner-worktree-project1-worktree2");
     }
 
     /// Business Logic（为什么需要这个测试）:
@@ -1755,10 +1836,10 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     前端 terminal window 必须绑定到对应 tmux window，不能只 attach 到项目 session 的当前 window。
+    ///     前端 terminal window 必须绑定到对应 tmux window，不能只 attach 到 worktree session 的当前 window。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     断言 attach 参数先连接项目 session，再用 switch-client 指向具体 `session:@window` target。
+    ///     断言 attach 参数先连接 worktree session，再用 switch-client 指向具体 `session:@window` target。
     #[test]
     fn tmux_attach_window_args_switch_client_to_window_target() {
         let args = tmux_attach_window_args(
@@ -1784,7 +1865,7 @@ mod tests {
     ///     顶部 app tab 切换时，底部 tmux 当前 window 也必须跟着切换到 tab 绑定的真实 window。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     断言 focus 操作使用 `select-window -t <session:@window>` 切项目 tmux session 的 current window。
+    ///     断言 focus 操作使用 `select-window -t <session:@window>` 切 worktree tmux session 的 current window。
     #[test]
     fn tmux_select_window_args_targets_bound_window() {
         let args = tmux_select_window_args("cc-partner-project-project1234abcd:@7");
@@ -1800,7 +1881,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     用户在 tmux 底部状态栏切换 window 后，cc-partner 需要读取项目 tmux session 的当前 window。
+    ///     用户在 tmux 底部状态栏切换 window 后，cc-partner 需要读取 worktree tmux session 的当前 window。
     ///
     /// Code Logic（这个测试做什么）:
     ///     断言查询 current window 使用 `display-message -p -t <session> #{window_id}`。
@@ -1824,22 +1905,45 @@ mod tests {
     ///     后端读到 tmux current window 后，需要映射回前端顶部应该选中的 app tab。
     ///
     /// Code Logic（这个测试做什么）:
-    ///     构造同一项目 tmux session 内两个 window row，断言 window id 命中第二个 sessionId。
+    ///     构造同一 worktree tmux session 内两个 window row，断言 window id 命中第二个 sessionId。
     #[test]
-    fn focused_session_id_matches_project_backend_window_id() {
-        let mut first = fake_tmux_row("session-1", "project-1", "@1");
-        let second = fake_tmux_row("session-2", "project-1", "@2");
-        let other_project = fake_tmux_row("session-3", "project-2", "@2");
-        first.backend_id = Some("cc-partner-project-project1".to_string());
+    fn focused_session_id_matches_worktree_backend_window_id() {
+        let first = fake_tmux_row("session-1", "project-1", Some("project-1:main"), "@1");
+        let second = fake_tmux_row("session-2", "project-1", Some("project-1:main"), "@2");
+        let other_project = fake_tmux_row("session-3", "project-2", Some("project-2:main"), "@2");
+        let backend_id = second.backend_id.clone().expect("tmux backend id");
 
         let focused = focused_session_id_for_tmux_window(
             [&first, &second, &other_project],
             "project-1",
-            "cc-partner-project-project1",
+            Some("project-1:main"),
+            &backend_id,
             "@2",
         );
 
         assert_eq!(focused, Some("session-2".to_string()));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     用户在 feature worktree 的 tmux status bar 切换 window 时，主工作区 tab 不应被误选中。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造同一项目、相同 tmux window id、不同 worktree/backend 的 row，断言 focused 映射按 worktree 过滤。
+    #[test]
+    fn focused_session_id_does_not_cross_worktree_scope() {
+        let main = fake_tmux_row("main-session", "project-1", Some("project-1:main"), "@2");
+        let feature = fake_tmux_row("feature-session", "project-1", Some("worktree-2"), "@2");
+        let feature_backend = feature.backend_id.clone().expect("feature backend");
+
+        let focused = focused_session_id_for_tmux_window(
+            [&main, &feature],
+            "project-1",
+            Some("worktree-2"),
+            &feature_backend,
+            "@2",
+        );
+
+        assert_eq!(focused, Some("feature-session".to_string()));
     }
 
     /// Business Logic（为什么需要这个测试）:
@@ -1903,7 +2007,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     关闭最后一个 pane 会关闭所属 window；如果它也是项目 tmux session 的最后一个 window，必须销毁 session。
+    ///     关闭最后一个 pane 会关闭所属 window；如果它也是 worktree tmux session 的最后一个 window，必须销毁 session。
     ///
     /// Code Logic（这个测试做什么）:
     ///     断言 window_count 为 1 时生成 kill-session，多 window 时才生成 kill-window。
@@ -1920,7 +2024,7 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
-    ///     旧版本把 tab 映射成独立 tmux session；升级后应迁移到项目 session 内的 window。
+    ///     旧版本把 tab 映射成独立 tmux session；升级后应迁移到 worktree session 内的 window。
     ///
     /// Code Logic（这个测试做什么）:
     ///     构造缺少 backend_window_id 的 tmux row，断言恢复流程会判定它需要重建 window。

@@ -243,7 +243,7 @@ pub struct WorkbenchSessionDto {
 ///     用户希望重启应用后之前打开的 terminal window 仍可恢复，因此 window 元数据需要独立于运行期 PTY 持久保存。
 ///
 /// Code Logic（这个结构体做什么）:
-///     对齐 SQLite `workbench_sessions` 表字段；backend_id 记录项目 tmux session，backend_window_id 记录 tmux window，
+///     对齐 SQLite `workbench_sessions` 表字段；backend_id 记录 worktree tmux session，backend_window_id 记录 tmux window，
 ///     DTO 投影仍只暴露前端展示所需字段。
 #[derive(Debug, Clone)]
 pub struct WorkbenchSessionRow {

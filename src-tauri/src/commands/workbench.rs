@@ -778,20 +778,23 @@ pub async fn focus_workbench_session(
     Ok(serde_json::json!({ "ok": true, "sessionId": session_id }))
 }
 
-/// 获取项目当前聚焦的工作台终端 window。
+/// 获取当前 worktree 聚焦的工作台终端 window。
 ///
 /// Business Logic（为什么需要这个函数）:
 ///     用户可在 tmux 底部 status bar 或快捷键中切换 window，顶部 app tab 需要跟随真实 tmux current window。
 ///
 /// Code Logic（这个函数做什么）:
-///     校验项目存在，读取项目 tmux session 当前 window id，并映射成 Workbench sessionId 返回。
+///     校验项目存在，读取当前 worktree tmux session 当前 window id，并映射成 Workbench sessionId 返回。
 #[tauri::command]
 pub async fn get_focused_workbench_session(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
 ) -> Result<serde_json::Value, AppError> {
     let _ = get_project(&state, &project_id).await?;
-    let session_id = state.workbench_sessions.focused_session_id(&project_id)?;
+    let session_id = state
+        .workbench_sessions
+        .focused_session_id(&project_id, worktree_id.as_deref())?;
     Ok(serde_json::json!({ "sessionId": session_id }))
 }
 

@@ -128,10 +128,11 @@ export const workbenchApi = {
         sessionId,
       }),
 
-    /** 读取项目 tmux current window 对应的 terminal session。 */
-    focused: (projectId: string) =>
+    /** 读取当前 worktree tmux current window 对应的 terminal session。 */
+    focused: (projectId: string, worktreeId?: string | null) =>
       invoke<{ sessionId: string | null }>('get_focused_workbench_session', {
         projectId,
+        worktreeId: worktreeId ?? null,
       }),
 
     /** 在当前 tmux window 内创建一个 pane。 */

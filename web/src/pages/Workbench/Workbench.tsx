@@ -764,13 +764,15 @@ export function Workbench() {
   }, [activeSessionId, desktopUnavailableMessage, t]);
 
   useEffect(() => {
-    if (!activeProjectId || scopedSessions.length === 0) return undefined;
+    if (!activeProjectId || !activeWorktreeSessionId || scopedSessions.length === 0) {
+      return undefined;
+    }
     let cancelled = false;
 
     const syncFocusedSession = () => {
       if (Date.now() - lastLocalFocusAtRef.current < LOCAL_FOCUS_GRACE_MS) return;
       void workbenchApi.sessions
-        .focused(activeProjectId)
+        .focused(activeProjectId, activeWorktreeSessionId)
         .then(({ sessionId }) => {
           if (cancelled || !sessionId) return;
           if (!scopedSessions.some((session) => session.id === sessionId)) return;
@@ -787,7 +789,7 @@ export function Workbench() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeProjectId, scopedSessions]);
+  }, [activeProjectId, activeWorktreeSessionId, scopedSessions]);
 
   const loadSessions = useCallback(
     async (projectId: string) => {
