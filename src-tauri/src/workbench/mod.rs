@@ -9,6 +9,7 @@
 
 pub mod dependencies;
 pub mod fs;
+pub mod git;
 pub mod models;
 pub mod projects;
 pub mod sessions;

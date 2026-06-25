@@ -12,15 +12,15 @@
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::workbench::models::{
-    WorkbenchFileNode, WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchProjectRow,
-    WorkbenchSessionDto,
+    WorkbenchFileNode, WorkbenchGitStatusDto, WorkbenchPathInfo, WorkbenchProjectDto,
+    WorkbenchProjectRow, WorkbenchSessionDto, WorkbenchWorktreeDto, WorkbenchWorktreeRow,
 };
 use crate::workbench::sessions::{
     kill_persisted_backend, pane_count_for_row, PaneCloseOutcome, PaneSplitDirection,
 };
-use crate::workbench::{fs as workbench_fs, projects};
+use crate::workbench::{fs as workbench_fs, git as workbench_git, projects};
 use chrono::Utc;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
 /// Business Logic（为什么需要这个函数）:
@@ -43,6 +43,105 @@ async fn get_project(state: &AppState, project_id: &str) -> Result<WorkbenchProj
 ///     返回当前 UTC 时间的 RFC3339 字符串。
 fn now_iso() -> String {
     Utc::now().to_rfc3339()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     每个工作台项目都要有一个稳定的主 worktree 记录，表示用户最初添加的项目路径。
+///
+/// Code Logic（这个函数做什么）:
+///     用 project_id 派生确定性 id，避免重复创建主工作区记录。
+fn main_worktree_id(project_id: &str) -> String {
+    format!("{project_id}:main")
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 自动创建 worktree 时需要放在应用数据目录下，避免污染用户项目根目录。
+///
+/// Code Logic（这个函数做什么）:
+///     基于 SQLite db_path 的父目录创建 worktrees/<project_id>/<branch_slug> 路径。
+fn worktree_storage_path(state: &AppState, project_id: &str, branch: &str) -> PathBuf {
+    let config = state.config.read().expect("config 读锁中毒");
+    let db_parent = Path::new(&config.db_path)
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    db_parent
+        .join("worktrees")
+        .join(project_id)
+        .join(workbench_git::branch_slug(branch))
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 顶部 worktree strip 即使在非 Git 项目中也需要稳定展示主工作区。
+///
+/// Code Logic（这个函数做什么）:
+///     确保主 worktree row 存在并与项目路径同步；Git branch 读取失败时保留 None。
+async fn ensure_main_worktree(
+    state: &AppState,
+    project: &WorkbenchProjectRow,
+) -> Result<WorkbenchWorktreeRow, AppError> {
+    let id = main_worktree_id(&project.id);
+    let existing = state.workbench_worktree_repo.get(&id).await?;
+    let now = now_iso();
+    let branch = workbench_git::current_branch(Path::new(&project.path));
+    let row = WorkbenchWorktreeRow {
+        id,
+        project_id: project.id.clone(),
+        name: branch.clone().unwrap_or_else(|| "main".to_string()),
+        branch,
+        base_branch: None,
+        path: project.path.clone(),
+        is_main: true,
+        created_at: existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone()),
+        updated_at: now,
+    };
+    state.workbench_worktree_repo.upsert(&row).await?;
+    Ok(row)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Worktree DTO 需要附带实时 Git 状态；Git 读取失败不应让整个工作台无法打开。
+///
+/// Code Logic（这个函数做什么）:
+///     查询 `git status`，失败时返回 clean fallback 并保留 row.branch。
+fn worktree_to_dto(row: &WorkbenchWorktreeRow) -> WorkbenchWorktreeDto {
+    let status =
+        workbench_git::status(Path::new(&row.path)).unwrap_or_else(|_| WorkbenchGitStatusDto {
+            branch: row.branch.clone(),
+            clean: true,
+            ..WorkbenchGitStatusDto::default()
+        });
+    row.to_dto(status)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     会话和文件树命令需要把可选 worktree_id 解析成真实磁盘根路径。
+///
+/// Code Logic（这个函数做什么）:
+///     worktree_id 为空时返回主 worktree；非空时读取对应 row 并校验 project_id 匹配。
+async fn resolve_worktree(
+    state: &AppState,
+    project: &WorkbenchProjectRow,
+    worktree_id: Option<&str>,
+) -> Result<WorkbenchWorktreeRow, AppError> {
+    let Some(worktree_id) = worktree_id else {
+        return ensure_main_worktree(state, project).await;
+    };
+    if worktree_id == main_worktree_id(&project.id) {
+        return ensure_main_worktree(state, project).await;
+    }
+    let row = state
+        .workbench_worktree_repo
+        .get(worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    if row.project_id != project.id {
+        return Err(AppError::generic("worktree 不属于当前项目"));
+    }
+    Ok(row)
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -211,6 +310,10 @@ pub async fn remove_workbench_project(
         .workbench_session_repo
         .delete_by_project(&project_id)
         .await?;
+    state
+        .workbench_worktree_repo
+        .delete_by_project(&project_id)
+        .await?;
     state.workbench_project_repo.delete(&project_id).await?;
     Ok(serde_json::json!({ "ok": true, "projectId": project_id }))
 }
@@ -233,6 +336,209 @@ pub async fn touch_workbench_project(
     row.updated_at = now;
     state.workbench_project_repo.upsert(&row).await?;
     Ok(row.to_dto())
+}
+
+/// 列出项目下的 Git worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 顶部需要用 worktree 管理层替代项目路径说明，让用户在主工作区和功能 worktree 间切换。
+///
+/// Code Logic（这个函数做什么）:
+///     确保主 worktree 存在，读取该项目全部 worktree row，并注入实时 Git 状态 DTO。
+#[tauri::command]
+pub async fn list_workbench_worktrees(
+    state: State<'_, AppState>,
+    project_id: String,
+) -> Result<Vec<WorkbenchWorktreeDto>, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    ensure_main_worktree(&state, &project).await?;
+    let rows = state
+        .workbench_worktree_repo
+        .list_by_project(&project_id)
+        .await?;
+    Ok(rows.iter().map(worktree_to_dto).collect())
+}
+
+/// 创建一个项目 Git worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户希望在 Workbench 中直接从当前项目切出独立工作区，后续 terminal window、文件树和 Prompt 优化都绑定该路径。
+///
+/// Code Logic（这个函数做什么）:
+///     校验 Git 仓库和分支名，生成应用数据目录下的 worktree 路径，执行 `git worktree add -b` 并持久化 row。
+#[tauri::command]
+pub async fn create_workbench_worktree(
+    state: State<'_, AppState>,
+    project_id: String,
+    branch_name: String,
+    base_branch: Option<String>,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    let branch = branch_name.trim();
+    if branch.is_empty() {
+        return Err(AppError::generic("分支名不能为空"));
+    }
+    let repo_root = workbench_git::repo_root(Path::new(&project.path))?;
+    let worktree_path = worktree_storage_path(&state, &project_id, branch);
+    if worktree_path.exists() {
+        return Err(AppError::generic("目标 worktree 目录已存在"));
+    }
+    if let Some(parent) = worktree_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let base = base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    workbench_git::create_worktree(Path::new(&repo_root), &worktree_path, branch, base)?;
+    let now = now_iso();
+    let path = worktree_path
+        .canonicalize()
+        .unwrap_or(worktree_path)
+        .to_string_lossy()
+        .to_string();
+    let row = WorkbenchWorktreeRow {
+        id: uuid::Uuid::new_v4().to_string(),
+        project_id: project_id.clone(),
+        name: branch.to_string(),
+        branch: Some(branch.to_string()),
+        base_branch: base.map(str::to_string),
+        path,
+        is_main: false,
+        created_at: now.clone(),
+        updated_at: now,
+    };
+    state.workbench_worktree_repo.upsert(&row).await?;
+    Ok(worktree_to_dto(&row))
+}
+
+/// 提交当前 worktree 的全部改动。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户需要在 Workbench 中完成普通 commit，不必切回外部终端执行 git add/commit。
+///
+/// Code Logic（这个函数做什么）:
+///     对 worktree 路径执行 `git add -A` 和 `git commit -m`；没有改动时返回当前 DTO。
+#[tauri::command]
+pub async fn commit_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+    message: String,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(&worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    let _committed = workbench_git::commit_all(Path::new(&row.path), &message)?;
+    Ok(worktree_to_dto(&row))
+}
+
+/// 推送当前 worktree 分支。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户提交后需要把功能分支推送到 origin，以便备份或协作。
+///
+/// Code Logic（这个函数做什么）:
+///     获取 row.branch 或当前 Git 分支，执行 `git push -u origin <branch>`。
+#[tauri::command]
+pub async fn push_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(&worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    let branch = row
+        .branch
+        .clone()
+        .or_else(|| workbench_git::current_branch(Path::new(&row.path)))
+        .ok_or_else(|| AppError::generic("当前 worktree 没有可推送的分支"))?;
+    workbench_git::push_branch(Path::new(&row.path), &branch)?;
+    Ok(worktree_to_dto(&row))
+}
+
+/// 合并当前 worktree 到主工作区。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户完成功能 worktree 后，需要一键回到主工作区执行 merge，但必须先避免脏工作区和冲突状态。
+///
+/// Code Logic（这个函数做什么）:
+///     校验目标非主 worktree、源/主工作区干净且无冲突，再在主工作区执行 `git merge --no-ff <branch>`。
+#[tauri::command]
+pub async fn merge_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+) -> Result<serde_json::Value, AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(&worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    if row.is_main {
+        return Err(AppError::generic("主工作区不需要合并到自己"));
+    }
+    let project = get_project(&state, &row.project_id).await?;
+    let main = ensure_main_worktree(&state, &project).await?;
+    let source_status = workbench_git::status(Path::new(&row.path))?;
+    if !source_status.clean {
+        return Err(AppError::generic("请先提交或清理当前 worktree 的改动"));
+    }
+    let main_status = workbench_git::status(Path::new(&main.path))?;
+    if !main_status.clean {
+        return Err(AppError::generic("主工作区有未提交改动，不能合并"));
+    }
+    let branch = row
+        .branch
+        .clone()
+        .or(source_status.branch)
+        .ok_or_else(|| AppError::generic("当前 worktree 没有可合并的分支"))?;
+    workbench_git::merge_branch(Path::new(&main.path), &branch)?;
+    Ok(serde_json::json!({ "ok": true, "worktreeId": worktree_id }))
+}
+
+/// 删除一个非主 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     已合并或废弃的功能 worktree 应能从 Workbench 清理，避免工作区列表膨胀。
+///
+/// Code Logic（这个函数做什么）:
+///     阻止删除主 worktree 和仍有关联 terminal window 的 worktree；随后执行 git worktree remove 并删除元数据。
+#[tauri::command]
+pub async fn remove_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+    force: Option<bool>,
+) -> Result<serde_json::Value, AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(&worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    if row.is_main {
+        return Err(AppError::generic("不能删除主工作区"));
+    }
+    let sessions = state
+        .workbench_session_repo
+        .list(Some(&row.project_id))
+        .await?;
+    if sessions
+        .iter()
+        .any(|session| session.worktree_id.as_deref() == Some(&worktree_id))
+    {
+        return Err(AppError::generic("请先关闭该 worktree 下的终端窗口"));
+    }
+    let project = get_project(&state, &row.project_id).await?;
+    let repo_root = workbench_git::repo_root(Path::new(&project.path))?;
+    workbench_git::remove_worktree(
+        Path::new(&repo_root),
+        Path::new(&row.path),
+        force.unwrap_or(false),
+    )?;
+    state.workbench_worktree_repo.delete(&worktree_id).await?;
+    Ok(serde_json::json!({ "ok": true, "worktreeId": worktree_id }))
 }
 
 /// 列出工作台终端会话。
@@ -265,13 +571,20 @@ pub async fn create_workbench_session(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     project_id: String,
+    worktree_id: Option<String>,
     initial_cols: Option<u16>,
     initial_rows: Option<u16>,
 ) -> Result<WorkbenchSessionDto, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let row = state
-        .workbench_sessions
-        .create(app_handle, project, initial_cols, initial_rows)?;
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let row = state.workbench_sessions.create(
+        app_handle,
+        project,
+        worktree.path.clone(),
+        Some(worktree.id.clone()),
+        initial_cols,
+        initial_rows,
+    )?;
     state.workbench_session_repo.upsert(&row).await?;
     Ok(row.to_dto())
 }
@@ -351,7 +664,7 @@ pub async fn get_focused_workbench_session(
 ///     工作台采用真实 tmux 映射后，用户需要在当前 window 内创建左右或上下 pane。
 ///
 /// Code Logic（这个函数做什么）:
-///     校验 direction 字符串，读取会话所属项目根路径，调用 registry 执行带 cwd 的 tmux split-window。
+///     校验 direction 字符串，读取会话 row，调用 registry 按 row.cwd 执行带 cwd 的 tmux split-window。
 #[tauri::command]
 pub async fn split_workbench_pane(
     state: State<'_, AppState>,
@@ -359,15 +672,14 @@ pub async fn split_workbench_pane(
     direction: String,
 ) -> Result<serde_json::Value, AppError> {
     let split_direction = PaneSplitDirection::from_api(&direction)?;
-    let row = state
+    let _row = state
         .workbench_session_repo
         .get(&session_id)
         .await?
         .ok_or_else(|| AppError::not_found("工作台会话不存在"))?;
-    let project = get_project(&state, &row.project_id).await?;
     state
         .workbench_sessions
-        .split_pane(&session_id, split_direction, &project.path)?;
+        .split_pane(&session_id, split_direction)?;
     Ok(serde_json::json!({ "ok": true, "sessionId": session_id, "direction": direction }))
 }
 
@@ -469,10 +781,12 @@ pub async fn rename_workbench_session(
 pub async fn list_workbench_dir(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     path: Option<String>,
 ) -> Result<Vec<WorkbenchFileNode>, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     let relative = path.unwrap_or_default();
     run_blocking_fs(move || workbench_fs::list_dir(&root, &relative)).await
 }
@@ -488,10 +802,12 @@ pub async fn list_workbench_dir(
 pub async fn get_workbench_path_info(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     path: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     run_blocking_fs(move || workbench_fs::path_info(&root, &path)).await
 }
 
@@ -506,11 +822,13 @@ pub async fn get_workbench_path_info(
 pub async fn create_workbench_file(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     parent_path: String,
     name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     run_blocking_fs(move || workbench_fs::create_file(&root, &parent_path, &name)).await
 }
 
@@ -525,11 +843,13 @@ pub async fn create_workbench_file(
 pub async fn create_workbench_dir(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     parent_path: String,
     name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     run_blocking_fs(move || workbench_fs::create_dir(&root, &parent_path, &name)).await
 }
 
@@ -544,11 +864,13 @@ pub async fn create_workbench_dir(
 pub async fn rename_workbench_path(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     path: String,
     new_name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     run_blocking_fs(move || workbench_fs::rename_path(&root, &path, &new_name)).await
 }
 
@@ -563,10 +885,12 @@ pub async fn rename_workbench_path(
 pub async fn delete_workbench_path(
     state: State<'_, AppState>,
     project_id: String,
+    worktree_id: Option<String>,
     path: String,
 ) -> Result<serde_json::Value, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let root = PathBuf::from(project.path);
+    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
     let deleted_path = path.clone();
     run_blocking_fs(move || workbench_fs::delete_path(&root, &path)).await?;
     Ok(serde_json::json!({ "ok": true, "path": deleted_path }))

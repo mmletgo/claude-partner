@@ -22,8 +22,10 @@ function session(status: WorkbenchSession['status']): WorkbenchSession {
   return {
     id: 'session-1',
     projectId: 'project-1',
+    worktreeId: null,
     name: 'Terminal 1',
     command: 'claude',
+    cwd: '/repo',
     status,
     cols: 120,
     rows: 30,

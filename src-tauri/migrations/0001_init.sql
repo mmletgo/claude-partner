@@ -57,12 +57,27 @@ CREATE TABLE IF NOT EXISTS workbench_projects (
     updated_at TEXT NOT NULL
 );
 
+-- workbench_worktrees 表：工作台项目下的 Git worktree 元数据；Git 状态运行期查询，不落库
+CREATE TABLE IF NOT EXISTS workbench_worktrees (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    branch TEXT,
+    base_branch TEXT,
+    path TEXT NOT NULL,
+    is_main INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- workbench_sessions 表：工作台终端 tab 元数据，运行期 PTY/tmux attach 在启动时重建
 CREATE TABLE IF NOT EXISTS workbench_sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    worktree_id TEXT,
     name TEXT NOT NULL,
     command TEXT NOT NULL,
+    cwd TEXT,
     status TEXT NOT NULL,
     cols INTEGER NOT NULL,
     rows INTEGER NOT NULL,

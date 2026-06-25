@@ -38,6 +38,7 @@ import {
   SplitRightIcon,
   SyncIcon,
   TrashIcon,
+  UploadIcon,
   XIcon,
 } from '@/lib/icons';
 import type {
@@ -46,6 +47,7 @@ import type {
   WorkbenchPathInfo,
   WorkbenchSession,
   WorkbenchTerminalStatusEvent,
+  WorkbenchWorktree,
 } from '@/lib/types';
 import styles from './Workbench.module.css';
 import {
@@ -53,7 +55,6 @@ import {
   createPromptOptimizerShortcutState,
   promptOptimizerInputKeyAction,
   promptOptimizerShortcutAction,
-  promptOptimizerWorkingDirectory,
   reducePromptOptimizerShortcut,
   resetPromptOptimizerTextState,
 } from './promptOptimizerWidget';
@@ -62,6 +63,11 @@ import { workbenchTerminalOptions, workbenchTerminalTheme } from './terminalOpti
 import { shouldForwardTerminalInput, writeTerminalReplay } from './terminalReplay';
 import { terminalPanePixelSize } from './terminalSizing';
 import type { TerminalLayoutMode } from './terminalSizing';
+import {
+  activeWorktreeRootPath,
+  sessionsForWorktree,
+  worktreeStatusTone,
+} from './workbenchWorktrees';
 
 interface TauriInternalsWindow extends Window {
   __TAURI_INTERNALS__?: {
@@ -583,6 +589,10 @@ export function Workbench() {
   const [sessionNameDraft, setSessionNameDraft] = useState<string>('');
   const [sessionBusy, setSessionBusy] = useState<boolean>(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [worktrees, setWorktrees] = useState<WorkbenchWorktree[]>([]);
+  const [activeWorktreeId, setActiveWorktreeId] = useState<string | null>(null);
+  const [worktreeBusy, setWorktreeBusy] = useState<string | null>(null);
+  const [worktreeError, setWorktreeError] = useState<string | null>(null);
   const [rootNodes, setRootNodes] = useState<WorkbenchFileNode[]>([]);
   const [childrenByPath, setChildrenByPath] = useState<Record<string, WorkbenchFileNode[]>>({});
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -605,6 +615,7 @@ export function Workbench() {
     top: 24,
   });
   const activeProjectIdRef = useRef<string | null>(null);
+  const activeWorktreeIdRef = useRef<string | null>(null);
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
   const terminalPanelRef = useRef<HTMLElement | null>(null);
   const terminalAreaRef = useRef<HTMLDivElement | null>(null);
@@ -612,13 +623,22 @@ export function Workbench() {
   const promptShortcutStateRef = useRef(createPromptOptimizerShortcutState());
   const lastLocalFocusAtRef = useRef<number>(0);
 
+  const activeWorktree = useMemo(
+    () => worktrees.find((worktree) => worktree.id === activeWorktreeId) ?? worktrees[0] ?? null,
+    [activeWorktreeId, worktrees],
+  );
+  const activeWorktreeSessionId = activeWorktree?.id ?? null;
+  const scopedSessions = useMemo(
+    () => sessionsForWorktree(sessions, activeWorktreeSessionId),
+    [activeWorktreeSessionId, sessions],
+  );
   const activeSession = useMemo(
-    () => sessions.find((session) => session.id === activeSessionId) ?? null,
-    [activeSessionId, sessions],
+    () => scopedSessions.find((session) => session.id === activeSessionId) ?? null,
+    [activeSessionId, scopedSessions],
   );
   const visibleSessions = useMemo(
-    () => visibleTerminalSessions({ sessions, activeSessionId }),
-    [activeSessionId, sessions],
+    () => visibleTerminalSessions({ sessions: scopedSessions, activeSessionId }),
+    [activeSessionId, scopedSessions],
   );
   const renderedActiveSessionId = activeSession?.id ?? visibleSessions[0]?.id ?? null;
   const selectedParentPath = selectedInfo
@@ -630,6 +650,7 @@ export function Workbench() {
   const desktopUnavailableMessage = t('workbench:errors.desktopUnavailable');
   const emptyValue = t('workbench:emptyValue');
   const rootPath = t('workbench:rootPath');
+  const activeRootPath = activeWorktreeRootPath(activeProject?.path ?? '', activeWorktree);
   const activeSessionRuntime = formatRuntime(
     activeSession?.startedAt ?? null,
     activeSession?.exitedAt ?? null,
@@ -639,12 +660,13 @@ export function Workbench() {
   const canUsePanes = Boolean(
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
-  const promptWorkingDirectory = promptOptimizerWorkingDirectory(activeProject);
+  const promptWorkingDirectory = activeRootPath || undefined;
 
   const updateActiveSession = useCallback((nextSessions: WorkbenchSession[]) => {
+    const candidates = sessionsForWorktree(nextSessions, activeWorktreeIdRef.current);
     setActiveSessionId((current) => {
-      if (current && nextSessions.some((session) => session.id === current)) return current;
-      return nextSessions[0]?.id ?? null;
+      if (current && candidates.some((session) => session.id === current)) return current;
+      return candidates[0]?.id ?? null;
     });
   }, []);
 
@@ -672,7 +694,7 @@ export function Workbench() {
   }, [activeSessionId, desktopUnavailableMessage, t]);
 
   useEffect(() => {
-    if (!activeProjectId || sessions.length === 0) return undefined;
+    if (!activeProjectId || scopedSessions.length === 0) return undefined;
     let cancelled = false;
 
     const syncFocusedSession = () => {
@@ -681,7 +703,7 @@ export function Workbench() {
         .focused(activeProjectId)
         .then(({ sessionId }) => {
           if (cancelled || !sessionId) return;
-          if (!sessions.some((session) => session.id === sessionId)) return;
+          if (!scopedSessions.some((session) => session.id === sessionId)) return;
           setActiveSessionId((current) => (current === sessionId ? current : sessionId));
         })
         .catch(() => {
@@ -695,7 +717,7 @@ export function Workbench() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [activeProjectId, sessions]);
+  }, [activeProjectId, scopedSessions]);
 
   const loadSessions = useCallback(
     async (projectId: string) => {
@@ -717,27 +739,59 @@ export function Workbench() {
     [desktopUnavailableMessage, refreshProjectSessionStats, t, updateActiveSession],
   );
 
+  const loadWorktrees = useCallback(
+    async (projectId: string) => {
+      try {
+        setWorktreeError(null);
+        const list = await workbenchApi.worktrees.list(projectId);
+        if (activeProjectIdRef.current !== projectId) return;
+        setWorktrees(list);
+        setActiveWorktreeId((current) => {
+          if (current && list.some((worktree) => worktree.id === current)) return current;
+          return list[0]?.id ?? null;
+        });
+      } catch (error) {
+        if (activeProjectIdRef.current !== projectId) return;
+        setWorktreeError(
+          displayErrorMessage(error, t('workbench:errors.worktrees'), desktopUnavailableMessage),
+        );
+      }
+    },
+    [desktopUnavailableMessage, t],
+  );
+
   const loadDir = useCallback(
     async (path: string) => {
       const projectId = activeProjectIdRef.current;
       if (!projectId) return;
+      const worktreeId = activeWorktreeIdRef.current;
       try {
         setFileError(null);
         setFileLoadingPath(path);
-        const nodes = await workbenchApi.files.listDir(projectId, path);
-        if (activeProjectIdRef.current !== projectId) return;
+        const nodes = await workbenchApi.files.listDir(projectId, path, worktreeId);
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         if (path === '') {
           setRootNodes(nodes);
         } else {
           setChildrenByPath((current) => ({ ...current, [path]: nodes }));
         }
       } catch (error) {
-        if (activeProjectIdRef.current !== projectId) return;
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         setFileError(
           displayErrorMessage(error, t('workbench:errors.files'), desktopUnavailableMessage),
         );
       } finally {
-        if (activeProjectIdRef.current === projectId) {
+        if (activeProjectIdRef.current === projectId && activeWorktreeIdRef.current === worktreeId) {
           setFileLoadingPath(null);
         }
       }
@@ -749,13 +803,24 @@ export function Workbench() {
     async (path: string) => {
       const projectId = activeProjectIdRef.current;
       if (!projectId) return;
+      const worktreeId = activeWorktreeIdRef.current;
       try {
-        const info = await workbenchApi.files.info(projectId, path);
-        if (activeProjectIdRef.current !== projectId) return;
+        const info = await workbenchApi.files.info(projectId, path, worktreeId);
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         setSelectedInfo(info);
         setRenameName(info.name);
       } catch (error) {
-        if (activeProjectIdRef.current !== projectId) return;
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         setFileError(
           displayErrorMessage(error, t('workbench:errors.pathInfo'), desktopUnavailableMessage),
         );
@@ -769,8 +834,19 @@ export function Workbench() {
   }, [activeProjectId]);
 
   useEffect(() => {
+    activeWorktreeIdRef.current = activeWorktreeId;
+  }, [activeWorktreeId]);
+
+  useEffect(() => {
     knownSessionIdsRef.current = new Set(sessions.map((session) => session.id));
   }, [sessions]);
+
+  useEffect(() => {
+    setActiveSessionId((current) => {
+      if (current && scopedSessions.some((session) => session.id === current)) return current;
+      return scopedSessions[0]?.id ?? null;
+    });
+  }, [scopedSessions]);
 
   useEffect(() => {
     return deferEffect(() => {
@@ -816,6 +892,8 @@ export function Workbench() {
         knownSessionIdsRef.current = new Set();
         setSessions([]);
         setActiveSessionId(null);
+        setWorktrees([]);
+        setActiveWorktreeId(null);
         setRootNodes([]);
         setChildrenByPath({});
         setExpandedPaths(new Set());
@@ -825,15 +903,31 @@ export function Workbench() {
       }
       setRootNodes([]);
       knownSessionIdsRef.current = new Set();
+      setWorktrees([]);
+      setActiveWorktreeId(null);
       setChildrenByPath({});
       setExpandedPaths(new Set());
       setSelectedPath(null);
       setSelectedInfo(null);
       setFileNotice(null);
+      void loadWorktrees(activeProjectId);
       void loadSessions(activeProjectId);
-      void loadDir('');
     });
-  }, [activeProjectId, loadDir, loadSessions]);
+  }, [activeProjectId, loadSessions, loadWorktrees]);
+
+  useEffect(() => {
+    return deferEffect(() => {
+      setRootNodes([]);
+      setChildrenByPath({});
+      setExpandedPaths(new Set());
+      setSelectedPath(null);
+      setSelectedInfo(null);
+      setFileNotice(null);
+      if (activeProjectId && activeWorktreeId) {
+        void loadDir('');
+      }
+    });
+  }, [activeProjectId, activeWorktreeId, loadDir]);
 
   useEffect(() => {
     if (!canListenToTauriEvents()) return undefined;
@@ -866,19 +960,30 @@ export function Workbench() {
   const handleCreateSession = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId) return;
+    const worktreeId = activeWorktreeIdRef.current;
     try {
       setSessionBusy(true);
       setSessionError(null);
       const initialSize = measureInitialTerminalSize(terminalPanelRef.current, 'single');
-      const session = await workbenchApi.sessions.create(projectId, initialSize);
-      if (activeProjectIdRef.current !== projectId) return;
+      const session = await workbenchApi.sessions.create(projectId, initialSize, worktreeId);
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setSessions((current) => [...current, session]);
       knownSessionIdsRef.current.add(session.id);
       focusSession(session.id);
       resetTerminalBuffer(session.id);
       void refreshProjectSessionStats(projectId);
     } catch (error) {
-      if (activeProjectIdRef.current !== projectId) return;
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setSessionError(
         displayErrorMessage(
           error,
@@ -1105,6 +1210,108 @@ export function Workbench() {
     }
   }, [activeSession, desktopUnavailableMessage, sessionNameDraft, t]);
 
+  const handleCreateWorktree = useCallback(async () => {
+    const projectId = activeProjectIdRef.current;
+    if (!projectId) return;
+    const branchName = window.prompt(t('workbench:worktrees.branchPrompt'));
+    if (!branchName?.trim()) return;
+    try {
+      setWorktreeBusy('create');
+      setWorktreeError(null);
+      const created = await workbenchApi.worktrees.create(projectId, branchName.trim());
+      if (activeProjectIdRef.current !== projectId) return;
+      await loadWorktrees(projectId);
+      setActiveWorktreeId(created.id);
+    } catch (error) {
+      if (activeProjectIdRef.current !== projectId) return;
+      setWorktreeError(
+        displayErrorMessage(
+          error,
+          t('workbench:errors.createWorktree'),
+          desktopUnavailableMessage,
+        ),
+      );
+    } finally {
+      setWorktreeBusy(null);
+    }
+  }, [desktopUnavailableMessage, loadWorktrees, t]);
+
+  const handleCommitWorktree = useCallback(async () => {
+    if (!activeWorktree) return;
+    const message = window.prompt(t('workbench:worktrees.commitPrompt'));
+    if (!message?.trim()) return;
+    try {
+      setWorktreeBusy('commit');
+      setWorktreeError(null);
+      await workbenchApi.worktrees.commit(activeWorktree.id, message.trim());
+      await loadWorktrees(activeWorktree.projectId);
+    } catch (error) {
+      setWorktreeError(
+        displayErrorMessage(error, t('workbench:errors.commitWorktree'), desktopUnavailableMessage),
+      );
+    } finally {
+      setWorktreeBusy(null);
+    }
+  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+
+  const handlePushWorktree = useCallback(async () => {
+    if (!activeWorktree) return;
+    try {
+      setWorktreeBusy('push');
+      setWorktreeError(null);
+      await workbenchApi.worktrees.push(activeWorktree.id);
+      await loadWorktrees(activeWorktree.projectId);
+    } catch (error) {
+      setWorktreeError(
+        displayErrorMessage(error, t('workbench:errors.pushWorktree'), desktopUnavailableMessage),
+      );
+    } finally {
+      setWorktreeBusy(null);
+    }
+  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+
+  const handleMergeWorktree = useCallback(async () => {
+    if (!activeWorktree || activeWorktree.isMain) return;
+    if (!window.confirm(t('workbench:worktrees.mergeConfirm', { name: activeWorktree.name }))) {
+      return;
+    }
+    try {
+      setWorktreeBusy('merge');
+      setWorktreeError(null);
+      await workbenchApi.worktrees.merge(activeWorktree.id);
+      await loadWorktrees(activeWorktree.projectId);
+    } catch (error) {
+      setWorktreeError(
+        displayErrorMessage(error, t('workbench:errors.mergeWorktree'), desktopUnavailableMessage),
+      );
+    } finally {
+      setWorktreeBusy(null);
+    }
+  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t]);
+
+  const handleRemoveWorktree = useCallback(async () => {
+    if (!activeWorktree || activeWorktree.isMain) return;
+    if (!window.confirm(t('workbench:worktrees.removeConfirm', { name: activeWorktree.name }))) {
+      return;
+    }
+    try {
+      setWorktreeBusy('remove');
+      setWorktreeError(null);
+      await workbenchApi.worktrees.remove(activeWorktree.id);
+      if (activeWorktreeIdRef.current === activeWorktree.id) {
+        const next = worktrees.find((worktree) => worktree.id !== activeWorktree.id);
+        setActiveWorktreeId(next?.id ?? null);
+      }
+      await loadWorktrees(activeWorktree.projectId);
+    } catch (error) {
+      setWorktreeError(
+        displayErrorMessage(error, t('workbench:errors.removeWorktree'), desktopUnavailableMessage),
+      );
+    } finally {
+      setWorktreeBusy(null);
+    }
+  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t, worktrees]);
+
   const handleToggleNode = useCallback(
     (node: WorkbenchFileNode) => {
       if (node.kind !== 'dir') return;
@@ -1153,15 +1360,31 @@ export function Workbench() {
     async (kind: 'file' | 'dir') => {
       const projectId = activeProjectIdRef.current;
       if (!projectId || !newEntryName.trim()) return;
+      const worktreeId = activeWorktreeIdRef.current;
       try {
         setFileError(null);
         setFileNotice(null);
         const parentPath = selectedParentPath;
         const created =
           kind === 'file'
-            ? await workbenchApi.files.createFile(projectId, parentPath, newEntryName.trim())
-            : await workbenchApi.files.createDir(projectId, parentPath, newEntryName.trim());
-        if (activeProjectIdRef.current !== projectId) return;
+            ? await workbenchApi.files.createFile(
+                projectId,
+                parentPath,
+                newEntryName.trim(),
+                worktreeId,
+              )
+            : await workbenchApi.files.createDir(
+                projectId,
+                parentPath,
+                newEntryName.trim(),
+                worktreeId,
+              );
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         setNewEntryName('');
         setSelectedPath(created.path);
         setSelectedInfo(created);
@@ -1171,7 +1394,12 @@ export function Workbench() {
         }
         await loadDir(parentPath);
       } catch (error) {
-        if (activeProjectIdRef.current !== projectId) return;
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId
+        ) {
+          return;
+        }
         setFileError(
           displayErrorMessage(error, t('workbench:errors.createPath'), desktopUnavailableMessage),
         );
@@ -1183,6 +1411,7 @@ export function Workbench() {
   const handleRenamePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo || !renameName.trim()) return;
+    const worktreeId = activeWorktreeIdRef.current;
     try {
       setFileError(null);
       setFileNotice(null);
@@ -1191,14 +1420,25 @@ export function Workbench() {
         projectId,
         originalPath,
         renameName.trim(),
+        worktreeId,
       );
-      if (activeProjectIdRef.current !== projectId) return;
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setSelectedPath(renamed.path);
       setSelectedInfo(renamed);
       setRenameName(renamed.name);
       await refreshParentDir(originalPath);
     } catch (error) {
-      if (activeProjectIdRef.current !== projectId) return;
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setFileError(
         displayErrorMessage(error, t('workbench:errors.renamePath'), desktopUnavailableMessage),
       );
@@ -1209,18 +1449,29 @@ export function Workbench() {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo) return;
     if (!window.confirm(t('workbench:confirmDeletePath', { name: selectedInfo.name }))) return;
+    const worktreeId = activeWorktreeIdRef.current;
     const path = selectedInfo.path;
     try {
       setFileError(null);
       setFileNotice(null);
-      await workbenchApi.files.deletePath(projectId, path);
-      if (activeProjectIdRef.current !== projectId) return;
+      await workbenchApi.files.deletePath(projectId, path, worktreeId);
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setSelectedPath(null);
       setSelectedInfo(null);
       setRenameName('');
       await refreshParentDir(path);
     } catch (error) {
-      if (activeProjectIdRef.current !== projectId) return;
+      if (
+        activeProjectIdRef.current !== projectId ||
+        activeWorktreeIdRef.current !== worktreeId
+      ) {
+        return;
+      }
       setFileError(
         displayErrorMessage(error, t('workbench:errors.deletePath'), desktopUnavailableMessage),
       );
@@ -1260,7 +1511,15 @@ export function Workbench() {
   const workspaceLine = activeProject
     ? `${activeProject.deviceName} · ${activeProject.path}`
     : t('workbench:noProjectHint');
-  const contextPath = activeProject ? selectedDisplayPath || rootPath : emptyValue;
+  const activeWorktreeTone = activeWorktree ? worktreeStatusTone(activeWorktree) : 'neutral';
+  const activeWorktreePillTone = activeWorktreeTone === 'warning' ? 'warn' : activeWorktreeTone;
+  const activeWorktreeStatusLabel = activeWorktree
+    ? activeWorktree.status.conflicts > 0
+      ? t('workbench:worktrees.status.conflict', { count: activeWorktree.status.conflicts })
+      : activeWorktree.status.clean
+        ? t('workbench:worktrees.status.clean')
+        : t('workbench:worktrees.status.dirty', { count: activeWorktree.status.changed })
+    : emptyValue;
   const promptPanelStyle = {
     '--prompt-panel-left': `${promptPanelPosition.left}px`,
     '--prompt-panel-top': `${promptPanelPosition.top}px`,
@@ -1281,22 +1540,106 @@ export function Workbench() {
           </div>
         </section>
 
-        <section className={styles.contextBar}>
-          <span className={styles.contextLabel}>{t('workbench:projectContextLabel')}</span>
-          <strong>{activeProject?.name ?? emptyValue}</strong>
-          <span className={styles.contextSlash}>/</span>
-          <span className={styles.contextPath}>{contextPath}</span>
+        <section className={styles.worktreeBar} aria-label={t('workbench:worktrees.label')}>
+          <div className={styles.worktreeStrip}>
+            {worktrees.length === 0 ? (
+              <span className={styles.worktreeEmpty}>{t('workbench:worktrees.empty')}</span>
+            ) : (
+              worktrees.map((worktree) => {
+                const tone = worktreeStatusTone(worktree);
+                const label = worktree.branch ?? worktree.name;
+                return (
+                  <button
+                    key={worktree.id}
+                    type="button"
+                    className={styles.worktreeChip}
+                    data-active={worktree.id === activeWorktree?.id || undefined}
+                    data-tone={tone}
+                    onClick={() => setActiveWorktreeId(worktree.id)}
+                  >
+                    <span className={styles.worktreeDot} data-tone={tone} />
+                    <span className={styles.worktreeName}>{label}</span>
+                    <span className={styles.worktreeMeta}>
+                      {worktree.isMain
+                        ? t('workbench:worktrees.main')
+                        : t('workbench:worktrees.linked')}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className={styles.worktreeActions}>
+            <Pill tone={activeWorktreePillTone} dot>
+              {activeWorktreeStatusLabel}
+            </Pill>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<PlusIcon />}
+              loading={worktreeBusy === 'create'}
+              disabled={!activeProjectId || worktreeBusy !== null}
+              onClick={() => void handleCreateWorktree()}
+            >
+              {t('workbench:worktrees.create')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<EditIcon />}
+              loading={worktreeBusy === 'commit'}
+              disabled={!activeWorktree || activeWorktree.status.clean || worktreeBusy !== null}
+              onClick={() => void handleCommitWorktree()}
+            >
+              {t('workbench:worktrees.commit')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<UploadIcon />}
+              loading={worktreeBusy === 'push'}
+              disabled={!activeWorktree?.branch || worktreeBusy !== null}
+              onClick={() => void handlePushWorktree()}
+            >
+              {t('workbench:worktrees.push')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              icon={<SyncIcon />}
+              loading={worktreeBusy === 'merge'}
+              disabled={
+                !activeWorktree ||
+                activeWorktree.isMain ||
+                !activeWorktree.status.clean ||
+                worktreeBusy !== null
+              }
+              onClick={() => void handleMergeWorktree()}
+            >
+              {t('workbench:worktrees.merge')}
+            </Button>
+            <Button
+              variant="icon"
+              icon={<TrashIcon />}
+              title={t('workbench:worktrees.remove')}
+              aria-label={t('workbench:worktrees.remove')}
+              loading={worktreeBusy === 'remove'}
+              disabled={!activeWorktree || activeWorktree.isMain || worktreeBusy !== null}
+              onClick={() => void handleRemoveWorktree()}
+            />
+          </div>
         </section>
 
         <div className={styles.noticeStack}>
           {sessionError ? <div className={styles.errorBox}>{sessionError}</div> : null}
+          {worktreeError ? <div className={styles.errorBox}>{worktreeError}</div> : null}
           {dependencyStatus.status !== 'ready' ? (
             <WorkbenchDependencyCard compact className={styles.dependencyNotice} />
           ) : null}
         </div>
 
         <section className={styles.sessionTabs} aria-label={t('workbench:terminalTabs')}>
-          {sessions.map((session) => (
+          {scopedSessions.map((session) => (
             <button
               key={session.id}
               type="button"
@@ -1324,7 +1667,7 @@ export function Workbench() {
             size="sm"
             icon={<PlusIcon />}
             loading={sessionBusy}
-            disabled={!activeProjectId}
+            disabled={!activeProjectId || !activeWorktree}
             onClick={() => void handleCreateSession()}
           >
             {t('workbench:newSession')}
@@ -1480,8 +1823,12 @@ export function Workbench() {
               <dd>{activeProject?.name ?? emptyValue}</dd>
             </div>
             <div>
+              <dt>{t('workbench:statusWorktree')}</dt>
+              <dd>{activeWorktree?.name ?? emptyValue}</dd>
+            </div>
+            <div>
               <dt>{t('workbench:statusProjectPath')}</dt>
-              <dd>{activeProject?.path ?? emptyValue}</dd>
+              <dd>{activeRootPath || emptyValue}</dd>
             </div>
             <div>
               <dt>{t('workbench:statusSession')}</dt>

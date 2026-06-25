@@ -260,6 +260,46 @@ export interface WorkbenchProject {
   updatedAt: string;
 }
 
+/**
+ * 工作台 Git 状态摘要。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   Workbench worktree 管理层需要让用户快速判断当前工作区是否干净、是否领先/落后远端以及是否有冲突。
+ *
+ * Code Logic（字段说明）:
+ *   changed/conflicts 是本地 `git status --porcelain --branch` 的摘要计数；clean 为后端派生布尔值。
+ */
+export interface WorkbenchGitStatus {
+  branch: string | null;
+  changed: number;
+  ahead: number;
+  behind: number;
+  conflicts: number;
+  clean: boolean;
+}
+
+/**
+ * 工作台 Git worktree DTO。
+ *
+ * Business Logic（为什么需要这个类型）:
+ *   一个项目下可以有主工作区和多个功能 worktree，顶部 worktree strip 负责切换它们。
+ *
+ * Code Logic（字段说明）:
+ *   path 是该 worktree 的绝对路径；status 是运行期 Git 状态，不代表落库字段。
+ */
+export interface WorkbenchWorktree {
+  id: string;
+  projectId: string;
+  name: string;
+  branch: string | null;
+  baseBranch: string | null;
+  path: string;
+  isMain: boolean;
+  status: WorkbenchGitStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** 工作台终端会话状态。 */
 export type WorkbenchSessionStatus = 'running' | 'exited' | 'disconnected' | string;
 
@@ -275,8 +315,10 @@ export type WorkbenchSessionStatus = 'running' | 'exited' | 'disconnected' | str
 export interface WorkbenchSession {
   id: string;
   projectId: string;
+  worktreeId: string | null;
   name: string;
   command: string;
+  cwd: string;
   status: WorkbenchSessionStatus;
   cols: number;
   rows: number;

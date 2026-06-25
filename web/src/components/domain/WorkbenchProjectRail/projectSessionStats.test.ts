@@ -12,8 +12,10 @@ function session(id: string, projectId: string, paneCount: number): WorkbenchSes
   return {
     id,
     projectId,
+    worktreeId: null,
     name: id,
     command: '/bin/zsh',
+    cwd: '/repo',
     status: 'running',
     cols: 120,
     rows: 30,

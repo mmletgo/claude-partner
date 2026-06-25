@@ -872,14 +872,16 @@ impl WorkbenchSessionRegistry {
     }
 
     /// Business Logic（为什么需要这个函数）:
-    ///     用户在工作台中创建本机终端时，需要在项目根目录中启动普通 shell。
+    ///     用户在工作台中创建本机终端时，需要在当前 worktree 根目录中启动普通 shell。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     创建 portable-pty pair，cwd 指向项目路径，spawn 系统 shell，并启动输出与退出监听线程。
+    ///     创建 portable-pty pair，cwd 指向 active worktree 路径，spawn 系统 shell，并启动输出与退出监听线程。
     pub fn create(
         &self,
         app: AppHandle,
         project: WorkbenchProjectRow,
+        cwd: String,
+        worktree_id: Option<String>,
         initial_cols: Option<u16>,
         initial_rows: Option<u16>,
     ) -> Result<WorkbenchSessionRow, AppError> {
@@ -894,7 +896,7 @@ impl WorkbenchSessionRegistry {
                     &tmux,
                     &project_tmux_id,
                     &project.name,
-                    &project.path,
+                    &cwd,
                     &terminal_command,
                 ) {
                     Ok(window_id) => {
@@ -932,8 +934,10 @@ impl WorkbenchSessionRegistry {
         let row = WorkbenchSessionRow {
             id: session_id.clone(),
             project_id: project.id.clone(),
+            worktree_id,
             name: project.name.clone(),
             command,
+            cwd: cwd.clone(),
             status: "running".to_string(),
             cols,
             rows,
@@ -947,20 +951,23 @@ impl WorkbenchSessionRegistry {
             updated_at: chrono::Utc::now().to_rfc3339(),
         };
 
-        self.spawn_row(app, row, &project.path)
+        self.spawn_row(app, row)
     }
 
     /// Business Logic（为什么需要这个函数）:
     ///     应用重启后，持久化的终端 tab 需要重新绑定运行期 PTY；tmux 后端可继续原 shell 上下文。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     根据持久化 row.backend 恢复 tmux session 或回退普通 PTY，然后启动 reader/exit watcher。
+    ///     根据持久化 row.backend 恢复 tmux session 或回退普通 PTY，然后用 row.cwd 启动 reader/exit watcher。
     pub fn restore(
         &self,
         app: AppHandle,
         project: WorkbenchProjectRow,
         mut row: WorkbenchSessionRow,
     ) -> Result<WorkbenchSessionRow, AppError> {
+        if row.cwd.trim().is_empty() {
+            row.cwd = project.path.clone();
+        }
         if row.backend == TMUX_BACKEND {
             if let Some(tmux) = available_tmux_command() {
                 let session_name = row
@@ -983,7 +990,7 @@ impl WorkbenchSessionRegistry {
                         &tmux,
                         &tmux_project_session_name(&project.id),
                         &row.name,
-                        &project.path,
+                        &row.cwd,
                         &terminal_command,
                     ) {
                         Ok(window_id) => {
@@ -1021,7 +1028,7 @@ impl WorkbenchSessionRegistry {
         row.exited_at = None;
         row.exit_code = None;
         row.updated_at = chrono::Utc::now().to_rfc3339();
-        self.spawn_row(app, row, &project.path)
+        self.spawn_row(app, row)
     }
 
     /// Business Logic（为什么需要这个函数）:
@@ -1033,7 +1040,6 @@ impl WorkbenchSessionRegistry {
         &self,
         app: AppHandle,
         row: WorkbenchSessionRow,
-        project_path: &str,
     ) -> Result<WorkbenchSessionRow, AppError> {
         let session_id = row.id.clone();
         let cols = row.cols;
@@ -1049,7 +1055,7 @@ impl WorkbenchSessionRegistry {
             })
             .map_err(|error| AppError::generic(format!("创建 PTY 失败: {error}")))?;
         let mut cmd = command_builder_for_row(&row);
-        cmd.cwd(PathBuf::from(project_path));
+        cmd.cwd(PathBuf::from(&row.cwd));
         let child = pair
             .slave
             .spawn_command(cmd)
@@ -1169,12 +1175,11 @@ impl WorkbenchSessionRegistry {
     ///     用户需要在当前 tmux window 内创建左右或上下 pane，复用 tmux 的真实布局能力。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     找到会话 row 的 tmux target，把项目根路径转换为 tmux cwd 后执行 `split-window -c`。
+    ///     找到会话 row 的 tmux target，把 row.cwd 转换为 tmux cwd 后执行 `split-window -c`。
     pub fn split_pane(
         &self,
         session_id: &str,
         direction: PaneSplitDirection,
-        project_path: &str,
     ) -> Result<(), AppError> {
         let handle = self.get_handle(session_id)?;
         let handle = handle.lock().expect("workbench session 锁中毒");
@@ -1185,7 +1190,7 @@ impl WorkbenchSessionRegistry {
         let Some(tmux) = available_tmux_command() else {
             return Err(AppError::generic("未找到 tmux，无法创建 pane"));
         };
-        let tmux_cwd = tmux.project_cwd(project_path)?;
+        let tmux_cwd = tmux.project_cwd(&handle.row.cwd)?;
         let args = tmux_split_window_args(direction, &target, &tmux_cwd);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         run_tmux_command(&tmux, &arg_refs)?;
@@ -1367,8 +1372,10 @@ impl WorkbenchSessionRegistry {
         let row = WorkbenchSessionRow {
             id: session_id.to_string(),
             project_id: project_id.to_string(),
+            worktree_id: None,
             name: format!("session-{session_id}"),
             command: default_terminal_command_from_env(Some("/bin/sh".into())),
+            cwd: "/tmp/project".to_string(),
             status: "running".to_string(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
@@ -1543,8 +1550,10 @@ mod tests {
         WorkbenchSessionRow {
             id: session_id.to_string(),
             project_id: project_id.to_string(),
+            worktree_id: None,
             name: session_id.to_string(),
             command: "/bin/sh".to_string(),
+            cwd: "/tmp/project".to_string(),
             status: "running".to_string(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,
@@ -1920,8 +1929,10 @@ mod tests {
         let row = WorkbenchSessionRow {
             id: "s1".to_string(),
             project_id: "p1".to_string(),
+            worktree_id: None,
             name: "Terminal".to_string(),
             command: "/bin/zsh".to_string(),
+            cwd: "/tmp/project".to_string(),
             status: "running".to_string(),
             cols: DEFAULT_COLS,
             rows: DEFAULT_ROWS,

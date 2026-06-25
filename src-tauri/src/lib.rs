@@ -50,7 +50,7 @@ use crate::net::{discovery, http_server, peer_client::PeerClient};
 use crate::state::AppState;
 use crate::storage::{
     ClaudeHistoryRepo, ClaudeMdRepo, PromptRepo, ScratchpadRepo, SshTargetRepo, TransferRepo,
-    WorkbenchProjectRepo, WorkbenchSessionRepo,
+    WorkbenchProjectRepo, WorkbenchSessionRepo, WorkbenchWorktreeRepo,
 };
 use crate::transfer::registry::TransferRegistry;
 use tauri::Manager;
@@ -203,6 +203,25 @@ const WORKBENCH_PROJECT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_pro
     updated_at TEXT NOT NULL
 )";
 
+/// 工作台 Git worktree 表（项目下多个工作区的持久化元数据）。
+///
+/// Business Logic（为什么需要这个常量）:
+///     用户在 Workbench 中创建的 worktree 需要在应用重启后继续展示，并和终端 window 关联。
+///
+/// Code Logic（这个常量做什么）:
+///     定义 workbench_worktrees 表结构；Git 状态不落库，命令层动态读取。
+const WORKBENCH_WORKTREE_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_worktrees (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    branch TEXT,
+    base_branch TEXT,
+    path TEXT NOT NULL,
+    is_main INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)";
+
 /// 工作台终端会话表（终端 tab 元数据持久化，PTY/tmux attach 运行期重建）。
 ///
 /// Business Logic（为什么需要这个常量）:
@@ -213,8 +232,10 @@ const WORKBENCH_PROJECT_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_pro
 const WORKBENCH_SESSION_SCHEMA: &str = "CREATE TABLE IF NOT EXISTS workbench_sessions (
     id TEXT PRIMARY KEY,
     project_id TEXT NOT NULL,
+    worktree_id TEXT,
     name TEXT NOT NULL,
     command TEXT NOT NULL,
+    cwd TEXT,
     status TEXT NOT NULL,
     cols INTEGER NOT NULL,
     rows INTEGER NOT NULL,
@@ -270,7 +291,13 @@ async fn init_db(db_path: &str) -> Result<sqlx::SqlitePool, error::AppError> {
         .await?;
     // 工作台最近项目列表 + 终端会话元数据（PTY 句柄运行期重建）
     sqlx::query(WORKBENCH_PROJECT_SCHEMA).execute(&pool).await?;
+    sqlx::query(WORKBENCH_WORKTREE_SCHEMA)
+        .execute(&pool)
+        .await?;
     sqlx::query(WORKBENCH_SESSION_SCHEMA).execute(&pool).await?;
+    WorkbenchWorktreeRepo::new(pool.clone())
+        .ensure_schema()
+        .await?;
     WorkbenchSessionRepo::new(pool.clone())
         .ensure_schema()
         .await?;
@@ -330,6 +357,7 @@ pub fn run() {
                 let scratchpad_repo = Arc::new(ScratchpadRepo::new(pool.clone()));
                 let workbench_project_repo = Arc::new(WorkbenchProjectRepo::new(pool.clone()));
                 let workbench_session_repo = Arc::new(WorkbenchSessionRepo::new(pool.clone()));
+                let workbench_worktree_repo = Arc::new(WorkbenchWorktreeRepo::new(pool.clone()));
                 let workbench_sessions =
                     Arc::new(crate::workbench::sessions::WorkbenchSessionRegistry::new());
                 let workbench_dependency = Arc::new(
@@ -368,6 +396,7 @@ pub fn run() {
                     cc_history_repo,
                     workbench_project_repo,
                     workbench_session_repo,
+                    workbench_worktree_repo,
                     workbench_sessions,
                     workbench_dependency,
                     cc_collector_cancel: Arc::new(Mutex::new(None)),
@@ -567,6 +596,12 @@ pub fn run() {
             workbench_cmd::add_workbench_project,
             workbench_cmd::remove_workbench_project,
             workbench_cmd::touch_workbench_project,
+            workbench_cmd::list_workbench_worktrees,
+            workbench_cmd::create_workbench_worktree,
+            workbench_cmd::commit_workbench_worktree,
+            workbench_cmd::push_workbench_worktree,
+            workbench_cmd::merge_workbench_worktree,
+            workbench_cmd::remove_workbench_worktree,
             workbench_cmd::list_workbench_sessions,
             workbench_cmd::create_workbench_session,
             workbench_cmd::write_workbench_session_input,

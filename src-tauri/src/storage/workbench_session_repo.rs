@@ -37,20 +37,30 @@ impl WorkbenchSessionRepo {
     }
 
     /// Business Logic（为什么需要这个函数）:
-    ///     数据库相关修改必须兼容旧库；旧版本 workbench_sessions 没有 tmux window 标识列。
+    ///     数据库相关修改必须兼容旧库；旧版本 workbench_sessions 没有 tmux window、worktree 与 cwd 列。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     用 PRAGMA table_info 检查列名，缺失时 ALTER TABLE ADD COLUMN backend_window_id TEXT。
+    ///     用 PRAGMA table_info 检查列名，缺失时逐列 ALTER TABLE ADD COLUMN。
     pub async fn ensure_schema(&self) -> Result<(), AppError> {
         let columns = sqlx::query("PRAGMA table_info(workbench_sessions)")
             .fetch_all(&self.pool)
             .await?;
-        let has_backend_window_id = columns
+        let names: Vec<String> = columns
             .iter()
             .filter_map(|row| row.try_get::<String, _>("name").ok())
-            .any(|name| name == "backend_window_id");
-        if !has_backend_window_id {
+            .collect();
+        if !names.iter().any(|name| name == "backend_window_id") {
             sqlx::query("ALTER TABLE workbench_sessions ADD COLUMN backend_window_id TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        if !names.iter().any(|name| name == "worktree_id") {
+            sqlx::query("ALTER TABLE workbench_sessions ADD COLUMN worktree_id TEXT")
+                .execute(&self.pool)
+                .await?;
+        }
+        if !names.iter().any(|name| name == "cwd") {
+            sqlx::query("ALTER TABLE workbench_sessions ADD COLUMN cwd TEXT")
                 .execute(&self.pool)
                 .await?;
         }
@@ -68,7 +78,7 @@ impl WorkbenchSessionRepo {
     ) -> Result<Vec<WorkbenchSessionRow>, AppError> {
         let rows = if let Some(project_id) = project_id {
             sqlx::query(
-                "SELECT id, project_id, name, command, status, cols, rows, started_at, exited_at, \
+                "SELECT id, project_id, worktree_id, name, command, cwd, status, cols, rows, started_at, exited_at, \
                  exit_code, backend, backend_id, backend_window_id, created_at, updated_at \
                  FROM workbench_sessions WHERE project_id = ? ORDER BY started_at ASC",
             )
@@ -77,7 +87,7 @@ impl WorkbenchSessionRepo {
             .await?
         } else {
             sqlx::query(
-                "SELECT id, project_id, name, command, status, cols, rows, started_at, exited_at, \
+                "SELECT id, project_id, worktree_id, name, command, cwd, status, cols, rows, started_at, exited_at, \
                  exit_code, backend, backend_id, backend_window_id, created_at, updated_at \
                  FROM workbench_sessions ORDER BY started_at ASC",
             )
@@ -94,7 +104,7 @@ impl WorkbenchSessionRepo {
     ///     按 id 查询单条记录，不存在返回 None。
     pub async fn get(&self, id: &str) -> Result<Option<WorkbenchSessionRow>, AppError> {
         let row = sqlx::query(
-            "SELECT id, project_id, name, command, status, cols, rows, started_at, exited_at, \
+            "SELECT id, project_id, worktree_id, name, command, cwd, status, cols, rows, started_at, exited_at, \
              exit_code, backend, backend_id, backend_window_id, created_at, updated_at \
              FROM workbench_sessions WHERE id = ?",
         )
@@ -112,14 +122,16 @@ impl WorkbenchSessionRepo {
     pub async fn upsert(&self, row: &WorkbenchSessionRow) -> Result<(), AppError> {
         sqlx::query(
             "INSERT OR REPLACE INTO workbench_sessions \
-             (id, project_id, name, command, status, cols, rows, started_at, exited_at, exit_code, \
+             (id, project_id, worktree_id, name, command, cwd, status, cols, rows, started_at, exited_at, exit_code, \
               backend, backend_id, backend_window_id, created_at, updated_at) \
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&row.id)
         .bind(&row.project_id)
+        .bind(&row.worktree_id)
         .bind(&row.name)
         .bind(&row.command)
+        .bind(&row.cwd)
         .bind(&row.status)
         .bind(i64::from(row.cols))
         .bind(i64::from(row.rows))
@@ -174,8 +186,10 @@ fn row_to_session(row: &SqliteRow) -> Result<WorkbenchSessionRow, AppError> {
     Ok(WorkbenchSessionRow {
         id: row.try_get("id")?,
         project_id: row.try_get("project_id")?,
+        worktree_id: row.try_get("worktree_id")?,
         name: row.try_get("name")?,
         command: row.try_get("command")?,
+        cwd: row.try_get::<Option<String>, _>("cwd")?.unwrap_or_default(),
         status: row.try_get("status")?,
         cols: cols.clamp(i64::from(u16::MIN), i64::from(u16::MAX)) as u16,
         rows: rows.clamp(i64::from(u16::MIN), i64::from(u16::MAX)) as u16,
@@ -212,8 +226,8 @@ mod tests {
             .unwrap();
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS workbench_sessions (\
-             id TEXT PRIMARY KEY, project_id TEXT NOT NULL, name TEXT NOT NULL, command TEXT NOT NULL, \
-             status TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL, started_at TEXT NOT NULL, \
+             id TEXT PRIMARY KEY, project_id TEXT NOT NULL, worktree_id TEXT, name TEXT NOT NULL, command TEXT NOT NULL, \
+             cwd TEXT, status TEXT NOT NULL, cols INTEGER NOT NULL, rows INTEGER NOT NULL, started_at TEXT NOT NULL, \
              exited_at TEXT, exit_code INTEGER, backend TEXT NOT NULL, backend_id TEXT, \
              backend_window_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
         )
@@ -232,8 +246,10 @@ mod tests {
         WorkbenchSessionRow {
             id: id.to_string(),
             project_id: project_id.to_string(),
+            worktree_id: None,
             name: format!("Terminal {id}"),
             command: "/bin/zsh".to_string(),
+            cwd: "/tmp/project".to_string(),
             status: "running".to_string(),
             cols: 120,
             rows: 34,

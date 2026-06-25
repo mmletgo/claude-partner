@@ -12,8 +12,10 @@ function session(id: string, name: string, startedAt: string): WorkbenchSession 
   return {
     id,
     projectId: 'project-1',
+    worktreeId: null,
     name,
     command: 'claude',
+    cwd: '/repo',
     status: 'running',
     cols: 120,
     rows: 30,

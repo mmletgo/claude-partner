@@ -52,6 +52,66 @@ pub struct WorkbenchProjectDto {
     pub updated_at: String,
 }
 
+/// Git worktree 状态摘要 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     Workbench 顶部 worktree 管理层需要展示当前分支是否有改动、是否领先/落后远端以及是否存在冲突。
+///
+/// Code Logic（这个结构体做什么）:
+///     表达 `git status --porcelain --branch` 解析后的轻量状态，字段使用 camelCase 序列化给前端。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchGitStatusDto {
+    pub branch: Option<String>,
+    pub changed: usize,
+    pub ahead: u32,
+    pub behind: u32,
+    pub conflicts: usize,
+    pub clean: bool,
+}
+
+/// 工作台 Git worktree 数据库行模型。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     用户在 Workbench 中创建的 worktree 需要持久化，重启后仍能作为项目下的工作区切换。
+///
+/// Code Logic（这个结构体做什么）:
+///     对齐 SQLite `workbench_worktrees` 表字段；Git 实时状态不落库，由命令层动态查询后注入 DTO。
+#[derive(Debug, Clone)]
+pub struct WorkbenchWorktreeRow {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub path: String,
+    pub is_main: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// 工作台 Git worktree DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     前端需要用 worktree strip 切换工作区，并在同一层展示分支状态和路径。
+///
+/// Code Logic（这个结构体做什么）:
+///     将持久化 row 与运行期 Git 状态合并为 camelCase UI 合同。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchWorktreeDto {
+    pub id: String,
+    pub project_id: String,
+    pub name: String,
+    pub branch: Option<String>,
+    pub base_branch: Option<String>,
+    pub path: String,
+    pub is_main: bool,
+    pub status: WorkbenchGitStatusDto,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 impl WorkbenchProjectRow {
     /// Business Logic（为什么需要这个函数）:
     ///     前端只消费 camelCase DTO，数据库 row 不应直接泄露给 UI。
@@ -73,6 +133,28 @@ impl WorkbenchProjectRow {
     }
 }
 
+impl WorkbenchWorktreeRow {
+    /// Business Logic（为什么需要这个函数）:
+    ///     前端消费的是带 Git 状态的 DTO，数据库 row 只负责持久化 worktree 元数据。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     克隆 row 字段并注入调用方提供的 Git 状态摘要，转换为 `WorkbenchWorktreeDto`。
+    pub fn to_dto(&self, status: WorkbenchGitStatusDto) -> WorkbenchWorktreeDto {
+        WorkbenchWorktreeDto {
+            id: self.id.clone(),
+            project_id: self.project_id.clone(),
+            name: self.name.clone(),
+            branch: self.branch.clone(),
+            base_branch: self.base_branch.clone(),
+            path: self.path.clone(),
+            is_main: self.is_main,
+            status,
+            created_at: self.created_at.clone(),
+            updated_at: self.updated_at.clone(),
+        }
+    }
+}
+
 /// 工作台 terminal window DTO。
 ///
 /// Business Logic（为什么需要这个结构体）:
@@ -85,8 +167,10 @@ impl WorkbenchProjectRow {
 pub struct WorkbenchSessionDto {
     pub id: String,
     pub project_id: String,
+    pub worktree_id: Option<String>,
     pub name: String,
     pub command: String,
+    pub cwd: String,
     pub status: String,
     pub cols: u16,
     pub rows: u16,
@@ -109,8 +193,10 @@ pub struct WorkbenchSessionDto {
 pub struct WorkbenchSessionRow {
     pub id: String,
     pub project_id: String,
+    pub worktree_id: Option<String>,
     pub name: String,
     pub command: String,
+    pub cwd: String,
     pub status: String,
     pub cols: u16,
     pub rows: u16,
@@ -143,8 +229,10 @@ impl WorkbenchSessionRow {
         WorkbenchSessionDto {
             id: self.id.clone(),
             project_id: self.project_id.clone(),
+            worktree_id: self.worktree_id.clone(),
             name: self.name.clone(),
             command: self.command.clone(),
+            cwd: self.cwd.clone(),
             status: self.status.clone(),
             cols: self.cols,
             rows: self.rows,

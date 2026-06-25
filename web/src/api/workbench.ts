@@ -16,6 +16,7 @@ import type {
   WorkbenchPathInfo,
   WorkbenchProject,
   WorkbenchSession,
+  WorkbenchWorktree,
 } from '@/lib/types';
 
 interface WorkbenchTerminalSize {
@@ -43,6 +44,39 @@ export const workbenchApi = {
       invoke<WorkbenchProject>('touch_workbench_project', { projectId }),
   },
 
+  worktrees: {
+    /** 列出项目下主工作区和功能 worktree。 */
+    list: (projectId: string) =>
+      invoke<WorkbenchWorktree[]>('list_workbench_worktrees', { projectId }),
+
+    /** 从项目创建一个新的 Git worktree 和分支。 */
+    create: (projectId: string, branchName: string, baseBranch?: string | null) =>
+      invoke<WorkbenchWorktree>('create_workbench_worktree', {
+        projectId,
+        branchName,
+        baseBranch: baseBranch ?? null,
+      }),
+
+    /** 提交当前 worktree 的全部本地改动。 */
+    commit: (worktreeId: string, message: string) =>
+      invoke<WorkbenchWorktree>('commit_workbench_worktree', { worktreeId, message }),
+
+    /** 推送当前 worktree 分支到 origin。 */
+    push: (worktreeId: string) =>
+      invoke<WorkbenchWorktree>('push_workbench_worktree', { worktreeId }),
+
+    /** 合并当前 worktree 分支到主工作区。 */
+    merge: (worktreeId: string) =>
+      invoke<{ ok: boolean; worktreeId: string }>('merge_workbench_worktree', { worktreeId }),
+
+    /** 删除非主 worktree；force 用于强制移除 Git worktree。 */
+    remove: (worktreeId: string, force = false) =>
+      invoke<{ ok: boolean; worktreeId: string }>('remove_workbench_worktree', {
+        worktreeId,
+        force,
+      }),
+  },
+
   sessions: {
     /** 列出 terminal window；projectId 为空则返回全部。 */
     list: (projectId?: string) =>
@@ -51,9 +85,10 @@ export const workbenchApi = {
       }),
 
     /** 在指定项目下创建一个 terminal window。 */
-    create: (projectId: string, initialSize?: WorkbenchTerminalSize) =>
+    create: (projectId: string, initialSize?: WorkbenchTerminalSize, worktreeId?: string | null) =>
       invoke<WorkbenchSession>('create_workbench_session', {
         projectId,
+        worktreeId: worktreeId ?? null,
         initialCols: initialSize?.cols ?? null,
         initialRows: initialSize?.rows ?? null,
       }),
@@ -114,44 +149,53 @@ export const workbenchApi = {
 
   files: {
     /** 列出项目内目录的一级子节点；path 为空表示项目根。 */
-    listDir: (projectId: string, path?: string) =>
+    listDir: (projectId: string, path?: string, worktreeId?: string | null) =>
       invoke<WorkbenchFileNode[]>('list_workbench_dir', {
         projectId,
+        worktreeId: worktreeId ?? null,
         path: path ?? null,
       }),
 
     /** 获取项目内路径信息。 */
-    info: (projectId: string, path: string) =>
-      invoke<WorkbenchPathInfo>('get_workbench_path_info', { projectId, path }),
+    info: (projectId: string, path: string, worktreeId?: string | null) =>
+      invoke<WorkbenchPathInfo>('get_workbench_path_info', {
+        projectId,
+        worktreeId: worktreeId ?? null,
+        path,
+      }),
 
     /** 在父目录下创建空文件。 */
-    createFile: (projectId: string, parentPath: string, name: string) =>
+    createFile: (projectId: string, parentPath: string, name: string, worktreeId?: string | null) =>
       invoke<WorkbenchPathInfo>('create_workbench_file', {
         projectId,
+        worktreeId: worktreeId ?? null,
         parentPath,
         name,
       }),
 
     /** 在父目录下创建文件夹。 */
-    createDir: (projectId: string, parentPath: string, name: string) =>
+    createDir: (projectId: string, parentPath: string, name: string, worktreeId?: string | null) =>
       invoke<WorkbenchPathInfo>('create_workbench_dir', {
         projectId,
+        worktreeId: worktreeId ?? null,
         parentPath,
         name,
       }),
 
     /** 重命名项目内文件或文件夹。 */
-    renamePath: (projectId: string, path: string, newName: string) =>
+    renamePath: (projectId: string, path: string, newName: string, worktreeId?: string | null) =>
       invoke<WorkbenchPathInfo>('rename_workbench_path', {
         projectId,
+        worktreeId: worktreeId ?? null,
         path,
         newName,
       }),
 
     /** 删除项目内文件或文件夹。 */
-    deletePath: (projectId: string, path: string) =>
+    deletePath: (projectId: string, path: string, worktreeId?: string | null) =>
       invoke<{ ok: boolean; path: string }>('delete_workbench_path', {
         projectId,
+        worktreeId: worktreeId ?? null,
         path,
       }),
   },

@@ -209,27 +209,98 @@
   white-space: nowrap;
 }
 
-.contextBar {
-  min-height: 60px;
+.worktreeBar {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--border-soft);
+  background: color-mix(in oklab, var(--surface) 35%, var(--bg));
+}
+
+.worktreeStrip {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 0 var(--space-6);
-  border-bottom: 1px solid var(--border-soft);
-  background: color-mix(in oklab, var(--surface) 35%, var(--bg));
+  overflow-x: auto;
+}
+
+.worktreeActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.worktreeChip {
+  height: 38px;
+  max-width: 220px;
+  display: inline-grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-3);
+  background: var(--surface);
   color: var(--fg-2);
+  cursor: pointer;
   font-size: var(--text-sm);
+  transition: all var(--motion-fast) var(--ease-standard);
 }
 
-.contextLabel,
-.contextSlash {
-  color: var(--meta);
+.worktreeChip:hover {
+  border-color: var(--accent-soft);
 }
 
-.contextPath {
+.worktreeChip[data-active='true'] {
+  border-color: var(--accent);
+  background: color-mix(in oklab, var(--accent) 8%, var(--surface));
+  color: var(--fg);
+}
+
+.worktreeChip[data-tone='danger'] {
+  border-color: color-mix(in oklab, var(--danger) 45%, var(--border-soft));
+}
+
+.worktreeChip[data-tone='warning'] {
+  border-color: color-mix(in oklab, var(--warn) 45%, var(--border-soft));
+}
+
+.worktreeDot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--success);
+}
+
+.worktreeDot[data-tone='warning'] {
+  background: var(--warn);
+}
+
+.worktreeDot[data-tone='danger'] {
+  background: var(--danger);
+}
+
+.worktreeName {
   min-width: 0;
   overflow: hidden;
+  color: inherit;
+  font-weight: var(--weight-medium);
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.worktreeMeta,
+.worktreeEmpty {
+  color: var(--meta);
+  font-size: var(--text-xs);
   white-space: nowrap;
 }
 

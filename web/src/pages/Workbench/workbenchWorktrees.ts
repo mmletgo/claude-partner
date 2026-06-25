@@ -1,0 +1,52 @@
+import type { WorkbenchSession, WorkbenchWorktree } from '@/lib/types';
+
+export type WorktreeTone = 'neutral' | 'warning' | 'danger';
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   方案 C 中 worktree 是 terminal window 之上的管理层，切换 worktree 后只应看到该工作区的 window。
+ *
+ * Code Logic（这个函数做什么）:
+ *   按 worktreeId 过滤 session；主 worktree 兼容旧 session 的 null worktreeId。
+ */
+export function sessionsForWorktree(
+  sessions: WorkbenchSession[],
+  worktreeId: string | null,
+): WorkbenchSession[] {
+  if (!worktreeId) {
+    return sessions.filter((session) => session.worktreeId === null);
+  }
+  if (worktreeId.endsWith(':main')) {
+    return sessions.filter((session) => session.worktreeId === worktreeId || session.worktreeId === null);
+  }
+  return sessions.filter((session) => session.worktreeId === worktreeId);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   文件树、终端 cwd 和 Prompt 优化都必须跟随 active worktree，而不是固定使用项目主路径。
+ *
+ * Code Logic（这个函数做什么）:
+ *   active worktree 存在时返回 worktree.path；缺失时回退 projectPath。
+ */
+export function activeWorktreeRootPath(
+  projectPath: string,
+  activeWorktree: WorkbenchWorktree | null,
+): string {
+  return activeWorktree?.path ?? projectPath;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   worktree strip 需要用稳定 tone 让用户快速识别可合并、脏工作区和冲突状态。
+ *
+ * Code Logic（这个函数做什么）:
+ *   conflict 映射 danger；dirty/ahead/behind 映射 warning；clean 映射 neutral。
+ */
+export function worktreeStatusTone(worktree: WorkbenchWorktree): WorktreeTone {
+  if (worktree.status.conflicts > 0) return 'danger';
+  if (!worktree.status.clean || worktree.status.ahead > 0 || worktree.status.behind > 0) {
+    return 'warning';
+  }
+  return 'neutral';
+}
