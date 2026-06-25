@@ -1,15 +1,17 @@
-//! claude_cli.rs — Claude Code CLI pure/headless 调用共享 helper。
+//! claude_cli.rs — Claude Code CLI headless 调用共享 helper。
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     GitHub Trending 解说和 Prompt 优化都需要调用本机 Claude Code CLI 并解析结构化 JSON。
-//!     共享参数、执行、解析和错误提取逻辑，避免不同功能出现不一致的 CLI 行为。
+//!     GitHub Trending 解说和 Prompt 优化都需要调用本机 Claude Code CLI 并解析结构化 JSON；
+//!     Workbench Prompt 优化还需要可选项目上下文。共享参数、执行、解析和错误提取逻辑，
+//!     避免不同功能出现不一致的 CLI 行为。
 //!
 //! Code Logic（这个模块做什么）:
-//!     提供 pure/headless 参数构造、路径/模型归一化、结构化输出解析、非零退出错误摘要和
-//!     带 stdin/timeout 的 `Command` 执行入口。
+//!     提供 pure 与项目上下文 headless 参数构造、路径/模型归一化、结构化输出解析、
+//!     非零退出错误摘要和带 stdin/timeout 的 `Command` 执行入口。
 
 use crate::error::AppError;
 use serde::de::DeserializeOwned;
+use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::AsyncWriteExt;
@@ -59,8 +61,21 @@ pub(crate) fn normalize_model(model: &str) -> String {
 /// Code Logic（这个函数做什么）:
 ///     返回 bare/headless/json-schema 参数列表，且不包含预算参数。
 pub(crate) fn build_pure_headless_args(model: &str, schema: &str) -> Vec<String> {
+    let mut args = vec!["--bare".to_string()];
+    args.extend(build_project_headless_args(model, schema));
+    args
+}
+
+/// 构造 Claude Code CLI 项目上下文 headless 结构化输出参数。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 内嵌 Prompt 优化需要让 Claude Code 在项目根目录运行，从而按原生规则发现
+///     项目 CLAUDE.md；此时不能启用 `--bare`，否则 CLI 会跳过 CLAUDE.md auto-discovery。
+///
+/// Code Logic（这个函数做什么）:
+///     返回 non-interactive/json-schema 参数列表，保留无会话持久化和禁用工具，但不追加 `--bare`。
+pub(crate) fn build_project_headless_args(model: &str, schema: &str) -> Vec<String> {
     vec![
-        "--bare".to_string(),
         "-p".to_string(),
         "--output-format".to_string(),
         "json".to_string(),
@@ -93,13 +108,54 @@ pub(crate) async fn run_structured_json<T>(
 where
     T: DeserializeOwned,
 {
+    run_structured_json_with_cwd(
+        cli_path,
+        model,
+        schema,
+        prompt,
+        None,
+        timeout_secs,
+        task_label,
+    )
+    .await
+}
+
+/// 在可选工作目录中执行 Claude CLI 并解析结构化 JSON 输出。
+///
+/// Business Logic（为什么需要这个函数）:
+///     默认 Prompt 优化和 GitHub 解说需要隔离项目上下文；Workbench Prompt 优化则需要在当前
+///     项目根目录运行，让 Claude Code 原生加载项目 CLAUDE.md。
+///
+/// Code Logic（这个函数做什么）:
+///     working_directory 为空时使用 pure/bare 参数；非空时设置 Command.current_dir 并使用
+///     不含 `--bare` 的项目上下文参数，其余 stdin/stdout/stderr/timeout/解析流程保持一致。
+pub(crate) async fn run_structured_json_with_cwd<T>(
+    cli_path: &str,
+    model: &str,
+    schema: &str,
+    prompt: &str,
+    working_directory: Option<&Path>,
+    timeout_secs: u64,
+    task_label: &str,
+) -> Result<T, AppError>
+where
+    T: DeserializeOwned,
+{
     let cli = normalize_cli_path(cli_path);
     let mut cmd = Command::new(cli);
-    cmd.args(build_pure_headless_args(model, schema))
+    let args = if working_directory.is_some() {
+        build_project_headless_args(model, schema)
+    } else {
+        build_pure_headless_args(model, schema)
+    };
+    cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(directory) = working_directory {
+        cmd.current_dir(directory);
+    }
 
     let mut child = cmd
         .spawn()
@@ -246,6 +302,20 @@ mod tests {
         assert!(args.iter().any(|arg| arg == "-p"));
         assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
         assert!(!args.iter().any(|arg| arg == "--max-budget-usd"));
+    }
+
+    #[test]
+    fn builds_project_headless_args_without_bare_mode() {
+        let args = build_project_headless_args("  sonnet  ", "{}");
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "json"]));
+        assert!(args.windows(2).any(|pair| pair == ["--json-schema", "{}"]));
+        assert!(args.windows(2).any(|pair| pair == ["--tools", ""]));
+        assert!(args.windows(2).any(|pair| pair == ["--model", "sonnet"]));
+        assert!(args.iter().any(|arg| arg == "-p"));
+        assert!(args.iter().any(|arg| arg == "--no-session-persistence"));
+        assert!(!args.iter().any(|arg| arg == "--bare"));
     }
 
     #[test]

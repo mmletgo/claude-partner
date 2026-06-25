@@ -51,6 +51,7 @@ import styles from './Workbench.module.css';
 import {
   canFillPromptIntoTerminal,
   promptOptimizerInsertPayload,
+  promptOptimizerWorkingDirectory,
   selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
 import { visibleTerminalSessions } from './terminalSessionOrder';
@@ -570,6 +571,7 @@ export function Workbench() {
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
   const promptInsertText = selectPromptOptimizerInsertText(promptResult);
+  const promptWorkingDirectory = promptOptimizerWorkingDirectory(activeProject);
   const canOptimizePrompt = promptInput.trim().length > 0 && !promptOptimizing;
   const canFillPrompt = canFillPromptIntoTerminal(activeSession) && promptInsertText.length > 0;
 
@@ -876,7 +878,9 @@ export function Workbench() {
     try {
       setPromptOptimizing(true);
       setPromptWidgetMessage(null);
-      const result = await promptOptimizerApi.optimize(promptInput);
+      const result = await promptOptimizerApi.optimize(promptInput, {
+        workingDirectory: promptWorkingDirectory,
+      });
       setPromptResult(result);
     } catch (error) {
       setPromptWidgetMessage(
@@ -889,7 +893,7 @@ export function Workbench() {
     } finally {
       setPromptOptimizing(false);
     }
-  }, [desktopUnavailableMessage, promptInput, t]);
+  }, [desktopUnavailableMessage, promptInput, promptWorkingDirectory, t]);
 
   const handleFillPromptToTerminal = useCallback(async () => {
     if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;

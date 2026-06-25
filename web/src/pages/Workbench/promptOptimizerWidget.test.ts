@@ -1,7 +1,8 @@
-import type { WorkbenchSession } from '../../lib/types';
+import type { WorkbenchProject, WorkbenchSession } from '../../lib/types';
 import {
   canFillPromptIntoTerminal,
   promptOptimizerInsertPayload,
+  promptOptimizerWorkingDirectory,
   selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
 
@@ -26,6 +27,27 @@ function session(status: WorkbenchSession['status']): WorkbenchSession {
     exitCode: null,
     supportsPanes: true,
     paneCount: 1,
+  };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench prompt 优化小组件需要当前项目根目录，以便 Claude Code 加载项目 CLAUDE.md。
+ *
+ * Code Logic（这个函数做什么）:
+ *   返回满足 helper 测试所需字段的 WorkbenchProject。
+ */
+function project(path: string): WorkbenchProject {
+  return {
+    id: 'project-1',
+    name: 'Pando',
+    kind: 'local',
+    deviceId: 'device-1',
+    deviceName: 'Mac',
+    path,
+    lastOpenedAt: '2026-06-24T09:00:00.000Z',
+    createdAt: '2026-06-24T09:00:00.000Z',
+    updatedAt: '2026-06-24T09:00:00.000Z',
   };
 }
 
@@ -63,6 +85,18 @@ assertEqual(
 assertEqual(canFillPromptIntoTerminal(session('running')), true, 'running session can fill');
 assertEqual(canFillPromptIntoTerminal(null), false, 'missing session cannot fill');
 assertEqual(canFillPromptIntoTerminal(session('exited')), false, 'non-running session cannot fill');
+
+assertEqual(
+  promptOptimizerWorkingDirectory(project('/Users/hans/project/Pando')),
+  '/Users/hans/project/Pando',
+  'uses active project path as Claude working directory',
+);
+
+assertEqual(
+  promptOptimizerWorkingDirectory(null),
+  undefined,
+  'missing active project has no working directory',
+);
 
 assertEqual(
   promptOptimizerInsertPayload({

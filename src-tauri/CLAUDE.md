@@ -19,7 +19,7 @@ src/
 ├── error.rs           — AppError（thiserror + serde 成 {error:"msg"}）              [已实现]
 ├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认；目录首次启动从旧 ~/.claude-partner 重命名迁移；load() 额外做字段级迁移——把 config.json 残留的 db_path 绝对路径前缀 `~/.claude-partner/` 改写为 `~/.cc-partner/`（fs::rename 不改文件内容，必须在 load 时修补否则 init_db 找不到文件 panic）；提供设置页恢复默认所需的基础偏好默认值与云同步默认值；macOS 旧 `<ctrl>` 快捷键自动替换 `<cmd>` [已实现]
 ├── cc/                — Claude Code 历史采集（collector）+ 合并（merger，复用 sync/vector_clock）+ 同步（engine）+ 模型 [已实现]
-├── claude_cli.rs      — Claude Code CLI pure/headless 结构化调用共享 helper（GitHub Trending + Prompt 优化复用）[已实现]
+├── claude_cli.rs      — Claude Code CLI headless 结构化调用共享 helper（GitHub Trending + Prompt 优化复用，支持 pure 与项目上下文两种模式）[已实现]
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
 ├── commands/          — #[tauri::command]：prompts + prompt_optimizer + scratchpad + cc_history + cloud_sync + github_trending + config + devices + sync + transfer + screenshot + permissions + updater + ssh_target + health + workbench [已实现]
 ├── models/prompt.rs   — PromptRow（snake_case，DB/同步）+ PromptDto（camelCase，前端） [已实现]
@@ -293,8 +293,8 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 
 ## Prompt 优化与 Claude CLI pure/headless helper 已落地行为约定（claude_cli.rs + commands/prompt_optimizer.rs）
 
-- **共享 helper**：`claude_cli.rs` 是所有“本机 Claude Code CLI + 结构化 JSON 输出”任务的唯一公共入口。`build_pure_headless_args(model,schema)` 固定生成 `claude --bare -p --output-format json --json-schema <schema> --no-session-persistence --tools "" --model <model>` 参数，不包含预算参数；`run_structured_json` 负责 `Command::new`、stdin/stdout/stderr pipe、`kill_on_drop(true)`、timeout 和结构化解析；`parse_structured_output` 兼容直接 JSON、`structured_output`、`result` object/string；`failure_detail` 优先 stderr，再解析 stdout JSON 的 `errors/result/subtype`，最后截断。
-- **Prompt 优化命令**：`optimize_prompt(prompt)` 复用 `AppConfig.github_trending` 中的 `claude_cli_path` 与 `claude_model`，不新增配置入口；空输入和超过 20,000 字符的输入直接返回业务错误；CLI 调用超时 180 秒。
+- **共享 helper**：`claude_cli.rs` 是所有“本机 Claude Code CLI + 结构化 JSON 输出”任务的唯一公共入口。`build_pure_headless_args(model,schema)` 固定生成 `claude --bare -p --output-format json --json-schema <schema> --no-session-persistence --tools "" --model <model>` 参数，不包含预算参数；`build_project_headless_args(model,schema)` 保留同样的 headless/json-schema/禁用工具参数但不加 `--bare`，供需要 CLAUDE.md auto-discovery 的项目上下文任务使用；`run_structured_json` 负责默认 pure 模式，`run_structured_json_with_cwd` 在传入工作目录时执行 `Command.current_dir` 并切到项目上下文模式；`parse_structured_output` 兼容直接 JSON、`structured_output`、`result` object/string；`failure_detail` 优先 stderr，再解析 stdout JSON 的 `errors/result/subtype`，最后截断。
+- **Prompt 优化命令**：`optimize_prompt(prompt, workingDirectory?)` 复用 `AppConfig.github_trending` 中的 `claude_cli_path` 与 `claude_model`，不新增配置入口；普通 Prompt 优化页不传目录并保持 pure/bare 模式，Workbench 传当前项目根目录，让 Claude Code 按原生规则读取项目 CLAUDE.md；空输入和超过 20,000 字符的输入直接返回业务错误，非空 workingDirectory 必须存在且是目录；CLI 调用超时 180 秒。
 - **输出契约**：`PromptOptimizeResponseDto` 使用 camelCase 返回 `{optimizedZh, optimizedEn}`。schema 禁止额外字段，要求两版 Prompt 都存在。
 - **业务边界**：Prompt 优化只用于当前页面展示和复制，不入库、不缓存、不跨设备同步，也不记录原始 Prompt 到日志。生成要求面向 Claude Code 编程任务，保留用户原意；原始信息不足时在优化 Prompt 中保留待补充项，不编造外部事实。
 - **复用约束**：后续新增类似“本机 Claude CLI 结构化生成”能力时优先复用 `claude_cli.rs`，不要在命令模块内重新拼接 pure/headless 参数或重复解析 wrapper JSON。

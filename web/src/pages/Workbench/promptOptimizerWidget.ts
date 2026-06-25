@@ -10,7 +10,7 @@
  *   并保持写入文本原样，不主动追加 Enter。
  */
 
-import type { PromptOptimizeResponse, WorkbenchSession } from '../../lib/types';
+import type { PromptOptimizeResponse, WorkbenchProject, WorkbenchSession } from '../../lib/types';
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -35,6 +35,20 @@ export function selectPromptOptimizerInsertText(result: PromptOptimizeResponse):
  */
 export function canFillPromptIntoTerminal(activeSession: WorkbenchSession | null): boolean {
   return activeSession?.status === 'running';
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench 中优化 prompt 时应让 Claude Code 获得当前项目 CLAUDE.md 上下文。
+ *
+ * Code Logic（这个函数做什么）:
+ *   从当前活动项目 DTO 取绝对路径；项目缺失或路径为空时返回 undefined。
+ */
+export function promptOptimizerWorkingDirectory(
+  activeProject: WorkbenchProject | null,
+): string | undefined {
+  const path = activeProject?.path.trim();
+  return path ? path : undefined;
 }
 
 /**

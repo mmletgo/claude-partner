@@ -6,13 +6,14 @@
 //!
 //! Code Logic（这个模块做什么）:
 //!     校验输入长度，复用 GitHub Trending 设置中的 Claude CLI 路径和模型，调用共享
-//!     `claude_cli` pure/headless helper，并返回 camelCase DTO。
+//!     `claude_cli` headless helper，并返回 camelCase DTO；Workbench 可传项目目录加载 CLAUDE.md。
 
 use crate::claude_cli;
 use crate::error::AppError;
 use crate::state::AppState;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::path::PathBuf;
 use tauri::State;
 
 const MAX_PROMPT_CHARS: usize = 20_000;
@@ -40,13 +41,15 @@ pub struct PromptOptimizeResponseDto {
 ///
 /// Code Logic（这个命令做什么）:
 ///     校验输入长度；读取 GitHub Trending 的 Claude CLI 路径和模型；构造 schema 与任务指令；
-///     通过共享 `claude_cli::run_structured_json` 执行 pure/headless CLI 调用。
+///     未传工作目录时执行 pure/bare CLI 调用，传入工作目录时执行项目上下文 CLI 调用。
 #[tauri::command]
 pub async fn optimize_prompt(
     state: State<'_, AppState>,
     prompt: String,
+    working_directory: Option<String>,
 ) -> Result<PromptOptimizeResponseDto, AppError> {
     validate_prompt_input(&prompt)?;
+    let working_directory = resolve_working_directory(working_directory)?;
     let (cli_path, model) = {
         let cfg = state.config.read().unwrap();
         (
@@ -57,11 +60,12 @@ pub async fn optimize_prompt(
     let schema = prompt_optimize_schema();
     let instruction = build_optimize_instruction(&prompt);
 
-    claude_cli::run_structured_json::<PromptOptimizeResponseDto>(
+    claude_cli::run_structured_json_with_cwd::<PromptOptimizeResponseDto>(
         &cli_path,
         &model,
         &schema.to_string(),
         &instruction,
+        working_directory.as_deref(),
         PROMPT_OPTIMIZE_TIMEOUT_SECS,
         "优化 Prompt",
     )
@@ -83,6 +87,31 @@ fn validate_prompt_input(prompt: &str) -> Result<(), AppError> {
         return Err(AppError::generic("Prompt 不能超过 20,000 字符"));
     }
     Ok(())
+}
+
+/// 解析可选 Claude Code 工作目录。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench Prompt 优化需要在当前项目根目录执行 Claude Code，使其读取项目 CLAUDE.md；
+///     普通 Prompt 优化页不绑定项目，因此不传目录时必须保留原 pure/headless 行为。
+///
+/// Code Logic（这个函数做什么）:
+///     None 或空白字符串返回 None；非空路径要求存在且是目录，随后 canonicalize 成稳定绝对路径。
+fn resolve_working_directory(input: Option<String>) -> Result<Option<PathBuf>, AppError> {
+    let Some(raw) = input else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let path = PathBuf::from(trimmed);
+    if !path.is_dir() {
+        return Err(AppError::generic("Prompt 优化工作目录不存在或不是文件夹"));
+    }
+    path.canonicalize()
+        .map(Some)
+        .map_err(|error| AppError::generic(format!("解析 Prompt 优化工作目录失败: {error}")))
 }
 
 /// 构造 Prompt 优化结构化输出 schema。
@@ -148,6 +177,23 @@ mod tests {
         assert!(validate_prompt_input(" \n\t ").is_err());
         assert!(validate_prompt_input(&"a".repeat(20_001)).is_err());
         assert!(validate_prompt_input(&"a".repeat(20_000)).is_ok());
+    }
+
+    #[test]
+    fn resolves_optional_working_directory() {
+        assert!(resolve_working_directory(None).unwrap().is_none());
+        assert!(resolve_working_directory(Some(" \n".to_string()))
+            .unwrap()
+            .is_none());
+
+        let cwd = std::env::current_dir().expect("current dir");
+        let resolved = resolve_working_directory(Some(cwd.to_string_lossy().to_string()))
+            .expect("existing dir")
+            .expect("some dir");
+        assert!(resolved.is_dir());
+
+        let missing = cwd.join("__cc_partner_missing_prompt_context_dir__");
+        assert!(resolve_working_directory(Some(missing.to_string_lossy().to_string())).is_err());
     }
 
     #[test]
