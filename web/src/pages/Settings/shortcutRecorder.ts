@@ -12,6 +12,10 @@ export type ShortcutRecordingResult =
   | { type: 'cancel' }
   | { type: 'pending' };
 
+export interface ShortcutRecordingOptions {
+  allowModifierOnly?: boolean;
+}
+
 const MODIFIER_KEYS = new Set(['Alt', 'AltGraph', 'Control', 'Meta', 'OS', 'Shift', 'Super']);
 
 const SPECIAL_KEY_MAP: Record<string, string> = {
@@ -44,6 +48,16 @@ const DISPLAY_KEY_MAP: Record<string, string> = {
   '<space>': 'Space',
   '<tab>': 'Tab',
   '<up>': 'Up',
+};
+
+const MODIFIER_VALUE_BY_KEY: Record<string, string> = {
+  Alt: '<alt>',
+  AltGraph: '<alt>',
+  Control: '<ctrl>',
+  Meta: '<cmd>',
+  OS: '<cmd>',
+  Shift: '<shift>',
+  Super: '<cmd>',
 };
 
 /**
@@ -110,9 +124,17 @@ function shortcutModifierParts(event: ShortcutKeyboardLike): string[] {
  *   将 KeyboardEvent 的修饰键和主键转换为后端可保存的 pynput 字符串；
  *   修饰键单独按下或无修饰键的普通按键返回 pending，调用方继续等待。
  */
-export function resolveShortcutRecording(event: ShortcutKeyboardLike): ShortcutRecordingResult {
+export function resolveShortcutRecording(
+  event: ShortcutKeyboardLike,
+  options: ShortcutRecordingOptions = {},
+): ShortcutRecordingResult {
   if (event.key === 'Escape') return { type: 'cancel' };
   if (event.key === 'Backspace' || event.key === 'Delete') return { type: 'clear', value: '' };
+
+  if (options.allowModifierOnly && MODIFIER_KEYS.has(event.key)) {
+    const value = MODIFIER_VALUE_BY_KEY[event.key];
+    return value ? { type: 'record', value } : { type: 'pending' };
+  }
 
   const key = normalizeShortcutKey(event.key);
   const modifiers = shortcutModifierParts(event);
@@ -133,15 +155,17 @@ export function resolveShortcutRecording(event: ShortcutKeyboardLike): ShortcutR
  *   最后重新用 `+` 拼接。
  */
 export function formatShortcutForDisplay(shortcut: string): string {
-  return shortcut
+  const parts = shortcut
     .split('+')
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  if (parts.length === 1 && parts[0] === '<ctrl>') return 'Control';
+
+  return parts
     .map((part) => {
-      const normalized = part.trim().toLowerCase();
-      if (!normalized) return '';
-      if (DISPLAY_KEY_MAP[normalized]) return DISPLAY_KEY_MAP[normalized];
-      if (/^f\d{1,2}$/.test(normalized)) return normalized.toUpperCase();
-      return normalized.length === 1 ? normalized.toUpperCase() : normalized;
+      if (DISPLAY_KEY_MAP[part]) return DISPLAY_KEY_MAP[part];
+      if (/^f\d{1,2}$/.test(part)) return part.toUpperCase();
+      return part.length === 1 ? part.toUpperCase() : part;
     })
-    .filter(Boolean)
     .join('+');
 }

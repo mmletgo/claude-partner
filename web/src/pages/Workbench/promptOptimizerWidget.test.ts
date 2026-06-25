@@ -1,7 +1,9 @@
 import type { WorkbenchProject, WorkbenchSession } from '../../lib/types';
 import {
   canFillPromptIntoTerminal,
+  createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
+  reducePromptOptimizerShortcut,
   promptOptimizerWorkingDirectory,
   selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
@@ -64,6 +66,33 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   }
 }
 
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench Prompt 优化快捷键测试只需要 KeyboardEvent 的少数字段。
+ *
+ * Code Logic（这个函数做什么）:
+ *   构造 reducePromptOptimizerShortcut 可消费的最小事件形状。
+ */
+function keyEvent(init: {
+  type: 'keydown' | 'keyup';
+  key: string;
+  ctrlKey?: boolean;
+  metaKey?: boolean;
+  altKey?: boolean;
+  shiftKey?: boolean;
+  repeat?: boolean;
+}) {
+  return {
+    type: init.type,
+    key: init.key,
+    ctrlKey: init.ctrlKey ?? false,
+    metaKey: init.metaKey ?? false,
+    altKey: init.altKey ?? false,
+    shiftKey: init.shiftKey ?? false,
+    repeat: init.repeat ?? false,
+  };
+}
+
 assertEqual(
   selectPromptOptimizerInsertText({
     optimizedZh: '中文结果',
@@ -71,6 +100,30 @@ assertEqual(
   }),
   '中文结果',
   'selects Chinese optimized result first',
+);
+
+assertEqual(
+  selectPromptOptimizerInsertText(
+    {
+      optimizedZh: '中文结果',
+      optimizedEn: 'English result',
+    },
+    'en',
+  ),
+  'English result',
+  'selects English optimized result when preferred',
+);
+
+assertEqual(
+  selectPromptOptimizerInsertText(
+    {
+      optimizedZh: '中文结果',
+      optimizedEn: '  ',
+    },
+    'en',
+  ),
+  '中文结果',
+  'falls back to Chinese when preferred English is empty',
 );
 
 assertEqual(
@@ -108,6 +161,18 @@ assertEqual(
 );
 
 assertEqual(
+  promptOptimizerInsertPayload(
+    {
+      optimizedZh: '中文结果',
+      optimizedEn: 'English result',
+    },
+    'en',
+  ),
+  'English result',
+  'insert payload follows preferred language',
+);
+
+assertEqual(
   promptOptimizerInsertPayload({
     optimizedZh: '中文结果\n',
     optimizedEn: '',
@@ -115,5 +180,42 @@ assertEqual(
   '中文结果\n',
   'insert payload preserves existing trailing newline',
 );
+
+let shortcut = reducePromptOptimizerShortcut(
+  createPromptOptimizerShortcutState(),
+  keyEvent({ type: 'keydown', key: 'Control', ctrlKey: true }),
+  '<ctrl>',
+);
+assertEqual(shortcut.triggered, false, 'control keydown starts modifier-only tap');
+shortcut = reducePromptOptimizerShortcut(
+  shortcut.state,
+  keyEvent({ type: 'keyup', key: 'Control' }),
+  '<ctrl>',
+);
+assertEqual(shortcut.triggered, true, 'control keyup triggers modifier-only tap');
+
+shortcut = reducePromptOptimizerShortcut(
+  createPromptOptimizerShortcutState(),
+  keyEvent({ type: 'keydown', key: 'Control', ctrlKey: true }),
+  '<ctrl>',
+);
+shortcut = reducePromptOptimizerShortcut(
+  shortcut.state,
+  keyEvent({ type: 'keydown', key: 'c', ctrlKey: true }),
+  '<ctrl>',
+);
+shortcut = reducePromptOptimizerShortcut(
+  shortcut.state,
+  keyEvent({ type: 'keyup', key: 'Control' }),
+  '<ctrl>',
+);
+assertEqual(shortcut.triggered, false, 'control plus another key does not trigger modifier-only tap');
+
+shortcut = reducePromptOptimizerShortcut(
+  createPromptOptimizerShortcutState(),
+  keyEvent({ type: 'keydown', key: 'p', ctrlKey: true }),
+  '<ctrl>+p',
+);
+assertEqual(shortcut.triggered, true, 'configured combo triggers on keydown');
 
 console.log('promptOptimizerWidget.test.ts passed');

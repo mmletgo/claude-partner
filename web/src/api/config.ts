@@ -7,7 +7,7 @@
  *
  * Code Logic:
  *   基于 invoke 封装各命令调用，返回类型化的 Promise。
- *   仅 deviceName/receiveDir/screenshotHotkey 可写（对齐 Rust update_config 签名）。
+ *   基础偏好与 Workbench Prompt 优化偏好可写（对齐 Rust update_config 签名）。
  *   恢复默认通过 get_default_config 读取后端环境默认值，避免前端硬编码主机名/用户目录。
  */
 
@@ -26,7 +26,14 @@ import type {
 } from '@/lib/types';
 
 /** 可写的配置字段（对齐 Rust update_config 参数） */
-export type ConfigUpdate = Pick<AppConfig, 'deviceName' | 'receiveDir' | 'screenshotHotkey'>;
+export type ConfigUpdate = Pick<
+  AppConfig,
+  | 'deviceName'
+  | 'receiveDir'
+  | 'screenshotHotkey'
+  | 'promptOptimizerHotkey'
+  | 'promptOptimizerFillLanguage'
+>;
 
 /** 云端同步可更新字段（对齐 Rust update_cloud_sync_cmd 参数，全部可选部分更新） */
 export interface CloudSyncConfigUpdate {
@@ -41,10 +48,10 @@ export const configApi = {
   /** 获取当前应用配置 */
   get: () => invoke<AppConfig>('get_config'),
 
-  /** 获取应用偏好默认值（设备名/接收目录/截图快捷键） */
+  /** 获取应用偏好默认值（设备名/接收目录/截图快捷键/Prompt 优化偏好） */
   getDefaults: () => invoke<AppConfig>('get_default_config'),
 
-  /** 更新应用配置（仅 deviceName/receiveDir/screenshotHotkey 可写） */
+  /** 更新应用配置（基础偏好与 Workbench Prompt 优化偏好可写） */
   update: (data: Partial<AppConfig>) => invoke<AppConfig>('update_config', data),
 
   /** 打开原生目录选择对话框，返回选中的路径 */

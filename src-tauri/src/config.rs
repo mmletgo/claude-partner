@@ -127,6 +127,31 @@ fn default_screenshot_hotkey() -> String {
     }
 }
 
+/// Workbench Prompt 优化默认快捷键：轻按 Control 单键。
+fn default_prompt_optimizer_hotkey() -> String {
+    "<ctrl>".to_string()
+}
+
+/// Workbench Prompt 优化默认填入语言：中文优化版。
+fn default_prompt_optimizer_fill_language() -> String {
+    "zh".to_string()
+}
+
+/// 归一化 Workbench Prompt 优化填入语言。
+///
+/// Business Logic（为什么需要这个函数）:
+///     配置文件或前端更新可能传入异常值，填入终端时只能在中文/英文优化版中二选一。
+///
+/// Code Logic（这个函数做什么）:
+///     仅保留 "en"，其他值统一回退 "zh"。
+pub(crate) fn normalize_prompt_optimizer_fill_language(value: &str) -> String {
+    if value.trim().eq_ignore_ascii_case("en") {
+        "en".to_string()
+    } else {
+        "zh".to_string()
+    }
+}
+
 /// 获取本机 hostname 作为默认设备名（对应 Python 的 socket.gethostname()）
 fn default_device_name() -> String {
     // 优先用系统 hostname；失败则回退到应用名。
@@ -143,13 +168,16 @@ fn default_device_name() -> String {
 ///     平台快捷键），避免前端用空字符串或硬编码路径覆盖真实基础设置。
 ///
 /// Code Logic（这个函数做什么）:
-///     调用现有默认值函数，返回 `(device_name, receive_dir, screenshot_hotkey)`；
+///     调用现有默认值函数，返回 `(device_name, receive_dir, screenshot_hotkey,
+///     prompt_optimizer_hotkey, prompt_optimizer_fill_language)`；
 ///     receive_dir 转成字符串以便命令层直接组装 DTO。
-pub(crate) fn default_preference_values() -> (String, String, String) {
+pub(crate) fn default_preference_values() -> (String, String, String, String, String) {
     (
         default_device_name(),
         default_receive_dir().to_string_lossy().to_string(),
         default_screenshot_hotkey(),
+        default_prompt_optimizer_hotkey(),
+        default_prompt_optimizer_fill_language(),
     )
 }
 
@@ -329,6 +357,12 @@ pub struct AppConfig {
     pub db_path: String,
     /// 截图快捷键
     pub screenshot_hotkey: String,
+    /// Workbench Prompt 优化小组件快捷键（页面内生效，支持 `<ctrl>` 单修饰键）。
+    #[serde(default = "default_prompt_optimizer_hotkey")]
+    pub prompt_optimizer_hotkey: String,
+    /// Workbench Prompt 优化结果自动填入语言：`zh` 或 `en`。
+    #[serde(default = "default_prompt_optimizer_fill_language")]
+    pub prompt_optimizer_fill_language: String,
     /// 云端同步（GitHub 私有仓库）的远端仓库 URL（如 git@github.com:user/repo.git）。
     /// None 表示未配置云端同步；配置后 scheduler 才会真正 clone/fetch/push。
     #[serde(default)]
@@ -390,6 +424,8 @@ impl AppConfig {
                 receive_dir: default_receive_dir().to_string_lossy().to_string(),
                 db_path: default_db_path().to_string_lossy().to_string(),
                 screenshot_hotkey: default_screenshot_hotkey(),
+                prompt_optimizer_hotkey: default_prompt_optimizer_hotkey(),
+                prompt_optimizer_fill_language: default_prompt_optimizer_fill_language(),
                 cloud_sync_repo_url: None,
                 cloud_sync_enabled: false,
                 cloud_sync_auto: false,
@@ -461,6 +497,8 @@ mod tests {
         assert_eq!(cfg.health.work_window_seconds, 45 * 60);
         assert!(cfg.github_trending.ai_enabled);
         assert_eq!(cfg.github_trending.claude_cli_path, "claude");
+        assert_eq!(cfg.prompt_optimizer_hotkey, "<ctrl>");
+        assert_eq!(cfg.prompt_optimizer_fill_language, "zh");
     }
 
     #[test]
@@ -472,6 +510,8 @@ mod tests {
             receive_dir: "/r".into(),
             db_path: "/db".into(),
             screenshot_hotkey: "<cmd>+s".into(),
+            prompt_optimizer_hotkey: "<ctrl>".into(),
+            prompt_optimizer_fill_language: "en".into(),
             cloud_sync_repo_url: None,
             cloud_sync_enabled: false,
             cloud_sync_auto: false,
@@ -503,6 +543,8 @@ mod tests {
             back.health.reminder_fullscreen,
             "reminder_fullscreen 应随配置 roundtrip"
         );
+        assert_eq!(back.prompt_optimizer_hotkey, "<ctrl>");
+        assert_eq!(back.prompt_optimizer_fill_language, "en");
     }
 
     /// 最小可用 cfg 工厂：db_path 由调用方指定，其余字段填空字符串/默认值。
@@ -515,6 +557,8 @@ mod tests {
             receive_dir: "/r".into(),
             db_path: db_path.into(),
             screenshot_hotkey: "<cmd>+<shift>+s".into(),
+            prompt_optimizer_hotkey: "<ctrl>".into(),
+            prompt_optimizer_fill_language: "zh".into(),
             cloud_sync_repo_url: None,
             cloud_sync_enabled: false,
             cloud_sync_auto: false,

@@ -17,7 +17,7 @@ src/
 ├── main.rs / lib.rs   — Tauri Builder + 命令注册 + setup 装配（load config → init_db → AppState）
 ├── state.rs           — AppState（config: RwLock + db pool + prompt_repo + device_id）[已实现]
 ├── error.rs           — AppError（thiserror + serde 成 {error:"msg"}）              [已实现]
-├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认；目录首次启动从旧 ~/.claude-partner 重命名迁移；load() 额外做字段级迁移——把 config.json 残留的 db_path 绝对路径前缀 `~/.claude-partner/` 改写为 `~/.cc-partner/`（fs::rename 不改文件内容，必须在 load 时修补否则 init_db 找不到文件 panic）；提供设置页恢复默认所需的基础偏好默认值与云同步默认值；macOS 旧 `<ctrl>` 快捷键自动替换 `<cmd>` [已实现]
+├── config.rs          — AppConfig：读 ~/.cc-partner/config.json，缺失生成默认；目录首次启动从旧 ~/.claude-partner 重命名迁移；load() 额外做字段级迁移——把 config.json 残留的 db_path 绝对路径前缀 `~/.claude-partner/` 改写为 `~/.cc-partner/`（fs::rename 不改文件内容，必须在 load 时修补否则 init_db 找不到文件 panic）；提供设置页恢复默认所需的基础偏好默认值、Workbench Prompt 优化快捷键/填入语言默认值与云同步默认值；macOS 旧 `<ctrl>` 截图快捷键自动替换 `<cmd>` [已实现]
 ├── cc/                — Claude Code 历史采集（collector）+ 合并（merger，复用 sync/vector_clock）+ 同步（engine）+ 模型 [已实现]
 ├── claude_cli.rs      — Claude Code CLI headless 结构化调用共享 helper（GitHub Trending + Prompt 优化复用，支持 pure 与项目上下文两种模式）[已实现]
 ├── cloud_sync/        — GitHub 私有仓库云端同步（git_cli 系统 git 封装 + snapshot 工作区↔DB 导入导出 + engine 流程编排 + scheduler 轮询） [已实现]
@@ -64,7 +64,7 @@ migrations/0001_init.sql — schema 文档（lib.rs 内联执行，全 CREATE TA
 - **delete 是软删除**：`soft_delete` 设 `deleted=1` + `updated_at=now` + 写回推进后的 vector_clock（修正了 Python handler 自增 clock 却未落库的 bug）。
 - **PromptDto** 比 Row 多 `tag`（tags[0] 投影，兼容旧前端），对照 Python `_prompt_to_frontend_dict`。
 - **httpPort**：M1 未实际监听 HTTP，`get_config` 返回配置值（0）；M3 axum 接入后改为真实端口。
-- **配置命令**：`get_config` 返回当前持久化配置；`get_default_config` 返回设备名/接收目录/截图快捷键的环境默认值（当前 device_id/http_port 保持不变），供设置页“恢复默认”使用；`update_config` 是 patch 语义，只覆盖传入字段。
+- **配置命令**：`get_config` 返回当前持久化配置；`get_default_config` 返回设备名/接收目录/截图快捷键、Workbench Prompt 优化快捷键和填入语言的环境默认值（当前 device_id/http_port 保持不变），供设置页“恢复默认”使用；`update_config` 是 patch 语义，只覆盖传入字段，其中 `promptOptimizerHotkey` / `promptOptimizerFillLanguage` 仅作为 Workbench 页面内偏好保存，不触发截图全局快捷键重注册。
 
 ## M3 已落地行为约定（移植自 Python network/，逐方法对照）
 

@@ -119,6 +119,12 @@
   margin-top: var(--space-4);
 }
 
+.shortcutList + .toggleList {
+  margin-top: var(--space-5);
+  padding-top: var(--space-5);
+  border-top: 1px solid var(--border-soft);
+}
+
 .toggleList + .healthFieldGrid {
   margin-top: var(--space-5);
   padding-top: var(--space-5);

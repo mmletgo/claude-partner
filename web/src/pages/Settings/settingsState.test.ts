@@ -7,6 +7,8 @@ import {
   healthConfigToForm,
   isSettingsStateDirty,
   PENDING_HEALTH_FORM,
+  promptOptimizerSettingsConfigToForm,
+  promptOptimizerSettingsFormToUpdate,
   settingsStateFromConfig,
 } from './settingsState';
 
@@ -38,6 +40,8 @@ function configFixture(partial: Partial<AppConfig> = {}): AppConfig {
     deviceName: 'Hans-Mac',
     receiveDir: '/Users/hans/cc-partner-files',
     screenshotHotkey: '<cmd>+<shift>+s',
+    promptOptimizerHotkey: '<ctrl>',
+    promptOptimizerFillLanguage: 'zh',
     httpPort: 0,
     ...partial,
   };
@@ -106,6 +110,22 @@ assertDeepEqual(
     claudeCliPath: 'claude',
     claudeModel: 'sonnet',
     cacheTtlHours: 24,
+  },
+);
+
+assertDeepEqual(promptOptimizerSettingsConfigToForm(configFixture()), {
+  hotkey: '<ctrl>',
+  fillLanguage: 'zh',
+});
+
+assertDeepEqual(
+  promptOptimizerSettingsFormToUpdate({
+    hotkey: '<ctrl>',
+    fillLanguage: 'en',
+  }),
+  {
+    promptOptimizerHotkey: '<ctrl>',
+    promptOptimizerFillLanguage: 'en',
   },
 );
 

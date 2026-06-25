@@ -1,4 +1,10 @@
-import type { AppConfig, CloudSyncConfig, GithubTrendingConfig, HealthConfig } from '../../lib/types';
+import type {
+  AppConfig,
+  CloudSyncConfig,
+  GithubTrendingConfig,
+  HealthConfig,
+  PromptOptimizerFillLanguage,
+} from '../../lib/types';
 import { getDefaultShortcutValue } from './shortcutRecorder';
 
 /** 单个快捷键字段定义（label/helper 在渲染时按 i18n 解析，这里只存可本地化的 id） */
@@ -33,6 +39,12 @@ export interface GithubTrendingForm {
   cacheTtlHours: number;
 }
 
+/** Workbench Prompt 优化小组件设置表单。 */
+export interface PromptOptimizerSettingsForm {
+  hotkey: string;
+  fillLanguage: PromptOptimizerFillLanguage;
+}
+
 /** 健康提醒 tab 的受控表单值;与 HealthConfig 同构,直接整体提交给 update_health_config。 */
 export type HealthForm = HealthConfig;
 
@@ -46,6 +58,12 @@ export interface CloudSyncFormUpdate {
   auto: boolean;
   intervalSecs: number;
   branch: string;
+}
+
+/** Workbench Prompt 优化设置提交 payload。 */
+export interface PromptOptimizerSettingsUpdate {
+  promptOptimizerHotkey: string;
+  promptOptimizerFillLanguage: PromptOptimizerFillLanguage;
 }
 
 /** 云端同步表单加载前占位值；真实默认值由后端 get_default_cloud_sync_config 覆盖。 */
@@ -63,6 +81,12 @@ export const PENDING_GITHUB_TRENDING_FORM: GithubTrendingForm = {
   claudeCliPath: 'claude',
   claudeModel: 'sonnet',
   cacheTtlHours: 24,
+};
+
+/** Prompt 优化设置加载前占位值；真实默认值由后端 get_default_config 覆盖。 */
+export const PENDING_PROMPT_OPTIMIZER_SETTINGS_FORM: PromptOptimizerSettingsForm = {
+  hotkey: '<ctrl>',
+  fillLanguage: 'zh',
 };
 
 /** 健康表单加载前占位值;真实值由后端 get_health_config / get_default_health_config 覆盖。 */
@@ -192,6 +216,43 @@ export function githubTrendingConfigToForm(config: GithubTrendingConfig | null):
     claudeCliPath: config.claudeCliPath || 'claude',
     claudeModel: config.claudeModel || 'sonnet',
     cacheTtlHours: config.cacheTtlHours,
+  };
+}
+
+/**
+ * 将后端 AppConfig 映射为 Workbench Prompt 优化设置表单。
+ *
+ * Business Logic（为什么需要）:
+ *   Prompt 优化小组件的快捷键和填入语言由应用配置持久化，设置页 AI tab 需要独立编辑它们。
+ *
+ * Code Logic（做什么）:
+ *   从 AppConfig 读取 promptOptimizerHotkey/promptOptimizerFillLanguage，缺失或异常时回退默认值。
+ */
+export function promptOptimizerSettingsConfigToForm(
+  config: AppConfig | null,
+): PromptOptimizerSettingsForm {
+  if (!config) return { ...PENDING_PROMPT_OPTIMIZER_SETTINGS_FORM };
+  return {
+    hotkey: config.promptOptimizerHotkey || '<ctrl>',
+    fillLanguage: config.promptOptimizerFillLanguage === 'en' ? 'en' : 'zh',
+  };
+}
+
+/**
+ * 将 Prompt 优化设置表单映射为 update_config payload。
+ *
+ * Business Logic（为什么需要）:
+ *   设置页保存 Workbench Prompt 优化偏好时，只应提交后端认识的两个配置字段。
+ *
+ * Code Logic（做什么）:
+ *   hotkey trim 后保留空字符串（表示禁用快捷键）；语言只允许 zh/en。
+ */
+export function promptOptimizerSettingsFormToUpdate(
+  form: PromptOptimizerSettingsForm,
+): PromptOptimizerSettingsUpdate {
+  return {
+    promptOptimizerHotkey: form.hotkey.trim(),
+    promptOptimizerFillLanguage: form.fillLanguage === 'en' ? 'en' : 'zh',
   };
 }
 

@@ -70,6 +70,23 @@
     "testFailed": "Claude CLI test failed: {{error}}",
     "applyFailed": "Failed to apply Claude CLI config"
   },
+  "promptOptimizerSettings": {
+    "title": "Workbench Prompt optimizer",
+    "subtitle": "Configure the floating Prompt optimizer shortcut in Workbench terminals and the language used when filling optimized text into the terminal.",
+    "hotkey": {
+      "label": "Open shortcut",
+      "helper": "Defaults to tapping Control. It triggers only when Control is pressed and released by itself, so terminal chords such as Control+C still pass through."
+    },
+    "fillLanguage": {
+      "helper": "When the same shortcut is pressed a second time, the optimizer runs and fills this preferred language into the active terminal.",
+      "zh": "Chinese optimized prompt",
+      "en": "English optimized prompt"
+    },
+    "appliedConfig": "Applied config",
+    "apply": "Apply",
+    "applying": "Applying…",
+    "applyFailed": "Failed to apply Prompt optimizer settings"
+  },
   "health": {
     "title": "Health reminder",
     "subtitle": "Tune health monitoring work/break thresholds, water interval, quiet hours, notifications, and privacy.",

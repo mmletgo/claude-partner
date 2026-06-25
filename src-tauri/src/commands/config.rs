@@ -1,17 +1,17 @@
 //! commands/config.rs — 配置读写 + 版本查询命令
 //!
 //! Business Logic（为什么需要这个模块）:
-//!     前端设置页通过 invoke 读取/修改应用配置（设备名、接收目录、快捷键），
+//!     前端设置页通过 invoke 读取/修改应用配置（设备名、接收目录、快捷键、Workbench Prompt 优化偏好），
 //!     关于页通过 invoke 获取版本号。对照 Python protocol.py 的
 //!     handle_get_config / handle_update_config / handle_version。
 //!
 //! Code Logic（这个模块做什么）:
 //!     - get_config: 读 RwLock 配置，转 ConfigDto（camelCase）。
 //!     - get_default_config: 返回环境感知默认偏好，供设置页恢复默认。
-//!     - update_config: 应用 deviceName/receiveDir/screenshotHotkey patch 后 save() 回 config.json。
+//!     - update_config: 应用基础偏好与 Prompt 优化偏好 patch 后 save() 回 config.json。
 //!     - get_version: 返回 {version, buildDate}，version 取 CARGO_PKG_VERSION。
 
-use crate::config::default_preference_values;
+use crate::config::{default_preference_values, normalize_prompt_optimizer_fill_language};
 use crate::error::AppError;
 use crate::hotkey::{register_screenshot_hotkey, screenshot_handler};
 use crate::state::AppState;
@@ -27,6 +27,8 @@ pub struct ConfigDto {
     pub device_name: String,
     pub receive_dir: String,
     pub screenshot_hotkey: String,
+    pub prompt_optimizer_hotkey: String,
+    pub prompt_optimizer_fill_language: String,
     /// HTTP 端口（M1 未实际监听，暂返回配置值；M3 接入真实监听端口后更新）
     pub http_port: i64,
 }
@@ -42,6 +44,10 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<ConfigDto, AppErro
         device_name: cfg.device_name.clone(),
         receive_dir: cfg.receive_dir.clone(),
         screenshot_hotkey: cfg.screenshot_hotkey.clone(),
+        prompt_optimizer_hotkey: cfg.prompt_optimizer_hotkey.clone(),
+        prompt_optimizer_fill_language: normalize_prompt_optimizer_fill_language(
+            &cfg.prompt_optimizer_fill_language,
+        ),
         http_port: cfg.http_port,
     })
 }
@@ -54,17 +60,25 @@ pub async fn get_config(state: State<'_, AppState>) -> Result<ConfigDto, AppErro
 #[tauri::command]
 pub async fn get_default_config(state: State<'_, AppState>) -> Result<ConfigDto, AppError> {
     let cfg = state.config.read().unwrap();
-    let (device_name, receive_dir, screenshot_hotkey) = default_preference_values();
+    let (
+        device_name,
+        receive_dir,
+        screenshot_hotkey,
+        prompt_optimizer_hotkey,
+        prompt_optimizer_fill_language,
+    ) = default_preference_values();
     Ok(ConfigDto {
         device_id: cfg.device_id.clone(),
         device_name,
         receive_dir,
         screenshot_hotkey,
+        prompt_optimizer_hotkey,
+        prompt_optimizer_fill_language,
         http_port: cfg.http_port,
     })
 }
 
-/// 更新应用配置（仅 deviceName/receiveDir/screenshotHotkey 可写），并持久化。
+/// 更新应用配置（基础偏好 + Workbench Prompt 优化偏好），并持久化。
 ///
 /// Business Logic: 用户在设置页保存修改后需落盘，下次启动生效。
 /// Code Logic: 取写锁应用 patch → save() → 返回最新配置 DTO。
@@ -75,6 +89,8 @@ pub async fn update_config(
     device_name: Option<String>,
     receive_dir: Option<String>,
     screenshot_hotkey: Option<String>,
+    prompt_optimizer_hotkey: Option<String>,
+    prompt_optimizer_fill_language: Option<String>,
 ) -> Result<ConfigDto, AppError> {
     let hotkey_changed = screenshot_hotkey.is_some();
     {
@@ -87,6 +103,13 @@ pub async fn update_config(
         }
         if let Some(h) = screenshot_hotkey {
             cfg.screenshot_hotkey = h;
+        }
+        if let Some(h) = prompt_optimizer_hotkey {
+            cfg.prompt_optimizer_hotkey = h;
+        }
+        if let Some(language) = prompt_optimizer_fill_language {
+            cfg.prompt_optimizer_fill_language =
+                normalize_prompt_optimizer_fill_language(&language);
         }
         cfg.save()?;
     }

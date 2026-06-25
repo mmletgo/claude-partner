@@ -46,12 +46,16 @@ import {
   PENDING_CLOUD_SYNC_FORM,
   PENDING_GITHUB_TRENDING_FORM,
   PENDING_HEALTH_FORM,
+  PENDING_PROMPT_OPTIMIZER_SETTINGS_FORM,
+  promptOptimizerSettingsConfigToForm,
+  promptOptimizerSettingsFormToUpdate,
   settingsStateFromConfig,
 } from './settingsState';
 import type {
   CloudSyncForm,
   GithubTrendingForm,
   HealthForm,
+  PromptOptimizerSettingsForm,
   SettingsState,
 } from './settingsState';
 import type {
@@ -86,6 +90,9 @@ const SETTINGS_TABS: SettingsTab[] = [
   { id: 'ai', labelKey: 'ai' },
   { id: 'about', labelKey: 'about' },
 ];
+
+/** Workbench Prompt 优化快捷键录制控件 id */
+const PROMPT_OPTIMIZER_SHORTCUT_ID = 'promptOptimizer';
 
 /**
  * 计算更新检查结果的提示文本
@@ -180,6 +187,21 @@ export function Settings() {
   const [githubTrendingError, setGithubTrendingError] = useState<string | null>(null);
   const [testingClaudeCli, setTestingClaudeCli] = useState(false);
   const [applyingGithubTrending, setApplyingGithubTrending] = useState(false);
+
+  // Workbench Prompt 优化小组件偏好：快捷键与自动填入语言独立保存到 AppConfig。
+  const [promptOptimizerForm, setPromptOptimizerForm] = useState<PromptOptimizerSettingsForm>({
+    ...PENDING_PROMPT_OPTIMIZER_SETTINGS_FORM,
+  });
+  const [defaultPromptOptimizerForm, setDefaultPromptOptimizerForm] =
+    useState<PromptOptimizerSettingsForm>({
+      ...PENDING_PROMPT_OPTIMIZER_SETTINGS_FORM,
+    });
+  const [promptOptimizerConfig, setPromptOptimizerConfig] =
+    useState<PromptOptimizerSettingsForm | null>(null);
+  const [applyingPromptOptimizer, setApplyingPromptOptimizer] = useState(false);
+  const [promptOptimizerSettingsError, setPromptOptimizerSettingsError] = useState<string | null>(
+    null,
+  );
 
   // 健康提醒配置：独立表单编辑 + 恢复默认 + 应用配置（与同步/AI 同模式）。
   const [healthForm, setHealthForm] = useState<HealthForm>({ ...PENDING_HEALTH_FORM });
@@ -292,6 +314,19 @@ export function Settings() {
   }, []);
 
   /**
+   * 更新 Workbench Prompt 优化快捷键
+   *
+   * Business Logic（为什么需要）:
+   *   Prompt 优化快捷键是页面内快捷动作，不使用系统全局注册，因此允许 Control 单键。
+   *
+   * Code Logic（做什么）:
+   *   只改 Prompt 优化表单中的 hotkey 字段，等待用户点击“应用配置”再持久化。
+   */
+  const handlePromptOptimizerShortcutChange = useCallback((value: string) => {
+    setPromptOptimizerForm((prev) => ({ ...prev, hotkey: value }));
+  }, []);
+
+  /**
    * 激活快捷键录制态
    *
    * Business Logic（为什么需要）:
@@ -339,7 +374,9 @@ export function Settings() {
       e.preventDefault();
       e.stopPropagation();
 
-      const result = resolveShortcutRecording(e);
+      const result = resolveShortcutRecording(e, {
+        allowModifierOnly: id === PROMPT_OPTIMIZER_SHORTCUT_ID,
+      });
       if (result.type === 'pending') return;
       if (result.type === 'cancel') {
         setRecordingShortcutId(null);
@@ -347,11 +384,15 @@ export function Settings() {
         return;
       }
 
-      handleShortcutChange(id, result.value);
+      if (id === PROMPT_OPTIMIZER_SHORTCUT_ID) {
+        handlePromptOptimizerShortcutChange(result.value);
+      } else {
+        handleShortcutChange(id, result.value);
+      }
       setRecordingShortcutId(null);
       e.currentTarget.blur();
     },
-    [handleShortcutChange],
+    [handlePromptOptimizerShortcutChange, handleShortcutChange],
   );
 
   /**
@@ -468,6 +509,10 @@ export function Settings() {
         setGithubTrendingConfig(githubTrendingLoaded);
         setGithubTrendingForm(githubTrendingConfigToForm(githubTrendingLoaded));
         setDefaultGithubTrendingForm(githubTrendingConfigToForm(defaultGithubTrendingLoaded));
+        // Workbench Prompt 优化：初始化已应用配置与受控表单值 + 默认表单
+        setPromptOptimizerConfig(promptOptimizerSettingsConfigToForm(config));
+        setPromptOptimizerForm(promptOptimizerSettingsConfigToForm(config));
+        setDefaultPromptOptimizerForm(promptOptimizerSettingsConfigToForm(defaultConfig));
         // 健康提醒：初始化已应用配置与受控表单值 + 默认表单
         setHealthConfig(healthLoaded);
         setHealthForm(healthConfigToForm(healthLoaded));
@@ -710,6 +755,49 @@ export function Settings() {
       });
     } finally {
       setTestingClaudeCli(false);
+    }
+  };
+
+  /**
+   * 更新 Workbench Prompt 优化设置表单字段
+   */
+  const patchPromptOptimizerForm = useCallback((partial: Partial<PromptOptimizerSettingsForm>) => {
+    setPromptOptimizerForm((prev) => ({ ...prev, ...partial }));
+  }, []);
+
+  /**
+   * Workbench Prompt 优化「恢复默认」：把快捷键和填入语言重置为后端默认配置
+   *
+   * Business Logic（为什么需要这个函数）:
+   *   用户可能改过 Prompt 优化触发键或填入语言，需要能回到默认 Control + 中文。
+   *
+   * Code Logic（这个函数做什么）:
+   *   用加载时保存的默认表单快照覆盖当前表单；持久化仍由「应用配置」完成。
+   */
+  const handleResetPromptOptimizerSettingsDefaults = useCallback(() => {
+    setPromptOptimizerForm(defaultPromptOptimizerForm);
+    setPromptOptimizerSettingsError(null);
+  }, [defaultPromptOptimizerForm]);
+
+  /**
+   * Workbench Prompt 优化「应用配置」：保存页面内快捷键与自动填入语言
+   */
+  const handleApplyPromptOptimizerSettings = async () => {
+    setApplyingPromptOptimizer(true);
+    setPromptOptimizerSettingsError(null);
+    try {
+      const updated = await configApi.update(
+        promptOptimizerSettingsFormToUpdate(promptOptimizerForm),
+      );
+      const savedForm = promptOptimizerSettingsConfigToForm(updated);
+      setPromptOptimizerConfig(savedForm);
+      setPromptOptimizerForm(savedForm);
+    } catch (err) {
+      setPromptOptimizerSettingsError(
+        err instanceof Error ? err.message : t('settings:promptOptimizerSettings.applyFailed'),
+      );
+    } finally {
+      setApplyingPromptOptimizer(false);
     }
   };
 
@@ -1374,6 +1462,159 @@ export function Settings() {
 
             {githubTrendingError ? (
               <span className={styles.updateError}>{githubTrendingError}</span>
+            ) : null}
+          </Card.Body>
+        </Card>
+
+        {/* Card: Workbench Prompt 优化小组件 */}
+        <Card variant="flat" padding="md">
+          <Card.Header>
+            <h2 className={styles.sectionTitle}>
+              {t('settings:promptOptimizerSettings.title')}
+            </h2>
+          </Card.Header>
+          <Card.Body padding="md">
+            <p className={styles.helper}>{t('settings:promptOptimizerSettings.subtitle')}</p>
+
+            <div className={styles.shortcutList}>
+              <div className={styles.shortcutRow}>
+                <div className={styles.shortcutText}>
+                  <span className={styles.shortcutLabel}>
+                    {t('settings:promptOptimizerSettings.hotkey.label')}
+                  </span>
+                  <span className={styles.shortcutHelper}>
+                    {recordingShortcutId === PROMPT_OPTIMIZER_SHORTCUT_ID
+                      ? t('settings:shortcut.recordingHelper')
+                      : t('settings:promptOptimizerSettings.hotkey.helper')}
+                  </span>
+                </div>
+                <div className={styles.shortcutInput}>
+                  <Input
+                    id="settings-prompt-optimizer-hotkey"
+                    type="text"
+                    value={
+                      recordingShortcutId === PROMPT_OPTIMIZER_SHORTCUT_ID
+                        ? t('settings:shortcut.recording')
+                        : formatShortcutForDisplay(promptOptimizerForm.hotkey)
+                    }
+                    placeholder={t('settings:shortcut.placeholder')}
+                    onChange={() => undefined}
+                    onFocus={() => handleShortcutFocus(PROMPT_OPTIMIZER_SHORTCUT_ID)}
+                    onClick={() => handleShortcutFocus(PROMPT_OPTIMIZER_SHORTCUT_ID)}
+                    onBlur={() => handleShortcutBlur(PROMPT_OPTIMIZER_SHORTCUT_ID)}
+                    onKeyDown={(e) => handleShortcutKeyDown(e, PROMPT_OPTIMIZER_SHORTCUT_ID)}
+                    icon={<KeyboardIcon />}
+                    className={
+                      recordingShortcutId === PROMPT_OPTIMIZER_SHORTCUT_ID
+                        ? styles.shortcutRecorderActive
+                        : undefined
+                    }
+                    aria-label={t('settings:promptOptimizerSettings.hotkey.label')}
+                    readOnly
+                    mono
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.toggleList}>
+              <button
+                type="button"
+                className={styles.toggleRow}
+                onClick={() => patchPromptOptimizerForm({ fillLanguage: 'zh' })}
+                role="radio"
+                aria-checked={promptOptimizerForm.fillLanguage === 'zh'}
+                aria-label={t('settings:promptOptimizerSettings.fillLanguage.zh')}
+              >
+                <div className={styles.toggleText}>
+                  <span className={styles.toggleLabel}>
+                    {t('settings:promptOptimizerSettings.fillLanguage.zh')}
+                  </span>
+                  <span className={styles.toggleHelper}>
+                    {t('settings:promptOptimizerSettings.fillLanguage.helper')}
+                  </span>
+                </div>
+                <span className={styles.toggleState}>
+                  {promptOptimizerForm.fillLanguage === 'zh' ? (
+                    <Pill tone="success" dot>
+                      <CheckIcon size={12} />
+                      {t('settings:sync.enabled')}
+                    </Pill>
+                  ) : (
+                    <Pill tone="neutral" dot>
+                      {t('settings:sync.disabled')}
+                    </Pill>
+                  )}
+                </span>
+              </button>
+              <button
+                type="button"
+                className={styles.toggleRow}
+                onClick={() => patchPromptOptimizerForm({ fillLanguage: 'en' })}
+                role="radio"
+                aria-checked={promptOptimizerForm.fillLanguage === 'en'}
+                aria-label={t('settings:promptOptimizerSettings.fillLanguage.en')}
+              >
+                <div className={styles.toggleText}>
+                  <span className={styles.toggleLabel}>
+                    {t('settings:promptOptimizerSettings.fillLanguage.en')}
+                  </span>
+                  <span className={styles.toggleHelper}>
+                    {t('settings:promptOptimizerSettings.fillLanguage.helper')}
+                  </span>
+                </div>
+                <span className={styles.toggleState}>
+                  {promptOptimizerForm.fillLanguage === 'en' ? (
+                    <Pill tone="success" dot>
+                      <CheckIcon size={12} />
+                      {t('settings:sync.enabled')}
+                    </Pill>
+                  ) : (
+                    <Pill tone="neutral" dot>
+                      {t('settings:sync.disabled')}
+                    </Pill>
+                  )}
+                </span>
+              </button>
+            </div>
+
+            {promptOptimizerConfig ? (
+              <div className={styles.metaRow}>
+                <span className={styles.metaKey}>
+                  {t('settings:promptOptimizerSettings.appliedConfig')}
+                </span>
+                <span className={styles.metaValue}>
+                  {formatShortcutForDisplay(promptOptimizerConfig.hotkey)}
+                  {' · '}
+                  {promptOptimizerConfig.fillLanguage === 'en'
+                    ? t('settings:promptOptimizerSettings.fillLanguage.en')
+                    : t('settings:promptOptimizerSettings.fillLanguage.zh')}
+                </span>
+              </div>
+            ) : null}
+
+            <div className={styles.aboutActions}>
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={handleResetPromptOptimizerSettingsDefaults}
+              >
+                {t('settings:action.resetDefault')}
+              </Button>
+              <Button
+                variant="primary"
+                size="md"
+                onClick={handleApplyPromptOptimizerSettings}
+                disabled={applyingPromptOptimizer}
+              >
+                {applyingPromptOptimizer
+                  ? t('settings:promptOptimizerSettings.applying')
+                  : t('settings:promptOptimizerSettings.apply')}
+              </Button>
+            </div>
+
+            {promptOptimizerSettingsError ? (
+              <span className={styles.updateError}>{promptOptimizerSettingsError}</span>
             ) : null}
           </Card.Body>
         </Card>

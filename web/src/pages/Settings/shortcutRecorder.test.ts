@@ -71,6 +71,18 @@ assertDeepEqual(resolveShortcutRecording(keyboardEvent({ key: 'Shift', shiftKey:
   type: 'pending',
 });
 
+assertDeepEqual(
+  resolveShortcutRecording(keyboardEvent({ key: 'Control', ctrlKey: true }), {
+    allowModifierOnly: true,
+  }),
+  { type: 'record', value: '<ctrl>' },
+);
+
+assertDeepEqual(
+  resolveShortcutRecording(keyboardEvent({ key: 'Control', ctrlKey: true })),
+  { type: 'pending' },
+);
+
 assertDeepEqual(resolveShortcutRecording(keyboardEvent({ key: 'Escape' })), {
   type: 'cancel',
 });
@@ -82,5 +94,6 @@ assertDeepEqual(resolveShortcutRecording(keyboardEvent({ key: 'Backspace' })), {
 
 assertEqual(formatShortcutForDisplay('<cmd>+<shift>+s'), 'Cmd+Shift+S');
 assertEqual(formatShortcutForDisplay('<ctrl>+<alt>+f5'), 'Ctrl+Alt+F5');
+assertEqual(formatShortcutForDisplay('<ctrl>'), 'Control');
 assertEqual(getDefaultShortcutValue('MacIntel'), '<cmd>+<shift>+s');
 assertEqual(getDefaultShortcutValue('Win32'), '<ctrl>+<shift>+s');

@@ -308,8 +308,8 @@
 .promptOptimizerPanel {
   position: absolute;
   z-index: var(--z-overlay);
-  top: var(--space-6);
-  right: var(--space-8);
+  top: var(--prompt-panel-top, var(--space-6));
+  left: var(--prompt-panel-left, var(--space-8));
   width: min(560px, calc(100% - var(--space-12)));
   max-height: calc(100% - var(--space-12));
   display: flex;

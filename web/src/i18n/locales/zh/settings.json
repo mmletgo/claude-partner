@@ -70,6 +70,23 @@
     "testFailed": "Claude CLI 测试失败：{{error}}",
     "applyFailed": "应用 Claude CLI 配置失败"
   },
+  "promptOptimizerSettings": {
+    "title": "Workbench Prompt 优化",
+    "subtitle": "设置工作台终端里的 Prompt 优化浮层快捷键，以及优化完成后一键填入终端时使用的语言。",
+    "hotkey": {
+      "label": "唤起快捷键",
+      "helper": "默认轻按 Control。只有单独按下并松开 Control 才触发，Control+C 等终端组合键不会触发。"
+    },
+    "fillLanguage": {
+      "helper": "同一个快捷键第二次触发优化完成后，会按这里选择的语言自动填入当前终端。",
+      "zh": "中文优化版",
+      "en": "英文优化版"
+    },
+    "appliedConfig": "已应用配置",
+    "apply": "应用配置",
+    "applying": "应用中…",
+    "applyFailed": "应用 Prompt 优化设置失败"
+  },
   "health": {
     "title": "健康提醒",
     "subtitle": "调整健康监测的工作/休息阈值、喝水间隔、免打扰时段与通知隐私设置。",

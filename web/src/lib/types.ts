@@ -88,8 +88,12 @@ export interface AppConfig {
   deviceName: string;
   receiveDir: string;
   screenshotHotkey: string;
+  promptOptimizerHotkey: string;
+  promptOptimizerFillLanguage: PromptOptimizerFillLanguage;
   httpPort: number;
 }
+
+export type PromptOptimizerFillLanguage = 'zh' | 'en';
 
 export type WorkbenchDependencyState =
   | 'checking'

@@ -19,6 +19,7 @@ import { listen } from '@tauri-apps/api/event';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { configApi } from '@/api/config';
 import { promptOptimizerApi } from '@/api/promptOptimizer';
 import { workbenchApi } from '@/api/workbench';
 import { WorkbenchDependencyCard } from '@/components/domain';
@@ -41,6 +42,7 @@ import {
 } from '@/lib/icons';
 import type {
   PromptOptimizeResponse,
+  PromptOptimizerFillLanguage,
   WorkbenchFileNode,
   WorkbenchPathInfo,
   WorkbenchSession,
@@ -50,8 +52,10 @@ import type {
 import styles from './Workbench.module.css';
 import {
   canFillPromptIntoTerminal,
+  createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
   promptOptimizerWorkingDirectory,
+  reducePromptOptimizerShortcut,
   selectPromptOptimizerInsertText,
 } from './promptOptimizerWidget';
 import { visibleTerminalSessions } from './terminalSessionOrder';
@@ -88,11 +92,23 @@ interface TerminalPaneProps {
   placeholder: string;
   onInput: (sessionId: string, data: string) => void;
   onResize: (sessionId: string, cols: number, rows: number) => void;
+  onCursorAnchorChange?: (anchor: TerminalCursorAnchor | null) => void;
 }
 
 interface TerminalSize {
   cols: number;
   rows: number;
+}
+
+interface TerminalCursorAnchor {
+  left: number;
+  top: number;
+  bottom: number;
+}
+
+interface PromptOptimizerPanelPosition {
+  left: number;
+  top: number;
 }
 
 const MIN_TERMINAL_COLS = 20;
@@ -215,6 +231,26 @@ function clampU16(value: number, min: number): number {
 
 /**
  * Business Logic（为什么需要这个函数）:
+ *   Prompt 优化浮层应出现在当前终端输入光标下方，但不能超出终端工作区。
+ *
+ * Code Logic（这个函数做什么）:
+ *   把 viewport 绝对坐标系的光标锚点转换为 terminalArea 内相对坐标，并按面板宽高做 clamp。
+ */
+function promptOptimizerPanelPosition(
+  areaRect: DOMRect,
+  anchor: TerminalCursorAnchor,
+): PromptOptimizerPanelPosition {
+  const panelWidth = Math.min(560, Math.max(280, areaRect.width - 32));
+  const estimatedPanelHeight = Math.min(520, Math.max(280, areaRect.height - 32));
+  const maxLeft = Math.max(16, areaRect.width - panelWidth - 16);
+  const maxTop = Math.max(16, areaRect.height - estimatedPanelHeight - 16);
+  const left = Math.min(maxLeft, Math.max(16, anchor.left - areaRect.left));
+  const top = Math.min(maxTop, Math.max(16, anchor.bottom - areaRect.top + 8));
+  return { left, top };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
  *   交互式终端程序会按 PTY 初始 cols/rows 绘制首屏；如果后端先用默认尺寸启动，前端随后 resize 会导致首屏错位。
  *
  * Code Logic（这个函数做什么）:
@@ -323,18 +359,25 @@ function statusTone(status: string): 'neutral' | 'success' | 'warn' | 'danger' {
  *   ResizeObserver 触发 FitAddon.fit 后把 cols/rows clamp 后回传后端。
  */
 function TerminalPane(props: TerminalPaneProps) {
-  const { session, buffer, revision, placeholder, onInput, onResize } = props;
+  const { session, buffer, revision, placeholder, onInput, onResize, onCursorAnchorChange } = props;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const bufferRef = useRef<string>('');
   const writtenLengthRef = useRef<number>(0);
   const replayGateRef = useRef<boolean>(false);
   const resizeTimerRef = useRef<number | null>(null);
+  const cursorAnchorCallbackRef = useRef<TerminalPaneProps['onCursorAnchorChange']>(
+    onCursorAnchorChange,
+  );
   const sessionId = session?.id ?? null;
 
   useEffect(() => {
     bufferRef.current = buffer;
   }, [buffer]);
+
+  useEffect(() => {
+    cursorAnchorCallbackRef.current = onCursorAnchorChange;
+  }, [onCursorAnchorChange]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -345,12 +388,28 @@ function TerminalPane(props: TerminalPaneProps) {
     terminal.loadAddon(fit);
     terminal.open(viewport);
     fit.fit();
+    const emitCursorAnchor = () => {
+      try {
+        const rect = viewport.getBoundingClientRect();
+        const cellWidth = rect.width / Math.max(terminal.cols, 1);
+        const cellHeight = rect.height / Math.max(terminal.rows, 1);
+        const cursorX = terminal.buffer.active.cursorX;
+        const cursorY = terminal.buffer.active.cursorY;
+        const left = rect.left + cursorX * cellWidth;
+        const top = rect.top + cursorY * cellHeight;
+        cursorAnchorCallbackRef.current?.({ left, top, bottom: top + cellHeight });
+      } catch {
+        // 光标定位仅用于浮层摆放，失败不影响终端显示与输入。
+      }
+    };
     const dataDisposable = terminal.onData((data: string) => {
       if (!shouldForwardTerminalInput(replayGateRef)) return;
       onInput(sessionId, data);
     });
+    const cursorDisposable = terminal.onCursorMove(emitCursorAnchor);
     writeTerminalReplay(terminal, bufferRef.current, replayGateRef);
     writtenLengthRef.current = bufferRef.current.length;
+    emitCursorAnchor();
     const resize = () => {
       try {
         fit.fit();
@@ -359,6 +418,7 @@ function TerminalPane(props: TerminalPaneProps) {
           clampU16(terminal.cols, MIN_TERMINAL_COLS),
           clampU16(terminal.rows, MIN_TERMINAL_ROWS),
         );
+        emitCursorAnchor();
       } catch {
         // xterm 在容器不可见时 fit 可能失败，下一次 ResizeObserver 会重试。
       }
@@ -376,10 +436,12 @@ function TerminalPane(props: TerminalPaneProps) {
     return () => {
       observer.disconnect();
       dataDisposable.dispose();
+      cursorDisposable.dispose();
       if (resizeTimerRef.current !== null) {
         window.clearTimeout(resizeTimerRef.current);
         resizeTimerRef.current = null;
       }
+      cursorAnchorCallbackRef.current?.(null);
       terminal.dispose();
       terminalRef.current = null;
       writtenLengthRef.current = 0;
@@ -538,9 +600,19 @@ export function Workbench() {
   });
   const [promptOptimizing, setPromptOptimizing] = useState<boolean>(false);
   const [promptWidgetMessage, setPromptWidgetMessage] = useState<string | null>(null);
+  const [promptOptimizerHotkey, setPromptOptimizerHotkey] = useState<string>('<ctrl>');
+  const [promptOptimizerFillLanguage, setPromptOptimizerFillLanguage] =
+    useState<PromptOptimizerFillLanguage>('zh');
+  const [promptPanelPosition, setPromptPanelPosition] = useState<PromptOptimizerPanelPosition>({
+    left: 24,
+    top: 24,
+  });
   const activeProjectIdRef = useRef<string | null>(null);
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
   const terminalPanelRef = useRef<HTMLElement | null>(null);
+  const terminalAreaRef = useRef<HTMLDivElement | null>(null);
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const promptShortcutStateRef = useRef(createPromptOptimizerShortcutState());
   const lastLocalFocusAtRef = useRef<number>(0);
 
   const activeSession = useMemo(
@@ -570,7 +642,10 @@ export function Workbench() {
   const canUsePanes = Boolean(
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
-  const promptInsertText = selectPromptOptimizerInsertText(promptResult);
+  const promptInsertText = selectPromptOptimizerInsertText(
+    promptResult,
+    promptOptimizerFillLanguage,
+  );
   const promptWorkingDirectory = promptOptimizerWorkingDirectory(activeProject);
   const canOptimizePrompt = promptInput.trim().length > 0 && !promptOptimizing;
   const canFillPrompt = canFillPromptIntoTerminal(activeSession) && promptInsertText.length > 0;
@@ -716,6 +791,33 @@ export function Workbench() {
     const timer = window.setInterval(() => setRuntimeNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void configApi
+      .get()
+      .then((config) => {
+        if (cancelled) return;
+        setPromptOptimizerHotkey(config.promptOptimizerHotkey || '<ctrl>');
+        setPromptOptimizerFillLanguage(
+          config.promptOptimizerFillLanguage === 'en' ? 'en' : 'zh',
+        );
+      })
+      .catch(() => {
+        // 普通浏览器调试环境没有 Tauri invoke；保留默认快捷键与语言即可。
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!promptPanelOpen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      promptInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [promptPanelOpen]);
 
   useEffect(() => {
     return deferEffect(() => {
@@ -873,46 +975,119 @@ export function Workbench() {
     }
   }, []);
 
+  const handleCursorAnchorChange = useCallback((anchor: TerminalCursorAnchor | null) => {
+    const area = terminalAreaRef.current;
+    if (!area || !anchor) return;
+    setPromptPanelPosition(promptOptimizerPanelPosition(area.getBoundingClientRect(), anchor));
+  }, []);
+
+  const writePromptResultToTerminal = useCallback(
+    async (result: PromptOptimizeResponse) => {
+      if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
+      const payload = promptOptimizerInsertPayload(result, promptOptimizerFillLanguage);
+      if (!payload) return;
+      try {
+        setPromptWidgetMessage(null);
+        await workbenchApi.sessions.writeInput(activeSession.id, payload);
+        setPromptWidgetMessage(t('workbench:promptOptimizer.filled'));
+      } catch (error) {
+        setPromptWidgetMessage(
+          displayErrorMessage(
+            error,
+            t('workbench:promptOptimizer.fillFailed'),
+            desktopUnavailableMessage,
+          ),
+        );
+      }
+    },
+    [activeSession, desktopUnavailableMessage, promptOptimizerFillLanguage, t],
+  );
+
+  const runPromptOptimization = useCallback(
+    async (autoFill: boolean) => {
+      if (!promptInput.trim() || promptOptimizing) {
+        promptInputRef.current?.focus();
+        return;
+      }
+      try {
+        setPromptOptimizing(true);
+        setPromptWidgetMessage(null);
+        const result = await promptOptimizerApi.optimize(promptInput, {
+          workingDirectory: promptWorkingDirectory,
+        });
+        setPromptResult(result);
+        if (autoFill) {
+          await writePromptResultToTerminal(result);
+        }
+      } catch (error) {
+        setPromptWidgetMessage(
+          displayErrorMessage(
+            error,
+            t('workbench:promptOptimizer.optimizeFailed'),
+            desktopUnavailableMessage,
+          ),
+        );
+      } finally {
+        setPromptOptimizing(false);
+      }
+    },
+    [
+      desktopUnavailableMessage,
+      promptInput,
+      promptOptimizing,
+      promptWorkingDirectory,
+      t,
+      writePromptResultToTerminal,
+    ],
+  );
+
   const handleOptimizePrompt = useCallback(async () => {
-    if (!promptInput.trim()) return;
-    try {
-      setPromptOptimizing(true);
-      setPromptWidgetMessage(null);
-      const result = await promptOptimizerApi.optimize(promptInput, {
-        workingDirectory: promptWorkingDirectory,
-      });
-      setPromptResult(result);
-    } catch (error) {
-      setPromptWidgetMessage(
-        displayErrorMessage(
-          error,
-          t('workbench:promptOptimizer.optimizeFailed'),
-          desktopUnavailableMessage,
-        ),
-      );
-    } finally {
-      setPromptOptimizing(false);
-    }
-  }, [desktopUnavailableMessage, promptInput, promptWorkingDirectory, t]);
+    await runPromptOptimization(false);
+  }, [runPromptOptimization]);
 
   const handleFillPromptToTerminal = useCallback(async () => {
     if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
-    const payload = promptOptimizerInsertPayload(promptResult);
-    if (!payload) return;
-    try {
-      setPromptWidgetMessage(null);
-      await workbenchApi.sessions.writeInput(activeSession.id, payload);
-      setPromptWidgetMessage(t('workbench:promptOptimizer.filled'));
-    } catch (error) {
-      setPromptWidgetMessage(
-        displayErrorMessage(
-          error,
-          t('workbench:promptOptimizer.fillFailed'),
-          desktopUnavailableMessage,
-        ),
-      );
+    await writePromptResultToTerminal(promptResult);
+  }, [activeSession, promptResult, writePromptResultToTerminal]);
+
+  const triggerPromptOptimizerShortcut = useCallback(() => {
+    if (!activeProjectIdRef.current) return;
+    if (!promptPanelOpen) {
+      setPromptPanelOpen(true);
+      return;
     }
-  }, [activeSession, desktopUnavailableMessage, promptResult, t]);
+    void runPromptOptimization(true);
+  }, [promptPanelOpen, runPromptOptimization]);
+
+  useEffect(() => {
+    const handleShortcutEvent = (event: KeyboardEvent) => {
+      const result = reducePromptOptimizerShortcut(
+        promptShortcutStateRef.current,
+        {
+          type: event.type === 'keyup' ? 'keyup' : 'keydown',
+          key: event.key,
+          ctrlKey: event.ctrlKey,
+          metaKey: event.metaKey,
+          altKey: event.altKey,
+          shiftKey: event.shiftKey,
+          repeat: event.repeat,
+        },
+        promptOptimizerHotkey,
+      );
+      promptShortcutStateRef.current = result.state;
+      if (!result.triggered) return;
+      event.preventDefault();
+      event.stopPropagation();
+      triggerPromptOptimizerShortcut();
+    };
+
+    window.addEventListener('keydown', handleShortcutEvent, { capture: true });
+    window.addEventListener('keyup', handleShortcutEvent, { capture: true });
+    return () => {
+      window.removeEventListener('keydown', handleShortcutEvent, { capture: true });
+      window.removeEventListener('keyup', handleShortcutEvent, { capture: true });
+    };
+  }, [promptOptimizerHotkey, triggerPromptOptimizerShortcut]);
 
   const handleResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
     try {
@@ -1128,6 +1303,10 @@ export function Workbench() {
     ? `${activeProject.deviceName} · ${activeProject.path}`
     : t('workbench:noProjectHint');
   const contextPath = activeProject ? selectedDisplayPath || rootPath : emptyValue;
+  const promptPanelStyle = {
+    '--prompt-panel-left': `${promptPanelPosition.left}px`,
+    '--prompt-panel-top': `${promptPanelPosition.top}px`,
+  } as CSSProperties;
 
   return (
     <div className={styles.page}>
@@ -1228,10 +1407,11 @@ export function Workbench() {
           </div>
         </section>
 
-        <div className={styles.terminalArea}>
+        <div className={styles.terminalArea} ref={terminalAreaRef}>
           {promptPanelOpen ? (
             <aside
               className={styles.promptOptimizerPanel}
+              style={promptPanelStyle}
               aria-label={t('workbench:promptOptimizer.panelAriaLabel')}
             >
               <div className={styles.promptOptimizerHeader}>
@@ -1252,6 +1432,7 @@ export function Workbench() {
                 />
               </div>
               <textarea
+                ref={promptInputRef}
                 className={styles.promptOptimizerInput}
                 value={promptInput}
                 onChange={(event) => setPromptInput(event.target.value)}
@@ -1330,6 +1511,7 @@ export function Workbench() {
                 }
                 onInput={handleInput}
                 onResize={handleResize}
+                onCursorAnchorChange={handleCursorAnchorChange}
               />
             ) : (
               visibleSessions.map((session) => (
@@ -1359,6 +1541,9 @@ export function Workbench() {
                     placeholder={t('workbench:terminalPlaceholder')}
                     onInput={handleInput}
                     onResize={handleResize}
+                    onCursorAnchorChange={
+                      session.id === renderedActiveSessionId ? handleCursorAnchorChange : undefined
+                    }
                   />
                 </div>
               ))
