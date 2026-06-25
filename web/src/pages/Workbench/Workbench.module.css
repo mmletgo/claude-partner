@@ -272,6 +272,60 @@
   justify-content: flex-end;
 }
 
+.worktreeCreateForm {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.worktreePrefixField {
+  display: inline-flex;
+  align-items: center;
+}
+
+.worktreePrefixSelect {
+  height: 26px;
+  min-width: 92px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+  padding: 0 var(--space-2);
+  background: var(--surface);
+  color: var(--fg);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  transition: all var(--motion-fast) var(--ease-standard);
+}
+
+.worktreePrefixSelect:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.worktreePrefixSelect:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.worktreeBranchSlash {
+  color: var(--meta);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.worktreeBranchInput {
+  width: min(190px, 30vw);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
 .worktreeChip {
   height: 38px;
   max-width: 220px;

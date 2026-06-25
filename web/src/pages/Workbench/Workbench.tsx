@@ -71,12 +71,16 @@ import {
   canMergeWorktree,
   canPushWorktree,
   canRemoveWorktree,
+  composeWorktreeBranchName,
+  DEFAULT_WORKTREE_BRANCH_PREFIX,
   formatCommitRelativeTime,
   hasGitHistory,
   sessionsForWorktree,
+  WORKTREE_BRANCH_PREFIXES,
   worktreeChangeCount,
   worktreeStatusTone,
 } from './workbenchWorktrees';
+import type { WorktreeBranchPrefix } from './workbenchWorktrees';
 
 interface TauriInternalsWindow extends Window {
   __TAURI_INTERNALS__?: {
@@ -644,6 +648,11 @@ export function Workbench() {
   const [activeWorktreeId, setActiveWorktreeId] = useState<string | null>(null);
   const [worktreeBusy, setWorktreeBusy] = useState<string | null>(null);
   const [worktreeError, setWorktreeError] = useState<string | null>(null);
+  const [createWorktreeOpen, setCreateWorktreeOpen] = useState<boolean>(false);
+  const [createWorktreeBranchPrefix, setCreateWorktreeBranchPrefix] =
+    useState<WorktreeBranchPrefix>(DEFAULT_WORKTREE_BRANCH_PREFIX);
+  const [createWorktreeBranchSuffixDraft, setCreateWorktreeBranchSuffixDraft] =
+    useState<string>('');
   const [rootNodes, setRootNodes] = useState<WorkbenchFileNode[]>([]);
   const [childrenByPath, setChildrenByPath] = useState<Record<string, WorkbenchFileNode[]>>({});
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
@@ -674,6 +683,7 @@ export function Workbench() {
   const knownSessionIdsRef = useRef<Set<string>>(new Set());
   const terminalPanelRef = useRef<HTMLElement | null>(null);
   const terminalAreaRef = useRef<HTMLDivElement | null>(null);
+  const worktreeBranchInputRef = useRef<HTMLInputElement | null>(null);
   const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
   const promptShortcutStateRef = useRef(createPromptOptimizerShortcutState());
   const lastLocalFocusAtRef = useRef<number>(0);
@@ -717,6 +727,10 @@ export function Workbench() {
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
   const promptWorkingDirectory = activeRootPath || undefined;
+  const composedWorktreeBranchName = composeWorktreeBranchName(
+    createWorktreeBranchPrefix,
+    createWorktreeBranchSuffixDraft,
+  );
 
   const updateActiveSession = useCallback((nextSessions: WorkbenchSession[]) => {
     const candidates = sessionsForWorktree(nextSessions, activeWorktreeIdRef.current);
@@ -983,6 +997,14 @@ export function Workbench() {
   }, [promptPanelOpen]);
 
   useEffect(() => {
+    if (!createWorktreeOpen) return undefined;
+    const frame = window.requestAnimationFrame(() => {
+      worktreeBranchInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [createWorktreeOpen]);
+
+  useEffect(() => {
     return deferEffect(() => {
       if (!activeProjectId) {
         knownSessionIdsRef.current = new Set();
@@ -990,6 +1012,9 @@ export function Workbench() {
         setActiveSessionId(null);
         setWorktrees([]);
         setActiveWorktreeId(null);
+        setCreateWorktreeOpen(false);
+        setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
+        setCreateWorktreeBranchSuffixDraft('');
         setRootNodes([]);
         setChildrenByPath({});
         setExpandedPaths(new Set());
@@ -1003,6 +1028,9 @@ export function Workbench() {
       knownSessionIdsRef.current = new Set();
       setWorktrees([]);
       setActiveWorktreeId(null);
+      setCreateWorktreeOpen(false);
+      setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
+      setCreateWorktreeBranchSuffixDraft('');
       setChildrenByPath({});
       setExpandedPaths(new Set());
       setSelectedPath(null);
@@ -1319,18 +1347,39 @@ export function Workbench() {
     }
   }, [activeSession, desktopUnavailableMessage, sessionNameDraft, t]);
 
+  const handleOpenCreateWorktree = useCallback(() => {
+    if (!activeProjectIdRef.current || worktreeBusy !== null) return;
+    setWorktreeError(null);
+    setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
+    setCreateWorktreeBranchSuffixDraft('');
+    setCreateWorktreeOpen(true);
+  }, [worktreeBusy]);
+
+  const handleCancelCreateWorktree = useCallback(() => {
+    if (worktreeBusy === 'create') return;
+    setCreateWorktreeOpen(false);
+    setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
+    setCreateWorktreeBranchSuffixDraft('');
+  }, [worktreeBusy]);
+
   const handleCreateWorktree = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId) return;
-    const branchName = window.prompt(t('workbench:worktrees.branchPrompt'));
-    if (!branchName?.trim()) return;
+    const branchName = composeWorktreeBranchName(
+      createWorktreeBranchPrefix,
+      createWorktreeBranchSuffixDraft,
+    );
+    if (!branchName) return;
     try {
       setWorktreeBusy('create');
       setWorktreeError(null);
-      const created = await workbenchApi.worktrees.create(projectId, branchName.trim());
+      const created = await workbenchApi.worktrees.create(projectId, branchName);
       if (activeProjectIdRef.current !== projectId) return;
       await loadWorktrees(projectId);
       setActiveWorktreeId(created.id);
+      setCreateWorktreeOpen(false);
+      setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
+      setCreateWorktreeBranchSuffixDraft('');
     } catch (error) {
       if (activeProjectIdRef.current !== projectId) return;
       setWorktreeError(
@@ -1343,7 +1392,13 @@ export function Workbench() {
     } finally {
       setWorktreeBusy(null);
     }
-  }, [desktopUnavailableMessage, loadWorktrees, t]);
+  }, [
+    createWorktreeBranchPrefix,
+    createWorktreeBranchSuffixDraft,
+    desktopUnavailableMessage,
+    loadWorktrees,
+    t,
+  ]);
 
   const handleCommitWorktree = useCallback(async () => {
     if (!activeWorktree) return;
@@ -1683,16 +1738,74 @@ export function Workbench() {
             )}
           </div>
           <div className={styles.worktreeActions}>
-            <Button
-              size="sm"
-              variant="secondary"
-              icon={<PlusIcon />}
-              loading={worktreeBusy === 'create'}
-              disabled={!activeProjectId || worktreeBusy !== null}
-              onClick={() => void handleCreateWorktree()}
-            >
-              {t('workbench:worktrees.create')}
-            </Button>
+            {createWorktreeOpen ? (
+              <form
+                className={styles.worktreeCreateForm}
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  void handleCreateWorktree();
+                }}
+              >
+                <label className={styles.worktreePrefixField}>
+                  <span className={styles.srOnly}>{t('workbench:worktrees.prefixLabel')}</span>
+                  <select
+                    className={styles.worktreePrefixSelect}
+                    value={createWorktreeBranchPrefix}
+                    disabled={worktreeBusy === 'create'}
+                    aria-label={t('workbench:worktrees.prefixLabel')}
+                    onChange={(event) =>
+                      setCreateWorktreeBranchPrefix(event.target.value as WorktreeBranchPrefix)
+                    }
+                  >
+                    {WORKTREE_BRANCH_PREFIXES.map((prefix) => (
+                      <option key={prefix} value={prefix}>
+                        {prefix}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className={styles.worktreeBranchSlash}>/</span>
+                <Input
+                  ref={worktreeBranchInputRef}
+                  size="sm"
+                  mono
+                  className={styles.worktreeBranchInput}
+                  value={createWorktreeBranchSuffixDraft}
+                  placeholder={t('workbench:worktrees.suffixPlaceholder')}
+                  aria-label={t('workbench:worktrees.suffixLabel')}
+                  disabled={worktreeBusy === 'create'}
+                  onChange={(event) => setCreateWorktreeBranchSuffixDraft(event.target.value)}
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="primary"
+                  loading={worktreeBusy === 'create'}
+                  disabled={!composedWorktreeBranchName || worktreeBusy !== null}
+                >
+                  {t('common:action.confirm')}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={worktreeBusy === 'create'}
+                  onClick={handleCancelCreateWorktree}
+                >
+                  {t('common:action.cancel')}
+                </Button>
+              </form>
+            ) : (
+              <Button
+                size="sm"
+                variant="secondary"
+                icon={<PlusIcon />}
+                loading={worktreeBusy === 'create'}
+                disabled={!activeProjectId || worktreeBusy !== null}
+                onClick={handleOpenCreateWorktree}
+              >
+                {t('workbench:worktrees.create')}
+              </Button>
+            )}
             <Button
               variant="icon"
               icon={<TrashIcon />}

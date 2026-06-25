@@ -8,6 +8,8 @@ import {
   canRemoveWorktree,
   formatCommitRelativeTime,
   hasGitHistory,
+  composeWorktreeBranchName,
+  normalizeWorktreeBranchName,
   sessionsForWorktree,
   worktreeChangeCount,
   worktreeStatusTone,
@@ -169,6 +171,38 @@ function testGitHistoryActionAvailability(): void {
 
 /**
  * Business Logic（为什么需要这个测试）:
+ *   新建 worktree 的分支名来自页面内输入框，空白输入不能触发后端创建，用户输入两侧空格应自动清理。
+ *
+ * Code Logic（这个测试做什么）:
+ *   断言 helper 会 trim 有效分支名，并把空白字符串归一成 null。
+ */
+function testNormalizeWorktreeBranchName(): void {
+  if (normalizeWorktreeBranchName('  feature/workbench-fix  ') !== 'feature/workbench-fix') {
+    throw new Error('expected branch name to be trimmed');
+  }
+  if (normalizeWorktreeBranchName('   ') !== null) {
+    throw new Error('expected blank branch name to be ignored');
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个测试）:
+ *   新建 worktree 的前缀应由用户从固定类型中选择，用户只输入分支后缀，避免误把完整分支名输错。
+ *
+ * Code Logic（这个测试做什么）:
+ *   断言 prefix + suffix 会组合为完整分支名，空白 suffix 不会生成可提交分支名。
+ */
+function testComposeWorktreeBranchName(): void {
+  if (composeWorktreeBranchName('feature', '  my-task  ') !== 'feature/my-task') {
+    throw new Error('expected selected prefix and suffix to compose branch name');
+  }
+  if (composeWorktreeBranchName('fix', '   ') !== null) {
+    throw new Error('expected blank suffix to be ignored');
+  }
+}
+
+/**
+ * Business Logic（为什么需要这个测试）:
  *   Git 历史 tab 顶部需要显示当前 worktree 的改动数，代替 worktree 顶部主工具区的状态提示。
  *
  * Code Logic（这个测试做什么）:
@@ -285,6 +319,8 @@ testActiveWorktreeRootPath();
 testWorktreeStatusTone();
 testCanCommitWorktreeIgnoresStaleCleanStatus();
 testGitHistoryActionAvailability();
+testNormalizeWorktreeBranchName();
+testComposeWorktreeBranchName();
 testWorktreeChangeCount();
 testFormatCommitRelativeTime();
 testHasGitHistory();
