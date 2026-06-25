@@ -43,6 +43,15 @@ export interface PromptOptimizerTextState {
   message: string | null;
 }
 
+export type PromptOptimizerShortcutAction = 'open' | 'close' | 'optimize';
+export type PromptOptimizerInputKeyAction = 'ignore' | 'newline' | 'optimize';
+
+export interface PromptOptimizerInputKeyEvent {
+  key: string;
+  shiftKey: boolean;
+  isComposing?: boolean;
+}
+
 const MODIFIER_SHORTCUT_BY_KEY: Record<string, string> = {
   Alt: '<alt>',
   AltGraph: '<alt>',
@@ -95,6 +104,39 @@ export function resetPromptOptimizerTextState(
     result: createEmptyPromptOptimizeResponse(),
     message: null,
   };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   用户使用快捷键控制 Prompt 优化浮层时，空输入代表取消本次优化并关闭浮层，而不是提交空任务。
+ *
+ * Code Logic（这个函数做什么）:
+ *   面板关闭时返回 open；面板打开且输入 trim 为空返回 close；面板打开且有内容返回 optimize。
+ */
+export function promptOptimizerShortcutAction(
+  panelOpen: boolean,
+  input: string,
+): PromptOptimizerShortcutAction {
+  if (!panelOpen) return 'open';
+  if (!input.trim()) return 'close';
+  return 'optimize';
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Prompt 优化浮层只有一个输入框，用户输入完成后按 Enter 应直接提交优化；但中文输入法选词和多行输入不能被误拦截。
+ *
+ * Code Logic（这个函数做什么）:
+ *   非 Enter 或输入法 composing 状态返回 ignore；Shift+Enter 返回 newline；普通 Enter 且输入非空返回 optimize。
+ */
+export function promptOptimizerInputKeyAction(
+  event: PromptOptimizerInputKeyEvent,
+  input: string,
+): PromptOptimizerInputKeyAction {
+  if (event.key !== 'Enter' || event.isComposing) return 'ignore';
+  if (event.shiftKey) return 'newline';
+  if (!input.trim()) return 'ignore';
+  return 'optimize';
 }
 
 /**

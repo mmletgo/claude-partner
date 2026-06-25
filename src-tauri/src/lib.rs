@@ -546,6 +546,7 @@ pub fn run() {
             github_trending_cmd::test_claude_cli,
             // Prompt 优化（复用 Claude CLI pure/headless helper，不保存历史）
             prompt_optimizer_cmd::optimize_prompt,
+            prompt_optimizer_cmd::stream_optimize_prompt_to_workbench_session,
             // M10 健康提醒（14 命令：配置/状态/开关/暂停/贪睡/跳过/配置回写/统计/活动明细/喝水/跳过喝水/延迟喝水/全屏遮罩/恢复默认）
             health_cmd::get_health_config,
             health_cmd::get_default_health_config,

@@ -14,7 +14,7 @@ use serde::de::DeserializeOwned;
 use std::path::Path;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 
 const DEFAULT_CLAUDE_CLI: &str = "claude";
@@ -87,6 +87,129 @@ pub(crate) fn build_project_headless_args(model: &str, schema: &str) -> Vec<Stri
         "--model".to_string(),
         normalize_model(model),
     ]
+}
+
+/// 构造 Claude Code CLI 流式纯文本输出参数。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench Prompt 小组件需要把优化后的 Prompt 边生成边写入终端，不能等待完整 JSON 返回。
+///
+/// Code Logic（这个函数做什么）:
+///     返回 print + stream-json + verbose + partial message 参数；项目上下文模式不加 `--bare`，纯模式才加。
+pub(crate) fn build_streaming_text_args(model: &str, use_project_context: bool) -> Vec<String> {
+    let mut args = Vec::new();
+    if !use_project_context {
+        args.push("--bare".to_string());
+    }
+    args.extend([
+        "-p".to_string(),
+        "--output-format".to_string(),
+        "stream-json".to_string(),
+        "--verbose".to_string(),
+        "--include-partial-messages".to_string(),
+        "--no-session-persistence".to_string(),
+        "--tools".to_string(),
+        "".to_string(),
+        "--model".to_string(),
+        normalize_model(model),
+    ]);
+    args
+}
+
+/// Claude CLI stream-json 文本增量解析状态。
+///
+/// Business Logic（为什么需要这个结构）:
+///     `--include-partial-messages` 可能输出累计文本快照，也可能输出独立文本块；写入终端时不能重复内容。
+///
+/// Code Logic（这个结构做什么）:
+///     保存已写入的 assistant 文本；优先解析 stream_event text_delta 实时增量，最终 assistant 快照只用于兜底。
+#[derive(Default)]
+pub(crate) struct StreamingTextState {
+    written_text: String,
+}
+
+impl StreamingTextState {
+    /// Business Logic（为什么需要这个函数）:
+    ///     Workbench 流式优化只应把模型生成的 Prompt 文本写入终端，忽略 system/result/thinking 等元事件。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     解析一行 stream-json；stream_event text_delta 作为独立增量立即返回，assistant 完整快照只返回未写过的后缀。
+    pub(crate) fn chunk_from_stream_json_line(
+        &mut self,
+        line: &str,
+    ) -> Result<Option<String>, AppError> {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            return Ok(None);
+        }
+        let value: serde_json::Value = serde_json::from_str(trimmed)?;
+        if let Some(delta) = text_delta_from_stream_event(&value) {
+            if delta.is_empty() {
+                return Ok(None);
+            }
+            self.written_text.push_str(delta);
+            return Ok(Some(delta.to_string()));
+        }
+        if value.get("type").and_then(|item| item.as_str()) != Some("assistant") {
+            return Ok(None);
+        }
+        let Some(text) = assistant_text_from_stream_value(&value) else {
+            return Ok(None);
+        };
+        if text.is_empty() {
+            return Ok(None);
+        }
+        if let Some(delta) = text.strip_prefix(&self.written_text) {
+            let delta = delta.to_string();
+            self.written_text = text;
+            return Ok((!delta.is_empty()).then_some(delta));
+        }
+        self.written_text.push_str(&text);
+        Ok(Some(text))
+    }
+}
+
+/// 从 Claude CLI stream-json 增量事件中提取文本 delta。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Claude CLI 的真实流式文本不是顶层 assistant 事件，而是 stream_event.content_block_delta.text_delta。
+///
+/// Code Logic（这个函数做什么）:
+///     仅提取 text_delta.text，明确忽略 thinking_delta、signature_delta、message_delta 等非可见文本事件。
+fn text_delta_from_stream_event(value: &serde_json::Value) -> Option<&str> {
+    if value.get("type").and_then(|item| item.as_str()) != Some("stream_event") {
+        return None;
+    }
+    let event = value.get("event")?;
+    if event.get("type").and_then(|item| item.as_str()) != Some("content_block_delta") {
+        return None;
+    }
+    let delta = event.get("delta")?;
+    if delta.get("type").and_then(|item| item.as_str()) != Some("text_delta") {
+        return None;
+    }
+    delta.get("text").and_then(|item| item.as_str())
+}
+
+/// 从 Claude CLI stream-json assistant 事件中提取文本。
+///
+/// Business Logic（为什么需要这个函数）:
+///     stream-json 事件包含多种元数据，Workbench 只需要 assistant 文本块。
+///
+/// Code Logic（这个函数做什么）:
+///     遍历 message.content 数组，把 `{type:"text", text:"..."}` 块拼接为字符串。
+fn assistant_text_from_stream_value(value: &serde_json::Value) -> Option<String> {
+    let content = value
+        .get("message")
+        .and_then(|message| message.get("content"))
+        .and_then(|content| content.as_array())?;
+    let text = content
+        .iter()
+        .filter(|item| item.get("type").and_then(|kind| kind.as_str()) == Some("text"))
+        .filter_map(|item| item.get("text").and_then(|text| text.as_str()))
+        .collect::<Vec<_>>()
+        .join("");
+    Some(text)
 }
 
 /// 执行 Claude CLI 并解析结构化 JSON 输出。
@@ -188,6 +311,103 @@ where
     }
 
     parse_structured_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// 在可选工作目录中执行 Claude CLI 并流式返回 assistant 文本。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench Prompt 小组件希望优化结果生成时就进入当前终端，用户无需等待完整 JSON 后再一次性填入。
+///
+/// Code Logic（这个函数做什么）:
+///     使用 Claude CLI `stream-json` 输出格式，逐行解析 assistant 文本增量并调用 on_chunk；
+///     working_directory 存在时不加 `--bare`，从而允许 Claude Code 读取项目 CLAUDE.md 上下文。
+pub(crate) async fn run_streaming_text_with_cwd<F>(
+    cli_path: &str,
+    model: &str,
+    prompt: &str,
+    working_directory: Option<&Path>,
+    timeout_secs: u64,
+    task_label: &str,
+    mut on_chunk: F,
+) -> Result<(), AppError>
+where
+    F: FnMut(&str) -> Result<(), AppError> + Send,
+{
+    let cli = normalize_cli_path(cli_path);
+    let mut cmd = Command::new(cli);
+    cmd.args(build_streaming_text_args(
+        model,
+        working_directory.is_some(),
+    ))
+    .stdin(Stdio::piped())
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .kill_on_drop(true);
+    if let Some(directory) = working_directory {
+        cmd.current_dir(directory);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| AppError::generic(format!("启动 Claude CLI 失败: {e}")))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(prompt.as_bytes())
+            .await
+            .map_err(|e| AppError::generic(format!("写入 Claude CLI prompt 失败: {e}")))?;
+    }
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| AppError::generic("Claude CLI stdout 不可用"))?;
+    let stderr_task = child.stderr.take().map(|mut stderr| {
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let _ = stderr.read_to_end(&mut bytes).await;
+            bytes
+        })
+    });
+
+    let stream_future = async {
+        let mut reader = BufReader::new(stdout).lines();
+        let mut state = StreamingTextState::default();
+        while let Some(line) = reader
+            .next_line()
+            .await
+            .map_err(|e| AppError::generic(format!("读取 Claude CLI 流式输出失败: {e}")))?
+        {
+            if let Some(chunk) = state.chunk_from_stream_json_line(&line)? {
+                on_chunk(&chunk)?;
+            }
+        }
+        child
+            .wait()
+            .await
+            .map_err(|e| AppError::generic(format!("等待 Claude CLI 输出失败: {e}")))
+    };
+
+    let status = match tokio::time::timeout(Duration::from_secs(timeout_secs), stream_future).await
+    {
+        Ok(result) => result?,
+        Err(_) => {
+            return Err(AppError::generic(format!(
+                "Claude CLI {task_label}超时（{timeout_secs} 秒）"
+            )))
+        }
+    };
+    let stderr = match stderr_task {
+        Some(task) => task.await.unwrap_or_default(),
+        None => Vec::new(),
+    };
+
+    if !status.success() {
+        return Err(AppError::generic(format!(
+            "Claude CLI {task_label}失败: {}",
+            failure_detail(&stderr, &[])
+        )));
+    }
+
+    Ok(())
 }
 
 /// 解析 Claude CLI 结构化输出。
@@ -365,5 +585,94 @@ mod tests {
         let detail = failure_detail(&[], long.as_bytes());
         assert_eq!(detail.chars().count(), 503);
         assert!(detail.ends_with("..."));
+    }
+
+    #[test]
+    fn streaming_text_state_emits_only_new_assistant_text() {
+        let mut state = StreamingTextState::default();
+        let first = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"目标"}]}}"#,
+            )
+            .expect("first line");
+        let second = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"目标和上下文"}]}}"#,
+            )
+            .expect("second line");
+        let result = state
+            .chunk_from_stream_json_line(r#"{"type":"result","result":"目标和上下文"}"#)
+            .expect("result line");
+
+        assert_eq!(first.as_deref(), Some("目标"));
+        assert_eq!(second.as_deref(), Some("和上下文"));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn streaming_text_state_accepts_independent_text_chunks() {
+        let mut state = StreamingTextState::default();
+        let first = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"目标"}]}}"#,
+            )
+            .expect("first line");
+        let second = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"约束"}]}}"#,
+            )
+            .expect("second line");
+
+        assert_eq!(first.as_deref(), Some("目标"));
+        assert_eq!(second.as_deref(), Some("约束"));
+    }
+
+    #[test]
+    fn streaming_text_state_emits_stream_event_text_delta_immediately() {
+        let mut state = StreamingTextState::default();
+        let first = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"目标"}}}"#,
+            )
+            .expect("first delta");
+        let second = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"和约束"}}}"#,
+            )
+            .expect("second delta");
+        let final_snapshot = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"assistant","message":{"content":[{"type":"text","text":"目标和约束"}]}}"#,
+            )
+            .expect("final assistant snapshot");
+
+        assert_eq!(first.as_deref(), Some("目标"));
+        assert_eq!(second.as_deref(), Some("和约束"));
+        assert_eq!(final_snapshot, None);
+    }
+
+    #[test]
+    fn streaming_text_state_ignores_thinking_stream_delta() {
+        let mut state = StreamingTextState::default();
+        let thinking = state
+            .chunk_from_stream_json_line(
+                r#"{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"internal"}}}"#,
+            )
+            .expect("thinking delta");
+
+        assert_eq!(thinking, None);
+    }
+
+    #[test]
+    fn streaming_text_args_use_project_context_without_json_schema() {
+        let args = build_streaming_text_args("sonnet", true);
+
+        assert!(!args.iter().any(|arg| arg == "--bare"));
+        assert!(args
+            .windows(2)
+            .any(|pair| pair == ["--output-format", "stream-json"]));
+        assert!(args.iter().any(|arg| arg == "--verbose"));
+        assert!(args.iter().any(|arg| arg == "--include-partial-messages"));
+        assert!(!args.iter().any(|arg| arg == "--json-schema"));
     }
 }

@@ -4,6 +4,8 @@ import {
   resetPromptOptimizerTextState,
   createPromptOptimizerShortcutState,
   promptOptimizerInsertPayload,
+  promptOptimizerInputKeyAction,
+  promptOptimizerShortcutAction,
   reducePromptOptimizerShortcut,
   promptOptimizerWorkingDirectory,
   selectPromptOptimizerInsertText,
@@ -200,6 +202,48 @@ assertEqual(
   }),
   '中文结果\n',
   'insert payload preserves existing trailing newline',
+);
+
+assertEqual(
+  promptOptimizerShortcutAction(false, ''),
+  'open',
+  'shortcut opens panel when it is closed',
+);
+
+assertEqual(
+  promptOptimizerShortcutAction(true, '   '),
+  'close',
+  'shortcut closes opened panel when input is empty',
+);
+
+assertEqual(
+  promptOptimizerShortcutAction(true, '修复工作台'),
+  'optimize',
+  'shortcut optimizes only when opened panel has input',
+);
+
+assertEqual(
+  promptOptimizerInputKeyAction({ key: 'Enter', shiftKey: false }, '修复工作台'),
+  'optimize',
+  'enter optimizes when input has text',
+);
+
+assertEqual(
+  promptOptimizerInputKeyAction({ key: 'Enter', shiftKey: false }, '   '),
+  'ignore',
+  'enter ignores empty input',
+);
+
+assertEqual(
+  promptOptimizerInputKeyAction({ key: 'Enter', shiftKey: true }, '修复工作台'),
+  'newline',
+  'shift enter keeps multiline editing',
+);
+
+assertEqual(
+  promptOptimizerInputKeyAction({ key: 'Enter', shiftKey: false, isComposing: true }, '修复工作台'),
+  'ignore',
+  'enter during IME composition does not optimize',
 );
 
 let shortcut = reducePromptOptimizerShortcut(

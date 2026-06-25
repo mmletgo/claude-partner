@@ -1,4 +1,7 @@
-import { buildPromptOptimizerInvokeArgs } from './promptOptimizer';
+import {
+  buildPromptOptimizerInvokeArgs,
+  buildPromptOptimizerStreamInvokeArgs,
+} from './promptOptimizer';
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -24,6 +27,23 @@ assert(
       targetLanguage: 'zh',
     }),
   'optimize should pass targetLanguage to backend',
+);
+
+const streamArgs = buildPromptOptimizerStreamInvokeArgs('优化并填入终端', {
+  workingDirectory: ' /Users/hans/project/Pando ',
+  targetLanguage: 'en',
+  sessionId: 'session-1',
+});
+
+assert(
+  JSON.stringify(streamArgs) ===
+    JSON.stringify({
+      prompt: '优化并填入终端',
+      workingDirectory: '/Users/hans/project/Pando',
+      targetLanguage: 'en',
+      sessionId: 'session-1',
+    }),
+  'streamToTerminal should pass sessionId and selected targetLanguage to backend',
 );
 
 console.log('promptOptimizer.test.ts passed');

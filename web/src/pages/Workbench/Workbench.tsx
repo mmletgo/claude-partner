@@ -51,7 +51,8 @@ import styles from './Workbench.module.css';
 import {
   canFillPromptIntoTerminal,
   createPromptOptimizerShortcutState,
-  promptOptimizerInsertPayload,
+  promptOptimizerInputKeyAction,
+  promptOptimizerShortcutAction,
   promptOptimizerWorkingDirectory,
   reducePromptOptimizerShortcut,
   resetPromptOptimizerTextState,
@@ -960,40 +961,24 @@ export function Workbench() {
     setPromptPanelPosition(promptOptimizerPanelPosition(area.getBoundingClientRect(), anchor));
   }, []);
 
-  const writePromptTextToTerminal = useCallback(
-    async (text: string) => {
-      if (!activeSession || !canFillPromptIntoTerminal(activeSession)) return;
-      if (!text.trim()) return;
-      try {
-        await workbenchApi.sessions.writeInput(activeSession.id, text);
-        setPromptPanelOpen(false);
-      } catch (error) {
-        setSessionError(
-          displayErrorMessage(
-            error,
-            t('workbench:promptOptimizer.fillFailed'),
-            desktopUnavailableMessage,
-          ),
-        );
-      }
-    },
-    [activeSession, desktopUnavailableMessage, t],
-  );
-
   const runPromptOptimization = useCallback(
     async () => {
       if (!promptInput.trim() || promptOptimizing) {
         promptInputRef.current?.focus();
         return;
       }
+      if (!activeSession || !canFillPromptIntoTerminal(activeSession)) {
+        setSessionError(t('workbench:promptOptimizer.fillFailed'));
+        return;
+      }
       try {
         setPromptOptimizing(true);
-        const result = await promptOptimizerApi.optimize(promptInput, {
+        await promptOptimizerApi.streamToTerminal(promptInput, {
           workingDirectory: promptWorkingDirectory,
           targetLanguage: promptOptimizerFillLanguage,
+          sessionId: activeSession.id,
         });
-        const payload = promptOptimizerInsertPayload(result, promptOptimizerFillLanguage);
-        await writePromptTextToTerminal(payload);
+        setPromptPanelOpen(false);
       } catch (error) {
         setSessionError(
           displayErrorMessage(
@@ -1007,24 +992,29 @@ export function Workbench() {
       }
     },
     [
+      activeSession,
       desktopUnavailableMessage,
       promptInput,
       promptOptimizing,
       promptOptimizerFillLanguage,
       promptWorkingDirectory,
       t,
-      writePromptTextToTerminal,
     ],
   );
 
   const triggerPromptOptimizerShortcut = useCallback(() => {
     if (!activeProjectIdRef.current) return;
-    if (!promptPanelOpen) {
+    const action = promptOptimizerShortcutAction(promptPanelOpen, promptInput);
+    if (action === 'open') {
       openPromptOptimizerPanel();
       return;
     }
+    if (action === 'close') {
+      setPromptPanelOpen(false);
+      return;
+    }
     void runPromptOptimization();
-  }, [openPromptOptimizerPanel, promptPanelOpen, runPromptOptimization]);
+  }, [openPromptOptimizerPanel, promptInput, promptPanelOpen, runPromptOptimization]);
 
   useEffect(() => {
     const handleShortcutEvent = (event: KeyboardEvent) => {
@@ -1393,6 +1383,20 @@ export function Workbench() {
                 className={styles.promptOptimizerInput}
                 value={promptInput}
                 onChange={(event) => setPromptInput(event.target.value)}
+                onKeyDown={(event) => {
+                  const action = promptOptimizerInputKeyAction(
+                    {
+                      key: event.key,
+                      shiftKey: event.shiftKey,
+                      isComposing: event.nativeEvent.isComposing,
+                    },
+                    promptInput,
+                  );
+                  if (action !== 'optimize') return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  void runPromptOptimization();
+                }}
                 placeholder={t('promptOptimizer:inputPlaceholder')}
                 aria-label={t('promptOptimizer:inputAriaLabel')}
                 disabled={promptOptimizing}

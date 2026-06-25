@@ -148,6 +148,55 @@ pub async fn optimize_prompt(
     .await
 }
 
+/// 流式优化 Prompt 并写入 Workbench 终端。
+///
+/// Business Logic（为什么需要这个命令）:
+///     Workbench 快捷键小组件需要在当前 Claude Code/终端输入位置下方优化 prompt，并把生成内容边生成边填入当前终端，
+///     让用户看到实时输出而不是等待完整结果。
+///
+/// Code Logic（这个命令做什么）:
+///     校验 prompt 与目标语种，使用当前项目目录运行 Claude CLI stream-json 输出；每个 assistant 文本增量通过
+///     WorkbenchSessionRegistry 写入指定 session，不返回优化文本给前端。
+#[tauri::command]
+pub async fn stream_optimize_prompt_to_workbench_session(
+    state: State<'_, AppState>,
+    prompt: String,
+    working_directory: Option<String>,
+    target_language: String,
+    session_id: String,
+) -> Result<Value, AppError> {
+    validate_prompt_input(&prompt)?;
+    if session_id.trim().is_empty() {
+        return Err(AppError::generic("工作台终端会话不能为空"));
+    }
+    let target_language = PromptOptimizeTargetLanguage::parse(Some(target_language))?
+        .ok_or_else(|| AppError::generic("Workbench Prompt 优化必须指定目标语种"))?;
+    let working_directory = resolve_working_directory(working_directory)?;
+    let (cli_path, model) = {
+        let cfg = state.config.read().unwrap();
+        (
+            cfg.github_trending.claude_cli_path.clone(),
+            cfg.github_trending.claude_model.clone(),
+        )
+    };
+    let instruction = build_streaming_optimize_instruction(&prompt, target_language);
+    let sessions = state.workbench_sessions.clone();
+    let write_session_id = session_id.clone();
+
+    claude_cli::run_streaming_text_with_cwd(
+        &cli_path,
+        &model,
+        &instruction,
+        working_directory.as_deref(),
+        PROMPT_OPTIMIZE_TIMEOUT_SECS,
+        "流式优化 Prompt",
+        move |chunk| sessions.write_input(&write_session_id, chunk),
+    )
+    .await?;
+
+    Ok(json!({ "ok": true, "sessionId": session_id }))
+}
+
 /// 校验原始 Prompt 输入。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -316,6 +365,38 @@ fn build_optimize_instruction_for_target(
     )
 }
 
+/// 构造 Workbench 流式优化指令。
+///
+/// Business Logic（为什么需要这个函数）:
+///     快捷键小组件会直接把模型输出写进终端，因此输出必须是单语纯 Prompt 文本，不能包含 JSON 包装或解释。
+///
+/// Code Logic（这个函数做什么）:
+///     按设置页目标语种生成 stream-json 纯文本任务指令；提示 Claude Code 使用当前项目目录自动加载的上下文，
+///     并禁止生成第二语言版本、澄清问题和未经原始需求要求的 docs/ 文档输出。
+fn build_streaming_optimize_instruction(
+    prompt: &str,
+    target: PromptOptimizeTargetLanguage,
+) -> String {
+    format!(
+        "You optimize user prompts for Claude Code programming tasks.\n\
+         Output only the optimized prompt text in {}.\n\
+         Do not output JSON, Markdown fences, headings about your answer, explanations, or metadata.\n\
+         Requirements:\n\
+         - Preserve the user's intent and do not invent external facts.\n\
+         - Use any project instructions/context Claude Code auto-loads from the current working directory, including CLAUDE.md, when relevant.\n\
+         - The optimized prompt must include: goal, context, constraints, and acceptance criteria.\n\
+         - Write the optimized prompt from the requester's perspective, as a direct prompt they can paste into Claude Code.\n\
+         - Do not ask the requester clarifying questions or include confirmation requests.\n\
+         - If details are missing, express them as bracketed placeholders or execution assumptions inside the prompt, not as questions to the requester.\n\
+         - Do not add documentation, docs/, file-writing, persistence, or confirmation requirements unless the original prompt explicitly asks for those outputs.\n\
+         - Keep the prompt actionable for a coding agent.\n\
+         - Do not generate a second language version.\n\n\
+         Original prompt:\n```text\n{}\n```",
+        target.instruction_label(),
+        prompt
+    )
+}
+
 /// 解析 Prompt 优化输出。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -430,5 +511,19 @@ mod tests {
         assert!(instruction.contains(
             "Do not ask the requester clarifying questions or include confirmation requests."
         ));
+    }
+
+    #[test]
+    fn streaming_instruction_returns_plain_single_language_prompt() {
+        let instruction = build_streaming_optimize_instruction(
+            "修复工作台 Prompt 优化浮层",
+            PromptOptimizeTargetLanguage::Zh,
+        );
+
+        assert!(instruction.contains("Output only the optimized prompt text"));
+        assert!(instruction.contains("Do not output JSON"));
+        assert!(instruction.contains("Do not generate a second language version"));
+        assert!(instruction.contains("Simplified Chinese"));
+        assert!(!instruction.contains("optimizedPrompt"));
     }
 }
