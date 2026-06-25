@@ -97,7 +97,6 @@ pub fn repo_root(path: &Path) -> Result<String, AppError> {
 ///
 /// Code Logic（这个函数做什么）:
 ///     执行 `git worktree list --porcelain` 后交给 parse_worktree_porcelain 解析。
-#[allow(dead_code)]
 pub fn list_worktrees(repo_path: &Path, main_path: &str) -> Result<Vec<ParsedWorktree>, AppError> {
     let output = run_git(repo_path, &["worktree", "list", "--porcelain"])?;
     Ok(parse_worktree_porcelain(&output, main_path))

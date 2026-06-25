@@ -24,6 +24,7 @@ use crate::workbench::{fs as workbench_fs, git as workbench_git, projects};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, State};
 
@@ -118,6 +119,129 @@ async fn ensure_main_worktree(
     };
     state.workbench_worktree_repo.upsert(&row).await?;
     Ok(row)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     Git worktree 输出路径和 SQLite 持久化路径可能只有结尾分隔符不同，不能因此重复显示。
+///
+/// Code Logic（这个函数做什么）:
+///     修剪首尾空白与结尾 `/`、`\`，返回用于比较和持久化的路径字符串。
+fn normalize_worktree_path(path: &str) -> String {
+    let trimmed = path.trim();
+    let normalized = trimmed.trim_end_matches(['/', '\\']);
+    if normalized.is_empty() {
+        trimmed.to_string()
+    } else {
+        normalized.to_string()
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     从 Git 发现的外部 worktree 没有 cc-partner UUID，需要稳定 id 以便后续刷新覆盖同一行。
+///
+/// Code Logic（这个函数做什么）:
+///     对 project_id 和规范化 path 做 SHA256，截取前 16 字节作为确定性 id 后缀。
+fn discovered_git_worktree_id(project_id: &str, path: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(project_id.as_bytes());
+    hasher.update([0]);
+    hasher.update(normalize_worktree_path(path).as_bytes());
+    let digest = hasher.finalize();
+    let suffix: String = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{project_id}:git:{suffix}")
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     顶部 worktree chip 需要优先显示分支名；detached 或无分支 worktree 也要有可读名称。
+///
+/// Code Logic（这个函数做什么）:
+///     优先返回 parsed.branch，否则取路径末段，最后使用 `worktree` 兜底。
+fn discovered_git_worktree_name(parsed: &workbench_git::ParsedWorktree) -> String {
+    parsed
+        .branch
+        .clone()
+        .or_else(|| {
+            Path::new(&parsed.path)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+        })
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| "worktree".to_string())
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     选择已有 Git 项目时，磁盘上已经存在的 worktree 也应出现在 Workbench 顶部切换栏。
+///
+/// Code Logic（这个函数做什么）:
+///     将 `git worktree list --porcelain` 的非主工作区项转换为可持久化 row；若 path 已存在则复用原 row id。
+fn discovered_git_worktree_row(
+    project: &WorkbenchProjectRow,
+    parsed: &workbench_git::ParsedWorktree,
+    existing: Option<&WorkbenchWorktreeRow>,
+    now: &str,
+) -> WorkbenchWorktreeRow {
+    let path = normalize_worktree_path(&parsed.path);
+    WorkbenchWorktreeRow {
+        id: existing
+            .map(|row| row.id.clone())
+            .unwrap_or_else(|| discovered_git_worktree_id(&project.id, &path)),
+        project_id: project.id.clone(),
+        name: discovered_git_worktree_name(parsed),
+        branch: parsed.branch.clone(),
+        base_branch: existing.and_then(|row| row.base_branch.clone()),
+        path,
+        is_main: false,
+        created_at: existing
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.to_string()),
+        updated_at: now.to_string(),
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     项目载入时应把 Git 已知 worktree 同步进工作台元数据，避免只显示主工作区。
+///
+/// Code Logic（这个函数做什么）:
+///     调用 `git worktree list --porcelain`，对非主 worktree 按 path 复用/新增 row 并 upsert。
+async fn sync_git_worktrees(
+    state: &AppState,
+    project: &WorkbenchProjectRow,
+) -> Result<(), AppError> {
+    let repo_root = match workbench_git::repo_root(Path::new(&project.path)) {
+        Ok(root) => root,
+        Err(error) => {
+            tracing::debug!("项目不是 Git 仓库，跳过 worktree 发现: {error}");
+            return Ok(());
+        }
+    };
+    let parsed = match workbench_git::list_worktrees(Path::new(&repo_root), &repo_root) {
+        Ok(items) => items,
+        Err(error) => {
+            tracing::debug!("读取 Git worktree 列表失败，跳过自动发现: {error}");
+            return Ok(());
+        }
+    };
+    let existing_rows = state
+        .workbench_worktree_repo
+        .list_by_project(&project.id)
+        .await?;
+    let now = now_iso();
+    for item in parsed.into_iter().filter(|item| !item.is_main) {
+        let item_path = normalize_worktree_path(&item.path);
+        let existing = existing_rows
+            .iter()
+            .find(|row| normalize_worktree_path(&row.path) == item_path);
+        let item = workbench_git::ParsedWorktree {
+            path: item_path,
+            ..item
+        };
+        let row = discovered_git_worktree_row(project, &item, existing, &now);
+        state.workbench_worktree_repo.upsert(&row).await?;
+    }
+    Ok(())
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -362,7 +486,7 @@ pub async fn touch_workbench_project(
 ///     Workbench 顶部需要用 worktree 管理层替代项目路径说明，让用户在主工作区和功能 worktree 间切换。
 ///
 /// Code Logic（这个函数做什么）:
-///     确保主 worktree 存在，读取该项目全部 worktree row，并注入实时 Git 状态 DTO。
+///     确保主 worktree 存在，同步 Git 已有 worktree 到 SQLite，再注入实时 Git 状态 DTO。
 #[tauri::command]
 pub async fn list_workbench_worktrees(
     state: State<'_, AppState>,
@@ -370,6 +494,7 @@ pub async fn list_workbench_worktrees(
 ) -> Result<Vec<WorkbenchWorktreeDto>, AppError> {
     let project = get_project(&state, &project_id).await?;
     ensure_main_worktree(&state, &project).await?;
+    sync_git_worktrees(&state, &project).await?;
     let rows = state
         .workbench_worktree_repo
         .list_by_project(&project_id)
@@ -1073,5 +1198,86 @@ mod tests {
 
         assert_eq!(schema["required"][0], "message");
         assert_eq!(schema["properties"]["message"]["type"], "string");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     用户选择已有 Git 项目后，Workbench 顶部必须自动显示磁盘上已有的 Git worktree。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造 `git worktree list` 解析项，断言导入 row 使用稳定 id、分支名和路径。
+    #[test]
+    fn discovered_git_worktree_row_uses_stable_metadata() {
+        let project = WorkbenchProjectRow {
+            id: "project-1".to_string(),
+            name: "Repo".to_string(),
+            kind: "local".to_string(),
+            device_id: "local".to_string(),
+            device_name: "Mac".to_string(),
+            path: "/repo/main".to_string(),
+            last_opened_at: "2026-06-26T00:00:00Z".to_string(),
+            created_at: "2026-06-26T00:00:00Z".to_string(),
+            updated_at: "2026-06-26T00:00:00Z".to_string(),
+        };
+        let parsed = workbench_git::ParsedWorktree {
+            path: "/repo/worktrees/feature-a".to_string(),
+            branch: Some("feature/a".to_string()),
+            is_main: false,
+        };
+
+        let first = discovered_git_worktree_row(&project, &parsed, None, "2026-06-26T01:00:00Z");
+        let second = discovered_git_worktree_row(&project, &parsed, None, "2026-06-26T02:00:00Z");
+
+        assert_eq!(first.id, second.id);
+        assert_eq!(first.project_id, "project-1");
+        assert_eq!(first.name, "feature/a");
+        assert_eq!(first.branch.as_deref(), Some("feature/a"));
+        assert_eq!(first.path, "/repo/worktrees/feature-a");
+        assert!(!first.is_main);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     已经由 cc-partner 创建过的 worktree 再次被 Git 发现时不能换 id，否则会重复显示。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造相同 path 的既有 row，断言导入时复用既有 id 和 created_at。
+    #[test]
+    fn discovered_git_worktree_row_reuses_existing_row_for_same_path() {
+        let project = WorkbenchProjectRow {
+            id: "project-1".to_string(),
+            name: "Repo".to_string(),
+            kind: "local".to_string(),
+            device_id: "local".to_string(),
+            device_name: "Mac".to_string(),
+            path: "/repo/main".to_string(),
+            last_opened_at: "2026-06-26T00:00:00Z".to_string(),
+            created_at: "2026-06-26T00:00:00Z".to_string(),
+            updated_at: "2026-06-26T00:00:00Z".to_string(),
+        };
+        let existing = WorkbenchWorktreeRow {
+            id: "existing-row".to_string(),
+            project_id: "project-1".to_string(),
+            name: "old name".to_string(),
+            branch: Some("old".to_string()),
+            base_branch: Some("main".to_string()),
+            path: "/repo/worktrees/feature-a".to_string(),
+            is_main: false,
+            created_at: "2026-06-25T00:00:00Z".to_string(),
+            updated_at: "2026-06-25T00:00:00Z".to_string(),
+        };
+        let parsed = workbench_git::ParsedWorktree {
+            path: "/repo/worktrees/feature-a/".to_string(),
+            branch: Some("feature/a".to_string()),
+            is_main: false,
+        };
+
+        let row =
+            discovered_git_worktree_row(&project, &parsed, Some(&existing), "2026-06-26T01:00:00Z");
+
+        assert_eq!(row.id, "existing-row");
+        assert_eq!(row.created_at, "2026-06-25T00:00:00Z");
+        assert_eq!(row.updated_at, "2026-06-26T01:00:00Z");
+        assert_eq!(row.name, "feature/a");
+        assert_eq!(row.branch.as_deref(), Some("feature/a"));
+        assert_eq!(row.path, "/repo/worktrees/feature-a");
     }
 }
