@@ -5,7 +5,7 @@
 //!     远端项目能力通过 remote_* 模块逐步扩展，与本机工作台能力共享领域边界。
 //!
 //! Code Logic（这个模块做什么）:
-//!     导出本机项目、文件系统、PTY sessions、远端 ID 映射与 DTO 模块。
+//!     导出本机项目、文件系统、PTY sessions、远端目录浏览、远端 ID 映射与 DTO 模块。
 
 pub mod dependencies;
 pub mod file_content;
@@ -15,6 +15,7 @@ pub mod git;
 pub mod html_assets;
 pub mod models;
 pub mod projects;
+pub mod remote_directory;
 pub mod remote_ids;
 pub mod sessions;
 pub mod sqlite_preview;
