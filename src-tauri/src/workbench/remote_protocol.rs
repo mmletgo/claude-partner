@@ -36,6 +36,47 @@ pub struct RemoteCreateWorktreeReq {
     pub base_branch: Option<String>,
 }
 
+/// 远端 worktree ID 请求体。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     commit/push/merge/remove 等命令只需要定位远端设备上的一个本机 worktree。
+///
+/// Code Logic（这个结构体做什么）:
+///     使用 camelCase 序列化 `{worktreeId}`，供 client 与 axum route 共用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteWorktreeReq {
+    pub worktree_id: String,
+}
+
+/// 远端 commit worktree 请求体。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     本机 remote shortcut 点击 commit 时，提交动作和可选 message 应发送到项目所在设备执行。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存远端本机 worktreeId 与可选提交信息，字段使用 camelCase。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteCommitWorktreeReq {
+    pub worktree_id: String,
+    pub message: Option<String>,
+}
+
+/// 远端删除 worktree 请求体。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     删除远端 worktree 时，用户可能选择强制删除未完全干净的工作区。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存远端本机 worktreeId 和可选 force 开关，字段使用 camelCase。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteRemoveWorktreeReq {
+    pub worktree_id: String,
+    pub force: Option<bool>,
+}
+
 /// 远端 Git 提交列表请求体。
 ///
 /// Business Logic（为什么需要这个结构体）:

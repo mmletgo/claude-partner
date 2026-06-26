@@ -15,11 +15,12 @@ use crate::workbench::models::{
     WorkbenchRemoteRootDto, WorkbenchSaveTextResultDto, WorkbenchSessionDto, WorkbenchWorktreeDto,
 };
 use crate::workbench::remote_protocol::{
-    RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq, RemoteDeletePathReq,
-    RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq, RemoteListDirReq,
-    RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq, RemoteProjectReq,
-    RemoteRenamePathReq, RemoteRenameSessionReq, RemoteResizeSessionReq, RemoteSaveTextReq,
-    RemoteSessionReq, RemoteSplitPaneReq, RemoteWriteSessionInputReq,
+    RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq,
+    RemoteDeletePathReq, RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq,
+    RemoteListDirReq, RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq,
+    RemoteProjectReq, RemoteRemoveWorktreeReq, RemoteRenamePathReq, RemoteRenameSessionReq,
+    RemoteResizeSessionReq, RemoteSaveTextReq, RemoteSessionReq, RemoteSplitPaneReq,
+    RemoteWorktreeReq, RemoteWriteSessionInputReq,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -181,6 +182,116 @@ impl RemoteWorkbenchClient {
         self.post_json(
             endpoint_url(base_url, "/api/workbench/worktrees/create"),
             &req,
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 获取远端本机 worktree。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     id-only remote worktree 命令需要先知道该 worktree 所属远端 projectId，才能映射回本机 shortcut。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/worktrees/get`，请求体 `{worktreeId}`，解析单个 worktree DTO。
+    pub async fn get_worktree(
+        &self,
+        base_url: &str,
+        worktree_id: &str,
+    ) -> Result<WorkbenchWorktreeDto, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/worktrees/get"),
+            &RemoteWorktreeReq {
+                worktree_id: worktree_id.to_string(),
+            },
+            RemoteRequestTimeoutKind::Short,
+        )
+        .await
+    }
+
+    /// 提交远端本机 worktree 的改动。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     remote shortcut 的 Commit 按钮应在项目所在设备执行真实 git commit 和可选 message 生成。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/worktrees/commit`，解析提交后的 worktree DTO。
+    pub async fn commit_worktree(
+        &self,
+        base_url: &str,
+        req: RemoteCommitWorktreeReq,
+    ) -> Result<WorkbenchWorktreeDto, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/worktrees/commit"),
+            &req,
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 推送远端本机 worktree 分支。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     remote shortcut 的 Push 按钮应在远端仓库所在设备执行 git push。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/worktrees/push`，解析推送后的 worktree DTO。
+    pub async fn push_worktree(
+        &self,
+        base_url: &str,
+        worktree_id: &str,
+    ) -> Result<WorkbenchWorktreeDto, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/worktrees/push"),
+            &RemoteWorktreeReq {
+                worktree_id: worktree_id.to_string(),
+            },
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 合并远端本机 worktree。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     remote shortcut 的 Merge 按钮需要在项目所在设备关闭会话、merge 主工作区并清理 worktree。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/worktrees/merge`，返回对端 merge result JSON 供命令层映射 ID。
+    pub async fn merge_worktree(
+        &self,
+        base_url: &str,
+        worktree_id: &str,
+    ) -> Result<Value, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/worktrees/merge"),
+            &RemoteWorktreeReq {
+                worktree_id: worktree_id.to_string(),
+            },
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 删除远端本机 worktree。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     remote shortcut 删除 worktree 时，真实 git worktree remove 和 metadata 清理必须发生在远端。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/worktrees/remove`，返回对端轻量 JSON 供命令层映射 worktreeId。
+    pub async fn remove_worktree(
+        &self,
+        base_url: &str,
+        worktree_id: &str,
+        force: Option<bool>,
+    ) -> Result<Value, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/worktrees/remove"),
+            &RemoteRemoveWorktreeReq {
+                worktree_id: worktree_id.to_string(),
+                force,
+            },
             RemoteRequestTimeoutKind::Long,
         )
         .await

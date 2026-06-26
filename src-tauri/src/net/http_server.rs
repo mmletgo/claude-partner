@@ -104,6 +104,26 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
             post(workbench::create_worktree),
         )
         .route(
+            "/api/workbench/worktrees/get",
+            post(workbench::get_worktree),
+        )
+        .route(
+            "/api/workbench/worktrees/commit",
+            post(workbench::commit_worktree),
+        )
+        .route(
+            "/api/workbench/worktrees/push",
+            post(workbench::push_worktree),
+        )
+        .route(
+            "/api/workbench/worktrees/merge",
+            post(workbench::merge_worktree),
+        )
+        .route(
+            "/api/workbench/worktrees/remove",
+            post(workbench::remove_worktree),
+        )
+        .route(
             "/api/workbench/git/commits",
             post(workbench::list_git_commits),
         )

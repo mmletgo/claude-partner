@@ -27,12 +27,13 @@ use crate::workbench::{
     file_content, file_preview, fs as workbench_fs, git as workbench_git, html_assets, projects,
     remote_client::RemoteWorkbenchClient,
     remote_events::{
-        publish_workbench_remote_event, WorkbenchMergeProgressPayload, WorkbenchRemoteEvent,
+        publish_workbench_remote_event, RemoteEventBridgeProjectMapping,
+        WorkbenchMergeProgressPayload, WorkbenchRemoteEvent,
     },
     remote_ids::{parse_remote_entity_id, remote_entity_id, remote_project_id},
     remote_protocol::{
-        RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq, RemoteDeletePathReq,
-        RemoteRenamePathReq, RemoteSaveTextReq,
+        RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq,
+        RemoteCreateWorktreeReq, RemoteDeletePathReq, RemoteRenamePathReq, RemoteSaveTextReq,
     },
     sqlite_preview,
 };
@@ -79,7 +80,7 @@ struct WorkbenchCommitMessageResponse {
 ///
 /// Code Logic（这个结构体做什么）:
 ///     使用 camelCase 序列化 `{ok, worktreeId, stages}`，stages 内含固定 stage id/status/message。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WorkbenchMergeResultDto {
     ok: bool,
@@ -94,7 +95,7 @@ pub struct WorkbenchMergeResultDto {
 ///
 /// Code Logic（这个结构体做什么）:
 ///     保存 stage id、status 和用户可读 message，字段名与前端约定保持一致。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkbenchMergeStageDto {
     id: String,
     status: String,
@@ -674,6 +675,38 @@ struct RemoteWorkbenchProjectContext {
     inner_project_id: String,
 }
 
+/// 远端 worktree 网关上下文。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     commit/push/merge/remove 只收到 worktreeId，也必须恢复该 worktree 所属远端项目与本机 shortcut。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存设备、base URL、本机 shortcut projectId、远端 projectId 以及远端 worktreeId。
+#[derive(Debug, Clone)]
+struct RemoteWorkbenchWorktreeContext {
+    device_id: String,
+    base_url: String,
+    local_project_id: String,
+    inner_project_id: String,
+    inner_worktree_id: String,
+}
+
+/// worktree-id-only 命令目标。
+///
+/// Business Logic（为什么需要这个枚举）:
+///     只接收 worktreeId 的命令需要先区分本机 worktree 和远端 worktree，避免 remote id 误查本机数据库。
+///
+/// Code Logic（这个枚举做什么）:
+///     Local 保存原始本机 id；Remote 保存解析出的 deviceId 和远端 inner worktreeId。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum WorktreeCommandTarget {
+    Local(String),
+    Remote {
+        device_id: String,
+        inner_worktree_id: String,
+    },
+}
+
 /// Business Logic（为什么需要这个函数）:
 ///     每个 remote shortcut 操作都需要确保远端设备上存在对应的 local 项目记录，才能调用后续路由。
 ///
@@ -699,6 +732,77 @@ async fn ensure_remote_project_context(
         local_project_id: project.id.clone(),
         inner_project_id: remote.id,
     })
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     只接收 worktreeId 的命令无法从参数直接拿到本机 shortcut projectId，需要先向远端查询 worktree 所属项目。
+///
+/// Code Logic（这个函数做什么）:
+///     通过 remote get-worktree 读取远端 DTO，再把 inner projectId 映射到本机 shortcut projectId，并注册事件桥项目映射。
+async fn ensure_remote_worktree_context(
+    state: &AppState,
+    device_id: String,
+    inner_worktree_id: String,
+) -> Result<RemoteWorkbenchWorktreeContext, AppError> {
+    let base_url = device_base_url(state, &device_id)?;
+    let worktree = RemoteWorkbenchClient::new()
+        .get_worktree(&base_url, &inner_worktree_id)
+        .await?;
+    let local_project_id = local_project_id_for_remote_inner_project(
+        state,
+        &device_id,
+        &base_url,
+        &worktree.project_id,
+    )
+    .await?;
+    let context = RemoteWorkbenchWorktreeContext {
+        device_id,
+        base_url,
+        local_project_id,
+        inner_project_id: worktree.project_id,
+        inner_worktree_id,
+    };
+    ensure_remote_event_bridge_for_worktree_context(state, &context);
+    Ok(context)
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端事件桥可能已记录 inner projectId 映射；若未记录，则需要从本机 remote shortcut 列表恢复。
+///
+/// Code Logic（这个函数做什么）:
+///     先查事件桥 registry；缺失时遍历同设备 remote shortcut，通过远端 open-project 对比 inner projectId。
+async fn local_project_id_for_remote_inner_project(
+    state: &AppState,
+    device_id: &str,
+    base_url: &str,
+    inner_project_id: &str,
+) -> Result<String, AppError> {
+    if let Some(project_id) = state
+        .workbench_remote_event_bridges
+        .local_project_id_for(device_id, inner_project_id)
+    {
+        return Ok(project_id);
+    }
+
+    let projects = state.workbench_project_repo.list().await?;
+    for project in projects
+        .iter()
+        .filter(|project| project.kind == "remote" && project.device_id == device_id)
+    {
+        match RemoteWorkbenchClient::new()
+            .open_project(base_url, &project.path)
+            .await
+        {
+            Ok(remote) if remote.id == inner_project_id => return Ok(project.id.clone()),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::debug!("恢复远端 worktree 项目 shortcut 映射失败: {error}");
+            }
+        }
+    }
+    Err(AppError::not_found(
+        "未找到远端 worktree 对应的本机项目快捷方式，请重新打开远端项目",
+    ))
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -781,6 +885,21 @@ fn remote_inner_worktree_id(
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     commit/push/merge/remove 这类只接收 worktreeId 的命令必须先识别 remote id，避免错误查询本机 repo。
+///
+/// Code Logic（这个函数做什么）:
+///     若 worktree_id 是 `remote:<deviceId>:<inner>` 则返回 Remote 目标，否则原样返回 Local 目标。
+fn worktree_command_target(worktree_id: &str) -> Result<WorktreeCommandTarget, AppError> {
+    if let Some(parsed) = parse_remote_entity_id(worktree_id) {
+        return Ok(WorktreeCommandTarget::Remote {
+            device_id: parsed.device_id,
+            inner_worktree_id: parsed.inner_id,
+        });
+    }
+    Ok(WorktreeCommandTarget::Local(worktree_id.to_string()))
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     session-id-only terminal 命令需要从统一 remote sessionId 中取得远端真实 sessionId。
 ///
 /// Code Logic（这个函数做什么）:
@@ -799,10 +918,51 @@ fn remote_inner_session_id(device_id: &str, session_id: &str) -> Result<String, 
 ///
 /// Code Logic（这个函数做什么）:
 ///     委托 AppState 中的 RemoteEventBridgeRegistry 按 device_id 去重启动 `/api/workbench/events` 连接。
-fn ensure_remote_event_bridge(state: &AppState, device_id: &str, base_url: &str) {
+fn ensure_remote_event_bridge_for_context(
+    state: &AppState,
+    context: &RemoteWorkbenchProjectContext,
+) {
+    state.workbench_remote_event_bridges.ensure_bridge(
+        context.device_id.clone(),
+        context.base_url.clone(),
+        Some(RemoteEventBridgeProjectMapping {
+            inner_project_id: context.inner_project_id.clone(),
+            local_project_id: context.local_project_id.clone(),
+        }),
+        state.app_handle.clone(),
+    );
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     id-only remote terminal 命令只有 deviceId/baseUrl，仍应确保事件桥连接但不会新增项目映射。
+///
+/// Code Logic（这个函数做什么）:
+///     委托 registry 以 None project mapping 启动或复用该设备事件桥。
+fn ensure_remote_event_bridge_for_device(state: &AppState, device_id: &str, base_url: &str) {
     state.workbench_remote_event_bridges.ensure_bridge(
         device_id.to_string(),
         base_url.to_string(),
+        None,
+        state.app_handle.clone(),
+    );
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     remote worktree merge progress 需要在 merge 开始前知道 innerProjectId 到本机 shortcut 的映射。
+///
+/// Code Logic（这个函数做什么）:
+///     从 worktree context 注册项目映射并确保对应设备事件桥连接。
+fn ensure_remote_event_bridge_for_worktree_context(
+    state: &AppState,
+    context: &RemoteWorkbenchWorktreeContext,
+) {
+    state.workbench_remote_event_bridges.ensure_bridge(
+        context.device_id.clone(),
+        context.base_url.clone(),
+        Some(RemoteEventBridgeProjectMapping {
+            inner_project_id: context.inner_project_id.clone(),
+            local_project_id: context.local_project_id.clone(),
+        }),
         state.app_handle.clone(),
     );
 }
@@ -1026,6 +1186,25 @@ pub(crate) async fn local_list_workbench_worktrees(
     Ok(rows.iter().map(worktree_to_dto).collect())
 }
 
+/// 获取单个本机 Git worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     远端 HTTP 网关需要通过 worktreeId 读取本机 worktree 所属 projectId，供调用方恢复 remote shortcut 映射。
+///
+/// Code Logic（这个函数做什么）:
+///     从 worktree repo 读取 row，缺失返回 NotFound；存在则注入实时 Git 状态并转为 DTO。
+pub(crate) async fn local_get_workbench_worktree(
+    state: &AppState,
+    worktree_id: String,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(&worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("工作台 worktree 不存在"))?;
+    Ok(worktree_to_dto(&row))
+}
+
 /// 列出项目下的 Git worktree。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -1148,9 +1327,8 @@ pub async fn create_workbench_worktree(
 /// Code Logic（这个函数做什么）:
 ///     message 为空时 stage 全部改动、读取 staged diff、在 worktree cwd 下调用 Claude Code 生成 message 后提交；
 ///     message 非空时保留手写 message 兼容路径；无改动时返回最新 DTO，让前端刷新 stale 状态。
-#[tauri::command]
-pub async fn commit_workbench_worktree(
-    state: State<'_, AppState>,
+pub(crate) async fn local_commit_workbench_worktree(
+    state: &AppState,
     worktree_id: String,
     message: Option<String>,
 ) -> Result<WorkbenchWorktreeDto, AppError> {
@@ -1172,6 +1350,46 @@ pub async fn commit_workbench_worktree(
         return Ok(worktree_to_dto(&row));
     }
     Ok(worktree_to_dto(&row))
+}
+
+/// 提交当前 worktree 的全部改动。
+///
+/// Business Logic（为什么需要这个函数）:
+///     本机 worktree 直接提交，remote worktree 必须转发到项目所在设备，不能误查本机 SQLite。
+///
+/// Code Logic（这个函数做什么）:
+///     先按 worktreeId 解析 Local/Remote；Remote 通过 HTTP commit 后把返回 DTO 的 project/worktree id 映射回本机。
+#[tauri::command]
+pub async fn commit_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+    message: Option<String>,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    match worktree_command_target(&worktree_id)? {
+        WorktreeCommandTarget::Remote {
+            device_id,
+            inner_worktree_id,
+        } => {
+            let context =
+                ensure_remote_worktree_context(&state, device_id, inner_worktree_id).await?;
+            let item = RemoteWorkbenchClient::new()
+                .commit_worktree(
+                    &context.base_url,
+                    RemoteCommitWorktreeReq {
+                        worktree_id: context.inner_worktree_id,
+                        message,
+                    },
+                )
+                .await?;
+            map_remote_worktree_dtos(&context.device_id, &context.local_project_id, vec![item])
+                .into_iter()
+                .next()
+                .ok_or_else(|| AppError::generic("远端 worktree commit 结果为空"))
+        }
+        WorktreeCommandTarget::Local(local_worktree_id) => {
+            local_commit_workbench_worktree(&state, local_worktree_id, message).await
+        }
+    }
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -1268,9 +1486,8 @@ fn build_commit_message_instruction(changes: &workbench_git::StagedCommitChanges
 ///
 /// Code Logic（这个函数做什么）:
 ///     获取 row.branch 或当前 Git 分支，委托 workbench_git 按 upstream/origin 选择推送目标。
-#[tauri::command]
-pub async fn push_workbench_worktree(
-    state: State<'_, AppState>,
+pub(crate) async fn local_push_workbench_worktree(
+    state: &AppState,
     worktree_id: String,
 ) -> Result<WorkbenchWorktreeDto, AppError> {
     let row = state
@@ -1287,6 +1504,39 @@ pub async fn push_workbench_worktree(
     Ok(worktree_to_dto(&row))
 }
 
+/// 推送当前 worktree 分支。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 push 必须发生在远端设备，否则本机没有对应 worktree repo。
+///
+/// Code Logic（这个函数做什么）:
+///     先解析 worktree 目标；Remote 通过 HTTP push 并映射返回 DTO，Local 复用本地 helper。
+#[tauri::command]
+pub async fn push_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    match worktree_command_target(&worktree_id)? {
+        WorktreeCommandTarget::Remote {
+            device_id,
+            inner_worktree_id,
+        } => {
+            let context =
+                ensure_remote_worktree_context(&state, device_id, inner_worktree_id).await?;
+            let item = RemoteWorkbenchClient::new()
+                .push_worktree(&context.base_url, &context.inner_worktree_id)
+                .await?;
+            map_remote_worktree_dtos(&context.device_id, &context.local_project_id, vec![item])
+                .into_iter()
+                .next()
+                .ok_or_else(|| AppError::generic("远端 worktree push 结果为空"))
+        }
+        WorktreeCommandTarget::Local(local_worktree_id) => {
+            local_push_workbench_worktree(&state, local_worktree_id).await
+        }
+    }
+}
+
 /// 合并当前 worktree 到主工作区。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -1296,10 +1546,9 @@ pub async fn push_workbench_worktree(
 /// Code Logic（这个函数做什么）:
 ///     按 checkSource/closeSessions/mergeMain/resolveConflicts/cleanup 五阶段推进；每阶段开始/完成/失败
 ///     emit `workbench:merge-progress`，成功返回 `{ok, worktreeId, stages}`，失败先 emit failed 再返回 AppError。
-#[tauri::command]
-pub async fn merge_workbench_worktree(
+pub(crate) async fn local_merge_workbench_worktree(
     app: AppHandle,
-    state: State<'_, AppState>,
+    state: &AppState,
     worktree_id: String,
 ) -> Result<WorkbenchMergeResultDto, AppError> {
     let mut stages = initial_merge_stages();
@@ -1330,7 +1579,7 @@ pub async fn merge_workbench_worktree(
         ));
     }
     let project = stage_result(
-        get_project(&state, &row.project_id).await,
+        get_project(state, &row.project_id).await,
         &app,
         &project_id,
         &worktree_id,
@@ -1338,7 +1587,7 @@ pub async fn merge_workbench_worktree(
         MERGE_STAGE_CHECK_SOURCE,
     )?;
     let main = stage_result(
-        ensure_main_worktree(&state, &project).await,
+        ensure_main_worktree(state, &project).await,
         &app,
         &project_id,
         &worktree_id,
@@ -1394,7 +1643,7 @@ pub async fn merge_workbench_worktree(
         "正在关闭该 worktree 下的终端窗口",
     );
     let closed_sessions = stage_result(
-        close_sessions_for_worktree(&state, &row.project_id, &row.id).await,
+        close_sessions_for_worktree(state, &row.project_id, &row.id).await,
         &app,
         &project_id,
         &worktree_id,
@@ -1487,7 +1736,7 @@ pub async fn merge_workbench_worktree(
                 "running",
                 "正在调用 Claude Code 尝试解决 merge 冲突",
             );
-            if let Err(error) = resolve_merge_conflicts_with_claude(&state, main_path).await {
+            if let Err(error) = resolve_merge_conflicts_with_claude(state, main_path).await {
                 let message = abort_merge_after_failed_resolution(main_path, &error);
                 return Err(fail_merge_stage(
                     &app,
@@ -1520,7 +1769,7 @@ pub async fn merge_workbench_worktree(
         "正在删除 worktree 元数据、磁盘工作区和已合并分支",
     );
     stage_result(
-        cleanup_merged_worktree(&state, &project, &row).await,
+        cleanup_merged_worktree(state, &project, &row).await,
         &app,
         &project_id,
         &worktree_id,
@@ -1542,6 +1791,53 @@ pub async fn merge_workbench_worktree(
         worktree_id,
         stages,
     })
+}
+
+/// 合并当前 worktree 到主工作区。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote worktree 合并必须在项目所在设备执行，且 merge progress 要能被本机 remote shortcut 页面接收。
+///
+/// Code Logic（这个函数做什么）:
+///     先解析 worktree 目标；Remote 先建立事件桥和项目映射，再调用远端 merge 并映射返回 worktreeId。
+#[tauri::command]
+pub async fn merge_workbench_worktree(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    worktree_id: String,
+) -> Result<WorkbenchMergeResultDto, AppError> {
+    match worktree_command_target(&worktree_id)? {
+        WorktreeCommandTarget::Remote {
+            device_id,
+            inner_worktree_id,
+        } => {
+            let context =
+                ensure_remote_worktree_context(&state, device_id, inner_worktree_id).await?;
+            let value = RemoteWorkbenchClient::new()
+                .merge_worktree(&context.base_url, &context.inner_worktree_id)
+                .await?;
+            map_remote_merge_result_value(&context.device_id, value)
+        }
+        WorktreeCommandTarget::Local(local_worktree_id) => {
+            local_merge_workbench_worktree(app, &state, local_worktree_id).await
+        }
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端 merge result 返回的是对端本机 worktreeId，本机前端需要继续使用 remote worktreeId。
+///
+/// Code Logic（这个函数做什么）:
+///     修改 JSON 中的 `worktreeId` 为 `remote:<deviceId>:<inner>` 后，反序列化为本机命令返回 DTO。
+fn map_remote_merge_result_value(
+    device_id: &str,
+    mut value: Value,
+) -> Result<WorkbenchMergeResultDto, AppError> {
+    if let Some(worktree_id) = value.get("worktreeId").and_then(Value::as_str) {
+        value["worktreeId"] = Value::String(remote_entity_id(device_id, worktree_id));
+    }
+    serde_json::from_value(value)
+        .map_err(|error| AppError::generic(format!("远端 merge 结果解析失败: {error}")))
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -1997,9 +2293,8 @@ fn content_has_conflict_markers(content: &str) -> bool {
 ///
 /// Code Logic（这个函数做什么）:
 ///     阻止删除主 worktree 和仍有关联 terminal window 的 worktree；随后执行 git worktree remove 并删除元数据。
-#[tauri::command]
-pub async fn remove_workbench_worktree(
-    state: State<'_, AppState>,
+pub(crate) async fn local_remove_workbench_worktree(
+    state: &AppState,
     worktree_id: String,
     force: Option<bool>,
 ) -> Result<serde_json::Value, AppError> {
@@ -2030,6 +2325,49 @@ pub async fn remove_workbench_worktree(
     )?;
     state.workbench_worktree_repo.delete(&worktree_id).await?;
     Ok(serde_json::json!({ "ok": true, "worktreeId": worktree_id }))
+}
+
+/// 删除一个非主 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 删除 worktree 时，真实磁盘和 Git metadata 清理必须发生在远端设备。
+///
+/// Code Logic（这个函数做什么）:
+///     先解析 Local/Remote 目标；Remote 通过 HTTP remove，并把返回 JSON 的 worktreeId 映射回 remote id。
+#[tauri::command]
+pub async fn remove_workbench_worktree(
+    state: State<'_, AppState>,
+    worktree_id: String,
+    force: Option<bool>,
+) -> Result<serde_json::Value, AppError> {
+    match worktree_command_target(&worktree_id)? {
+        WorktreeCommandTarget::Remote {
+            device_id,
+            inner_worktree_id,
+        } => {
+            let context =
+                ensure_remote_worktree_context(&state, device_id, inner_worktree_id).await?;
+            let value = RemoteWorkbenchClient::new()
+                .remove_worktree(&context.base_url, &context.inner_worktree_id, force)
+                .await?;
+            Ok(map_remote_worktree_json_value(&context.device_id, value))
+        }
+        WorktreeCommandTarget::Local(local_worktree_id) => {
+            local_remove_workbench_worktree(&state, local_worktree_id, force).await
+        }
+    }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端轻量 JSON 响应可能包含 worktreeId，本机前端不能收到裸远端 inner ID。
+///
+/// Code Logic（这个函数做什么）:
+///     若 JSON object 中有 string `worktreeId`，则替换为 `remote:<deviceId>:<inner>`；其他字段原样保留。
+fn map_remote_worktree_json_value(device_id: &str, mut value: Value) -> Value {
+    if let Some(worktree_id) = value.get("worktreeId").and_then(Value::as_str) {
+        value["worktreeId"] = Value::String(remote_entity_id(device_id, worktree_id));
+    }
+    value
 }
 
 /// 列出当前 worktree 的最近 Git 提交。
@@ -2381,7 +2719,7 @@ pub async fn list_workbench_sessions(
             let items = RemoteWorkbenchClient::new()
                 .list_sessions(&context.base_url, Some(&context.inner_project_id))
                 .await?;
-            ensure_remote_event_bridge(&state, &context.device_id, &context.base_url);
+            ensure_remote_event_bridge_for_context(&state, &context);
             return Ok(map_remote_session_dtos(
                 &context.device_id,
                 &context.local_project_id,
@@ -2443,18 +2781,18 @@ pub async fn create_workbench_session(
     if project.kind == "remote" {
         let context = ensure_remote_project_context(&state, &project).await?;
         let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        ensure_remote_event_bridge_for_context(&state, &context);
         let item = RemoteWorkbenchClient::new()
             .create_session(
                 &context.base_url,
                 RemoteCreateSessionReq {
-                    project_id: context.inner_project_id,
+                    project_id: context.inner_project_id.clone(),
                     worktree_id: inner_worktree_id,
                     initial_cols,
                     initial_rows,
                 },
             )
             .await?;
-        ensure_remote_event_bridge(&state, &context.device_id, &context.base_url);
         return map_remote_session_dtos(&context.device_id, &context.local_project_id, vec![item])
             .into_iter()
             .next()
@@ -2506,7 +2844,7 @@ pub async fn write_workbench_session_input(
         RemoteWorkbenchClient::new()
             .write_input(&base_url, &inner_session_id, &data)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(serde_json::json!({ "ok": true, "sessionId": session_id }));
     }
     local_write_workbench_session_input(&state, session_id, data).await
@@ -2550,7 +2888,7 @@ pub async fn resize_workbench_session(
         RemoteWorkbenchClient::new()
             .resize(&base_url, &inner_session_id, cols, rows)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(serde_json::json!({ "ok": true, "sessionId": session_id }));
     }
     local_resize_workbench_session(&state, session_id, cols, rows).await
@@ -2589,7 +2927,7 @@ pub async fn focus_workbench_session(
         RemoteWorkbenchClient::new()
             .focus(&base_url, &inner_session_id)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(serde_json::json!({ "ok": true, "sessionId": session_id }));
     }
     local_focus_workbench_session(&state, session_id).await
@@ -2620,7 +2958,7 @@ pub async fn get_focused_workbench_session(
             )
             .await?
             .map(|inner| remote_entity_id(&context.device_id, &inner));
-        ensure_remote_event_bridge(&state, &context.device_id, &context.base_url);
+        ensure_remote_event_bridge_for_context(&state, &context);
         return Ok(serde_json::json!({ "sessionId": session_id }));
     }
     let session_id = state
@@ -2672,7 +3010,7 @@ pub async fn split_workbench_pane(
         RemoteWorkbenchClient::new()
             .split_pane(&base_url, &inner_session_id, &direction)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(
             serde_json::json!({ "ok": true, "sessionId": session_id, "direction": direction }),
         );
@@ -2721,7 +3059,7 @@ pub async fn close_workbench_pane(
         let closed_window = RemoteWorkbenchClient::new()
             .close_pane(&base_url, &inner_session_id)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(
             serde_json::json!({ "ok": true, "sessionId": session_id, "closedWindow": closed_window }),
         );
@@ -2776,7 +3114,7 @@ pub async fn close_workbench_session(
         RemoteWorkbenchClient::new()
             .close_session(&base_url, &inner_session_id)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return Ok(serde_json::json!({ "ok": true, "sessionId": session_id }));
     }
     local_close_workbench_session(&state, session_id).await
@@ -2833,7 +3171,7 @@ pub async fn rename_workbench_session(
         let item = RemoteWorkbenchClient::new()
             .rename_session(&base_url, &inner_session_id, &name)
             .await?;
-        ensure_remote_event_bridge(&state, &parsed.device_id, &base_url);
+        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
         return map_remote_session_dtos_with_project(&parsed.device_id, None, vec![item])
             .into_iter()
             .next()
@@ -3353,6 +3691,47 @@ mod tests {
             .expect_err("unprefixed local id should be rejected");
 
         assert_eq!(error.to_string(), "远端 worktree ID 格式无效");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     只接收 worktreeId 的命令必须先识别 remote worktree，否则会错误查询本机 SQLite 并报 NotFound。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     调用命令目标解析 helper，断言 remote:<deviceId>:<inner> 被归类为远端目标并保留 inner worktreeId。
+    #[test]
+    fn worktree_command_target_routes_remote_id_before_local_repo_lookup() {
+        let target = worktree_command_target("remote:device-a:inner-worktree").unwrap();
+
+        assert_eq!(
+            target,
+            WorktreeCommandTarget::Remote {
+                device_id: "device-a".to_string(),
+                inner_worktree_id: "inner-worktree".to_string(),
+            }
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 merge 命令返回值里的 worktreeId 必须仍是本机前端持有的 remote worktree id。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造远端 merge JSON 返回值，经过映射 helper 后断言 worktreeId 加上设备前缀且阶段列表保持可反序列化。
+    #[test]
+    fn map_remote_merge_result_value_prefixes_worktree_id() {
+        let value = serde_json::json!({
+            "ok": true,
+            "worktreeId": "inner-worktree",
+            "stages": [
+                {"id": "checkSource", "status": "completed", "message": "ok"}
+            ]
+        });
+
+        let mapped = map_remote_merge_result_value("device-a", value).unwrap();
+
+        assert!(mapped.ok);
+        assert_eq!(mapped.worktree_id, "remote:device-a:inner-worktree");
+        assert_eq!(mapped.stages.len(), 1);
+        assert_eq!(mapped.stages[0].id, "checkSource");
     }
 
     /// Business Logic（为什么需要这个测试）:

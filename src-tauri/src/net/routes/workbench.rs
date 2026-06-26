@@ -8,13 +8,15 @@
 
 use crate::commands::workbench::{
     add_local_workbench_project_from_path, local_close_workbench_pane,
-    local_close_workbench_session, local_create_workbench_dir, local_create_workbench_file,
-    local_create_workbench_session, local_create_workbench_worktree, local_delete_workbench_path,
-    local_focus_workbench_session, local_get_workbench_path_info, local_list_workbench_dir,
-    local_list_workbench_git_commits, local_list_workbench_sessions,
-    local_list_workbench_worktrees, local_open_workbench_file, local_rename_workbench_path,
-    local_rename_workbench_session, local_resize_workbench_session, local_save_workbench_text_file,
-    local_split_workbench_pane, local_write_workbench_session_input,
+    local_close_workbench_session, local_commit_workbench_worktree, local_create_workbench_dir,
+    local_create_workbench_file, local_create_workbench_session, local_create_workbench_worktree,
+    local_delete_workbench_path, local_focus_workbench_session, local_get_workbench_path_info,
+    local_get_workbench_worktree, local_list_workbench_dir, local_list_workbench_git_commits,
+    local_list_workbench_sessions, local_list_workbench_worktrees, local_merge_workbench_worktree,
+    local_open_workbench_file, local_push_workbench_worktree, local_remove_workbench_worktree,
+    local_rename_workbench_path, local_rename_workbench_session, local_resize_workbench_session,
+    local_save_workbench_text_file, local_split_workbench_pane,
+    local_write_workbench_session_input, WorkbenchMergeResultDto,
 };
 use crate::error::AppError;
 use crate::state::AppState;
@@ -26,11 +28,12 @@ use crate::workbench::models::{
 };
 use crate::workbench::remote_directory;
 use crate::workbench::remote_protocol::{
-    RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq, RemoteDeletePathReq,
-    RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq, RemoteListDirReq,
-    RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq, RemoteProjectReq,
-    RemoteRenamePathReq, RemoteRenameSessionReq, RemoteResizeSessionReq, RemoteSaveTextReq,
-    RemoteSessionReq, RemoteSplitPaneReq, RemoteWriteSessionInputReq,
+    RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq,
+    RemoteDeletePathReq, RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq,
+    RemoteListDirReq, RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq,
+    RemoteProjectReq, RemoteRemoveWorktreeReq, RemoteRenamePathReq, RemoteRenameSessionReq,
+    RemoteResizeSessionReq, RemoteSaveTextReq, RemoteSessionReq, RemoteSplitPaneReq,
+    RemoteWorktreeReq, RemoteWriteSessionInputReq,
 };
 use axum::body::Body;
 use axum::extract::State;
@@ -110,6 +113,23 @@ async fn ensure_remote_gateway_local_session_id(
         .get(session_id)
         .await?
         .ok_or_else(|| AppError::not_found("远端 Workbench 会话不存在"))?;
+    ensure_remote_gateway_local_project_id(state, &row.project_id).await
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     worktree-id-only 远端路由也必须拒绝 remote shortcut worktree，避免网关递归代理。
+///
+/// Code Logic（这个函数做什么）:
+///     从 worktree repo 读取 row，再确认其 project_id 指向本机 local 项目；缺失时返回 NotFound。
+async fn ensure_remote_gateway_local_worktree_id(
+    state: &AppState,
+    worktree_id: &str,
+) -> Result<(), AppError> {
+    let row = state
+        .workbench_worktree_repo
+        .get(worktree_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("远端 Workbench worktree 不存在"))?;
     ensure_remote_gateway_local_project_id(state, &row.project_id).await
 }
 
@@ -203,6 +223,91 @@ pub async fn create_worktree(
     Ok(Json(
         local_create_workbench_worktree(&state, req.project_id, req.branch_name, req.base_branch)
             .await?,
+    ))
+}
+
+/// 获取远端设备本机 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     调用方只有 remote worktree id 时，需要查询该 worktree 的远端 projectId 以恢复本机 shortcut 映射。
+///
+/// Code Logic（这个函数做什么）:
+///     接收本机 local worktreeId，确认所属项目是 local 后返回 worktree DTO。
+pub async fn get_worktree(
+    State(state): State<AppState>,
+    Json(req): Json<RemoteWorktreeReq>,
+) -> Result<Json<WorkbenchWorktreeDto>, AppError> {
+    ensure_remote_gateway_local_worktree_id(&state, &req.worktree_id).await?;
+    Ok(Json(
+        local_get_workbench_worktree(&state, req.worktree_id).await?,
+    ))
+}
+
+/// 提交远端设备本机 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 commit 动作需要在项目所在设备执行，并复用本机 commit message 生成逻辑。
+///
+/// Code Logic（这个函数做什么）:
+///     确认 worktree 属于 local 项目后调用本地 commit helper，返回最新 worktree DTO。
+pub async fn commit_worktree(
+    State(state): State<AppState>,
+    Json(req): Json<RemoteCommitWorktreeReq>,
+) -> Result<Json<WorkbenchWorktreeDto>, AppError> {
+    ensure_remote_gateway_local_worktree_id(&state, &req.worktree_id).await?;
+    Ok(Json(
+        local_commit_workbench_worktree(&state, req.worktree_id, req.message).await?,
+    ))
+}
+
+/// 推送远端设备本机 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 push 动作需要在项目所在设备执行真实 git push。
+///
+/// Code Logic（这个函数做什么）:
+///     确认 worktree 属于 local 项目后调用本地 push helper，返回最新 worktree DTO。
+pub async fn push_worktree(
+    State(state): State<AppState>,
+    Json(req): Json<RemoteWorktreeReq>,
+) -> Result<Json<WorkbenchWorktreeDto>, AppError> {
+    ensure_remote_gateway_local_worktree_id(&state, &req.worktree_id).await?;
+    Ok(Json(
+        local_push_workbench_worktree(&state, req.worktree_id).await?,
+    ))
+}
+
+/// 合并远端设备本机 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 merge 动作需要在项目所在设备推进阶段并发布本机 merge progress 事件。
+///
+/// Code Logic（这个函数做什么）:
+///     确认 worktree 属于 local 项目后调用本地 merge helper，返回 merge result DTO。
+pub async fn merge_worktree(
+    State(state): State<AppState>,
+    Json(req): Json<RemoteWorktreeReq>,
+) -> Result<Json<WorkbenchMergeResultDto>, AppError> {
+    ensure_remote_gateway_local_worktree_id(&state, &req.worktree_id).await?;
+    Ok(Json(
+        local_merge_workbench_worktree(state.app_handle.clone(), &state, req.worktree_id).await?,
+    ))
+}
+
+/// 删除远端设备本机 worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 删除 worktree 时，项目所在设备要执行 git worktree remove 并清理元数据。
+///
+/// Code Logic（这个函数做什么）:
+///     确认 worktree 属于 local 项目后调用本地 remove helper，返回 `{ok, worktreeId}`。
+pub async fn remove_worktree(
+    State(state): State<AppState>,
+    Json(req): Json<RemoteRemoveWorktreeReq>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    ensure_remote_gateway_local_worktree_id(&state, &req.worktree_id).await?;
+    Ok(Json(
+        local_remove_workbench_worktree(&state, req.worktree_id, req.force).await?,
     ))
 }
 
