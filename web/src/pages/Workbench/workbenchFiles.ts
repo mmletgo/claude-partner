@@ -1,4 +1,5 @@
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
+import { parseDocument as parseYamlDocument } from 'yaml';
 
 export type WorkbenchDetectedFileType =
   | 'image'
@@ -6,6 +7,7 @@ export type WorkbenchDetectedFileType =
   | 'code'
   | 'json'
   | 'toml'
+  | 'yaml'
   | 'csv'
   | 'sqlite'
   | 'text'
@@ -78,6 +80,7 @@ const MARKDOWN_EXTENSIONS = new Set(['markdown', 'md', 'mdown', 'mdx', 'mkd']);
 const JSON_EXTENSIONS = new Set(['json']);
 const UNSUPPORTED_JSON_EXTENSIONS = new Set(['jsonc']);
 const TOML_EXTENSIONS = new Set(['toml']);
+const YAML_EXTENSIONS = new Set(['yaml', 'yml']);
 const CSV_EXTENSIONS = new Set(['csv', 'tsv']);
 const SQLITE_EXTENSIONS = new Set(['db', 'sqlite', 'sqlite3']);
 const TEXT_EXTENSIONS = new Set([
@@ -167,8 +170,6 @@ const CODE_EXTENSIONS = new Set([
   'tsx',
   'vue',
   'xml',
-  'yaml',
-  'yml',
   'zsh',
 ]);
 
@@ -206,6 +207,14 @@ const FILE_CAPABILITIES: Record<WorkbenchDetectedFileType, WorkbenchFileCapabili
     availableModes: ['editor'],
   },
   toml: {
+    canPreview: true,
+    canEdit: true,
+    canFormat: true,
+    mustValidateBeforeSave: true,
+    defaultMode: 'editor',
+    availableModes: ['editor'],
+  },
+  yaml: {
     canPreview: true,
     canEdit: true,
     canFormat: true,
@@ -452,6 +461,7 @@ export function detectWorkbenchFileType(filename: string, mime: string | null): 
   if (extension && UNSUPPORTED_JSON_EXTENSIONS.has(extension)) return 'unsupported';
   if (extension && JSON_EXTENSIONS.has(extension)) return 'json';
   if (extension && TOML_EXTENSIONS.has(extension)) return 'toml';
+  if (extension && YAML_EXTENSIONS.has(extension)) return 'yaml';
   if (extension && CSV_EXTENSIONS.has(extension)) return 'csv';
   if (extension && SQLITE_EXTENSIONS.has(extension)) return 'sqlite';
   if (extension && CODE_EXTENSIONS.has(extension)) return 'code';
@@ -462,6 +472,9 @@ export function detectWorkbenchFileType(filename: string, mime: string | null): 
   if (normalizedMime.startsWith('image/')) return 'image';
   if (normalizedMime === 'application/json' || normalizedMime.endsWith('+json')) return 'json';
   if (normalizedMime === 'application/toml' || normalizedMime === 'text/toml') return 'toml';
+  if (normalizedMime === 'application/yaml' || normalizedMime === 'application/x-yaml' || normalizedMime === 'text/yaml') {
+    return 'yaml';
+  }
   if (normalizedMime === 'text/csv' || normalizedMime === 'text/tab-separated-values') return 'csv';
   if (normalizedMime === 'application/vnd.sqlite3' || normalizedMime === 'application/x-sqlite3') return 'sqlite';
   if (normalizedMime === 'application/octet-stream') return 'binary';
@@ -577,6 +590,19 @@ export function validateTomlText(text: string): ValidationResult {
 
 /**
  * Business Logic（为什么需要这个函数）:
+ *   YAML 文件保存前必须阻止语义解析错误写回磁盘，避免破坏项目配置和 CI/workflow 文件。
+ *
+ * Code Logic（这个函数做什么）:
+ *   使用 yaml parseDocument 做语义校验；成功返回 ok，失败返回首个 YAML 错误消息。
+ */
+export function validateYamlText(text: string): ValidationResult {
+  const document = parseYamlDocument(text, { prettyErrors: false });
+  const firstError = document.errors[0];
+  return firstError ? { ok: false, message: firstError.message } : { ok: true, message: null };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
  *   JSON 文件编辑器提供格式化按钮时，需要用同一套严格 JSON 语义避免格式化 JSONC 等非支持格式。
  *
  * Code Logic（这个函数做什么）:
@@ -605,4 +631,21 @@ export function formatTomlText(text: string): FormatResult {
   } catch (error: unknown) {
     return { ok: false, text: null, message: error instanceof Error ? error.message : 'Invalid TOML' };
   }
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   YAML 文件编辑器提供格式化按钮时，需要按语义重排配置文本，但普通保存不应自动格式化。
+ *
+ * Code Logic（这个函数做什么）:
+ *   使用 yaml parseDocument 解析并输出规范 YAML；失败抛出首个错误消息，成功时保证末尾换行。
+ */
+export function formatYamlText(text: string): string {
+  const document = parseYamlDocument(text, { prettyErrors: false });
+  const firstError = document.errors[0];
+  if (firstError) {
+    throw new Error(firstError.message);
+  }
+  const formatted = document.toString();
+  return formatted.endsWith('\n') ? formatted : `${formatted}\n`;
 }

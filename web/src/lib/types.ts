@@ -484,6 +484,7 @@ export type WorkbenchDetectedFileType =
   | 'code'
   | 'json'
   | 'toml'
+  | 'yaml'
   | 'csv'
   | 'sqlite'
   | 'text'

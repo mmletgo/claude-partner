@@ -103,6 +103,7 @@ import {
   isLatestRequest,
   validateJsonText,
   validateTomlText,
+  validateYamlText,
   workbenchDirRequestKey,
   workbenchDirRequestKeyMatchesPath,
 } from './workbenchFiles';
@@ -2118,7 +2119,7 @@ export function Workbench() {
 
   /**
    * Business Logic（为什么需要这个函数）:
-   *   JSON/TOML 保存前必须先做前端语法校验，避免明显错误内容覆盖项目文件。
+   *   JSON/TOML/YAML 保存前必须先做前端语法校验，避免明显错误内容覆盖项目文件。
    *
    * Code Logic（这个函数做什么）:
    *   根据后端 detectedType 选择对应校验器；非结构化文本不做额外校验。
@@ -2135,6 +2136,11 @@ export function Workbench() {
         return result.ok ? null : result.message;
       }
 
+      if (tab.opened.detectedType === 'yaml') {
+        const result = validateYamlText(tab.content);
+        return result.ok ? null : result.message;
+      }
+
       return null;
     },
     [],
@@ -2145,7 +2151,7 @@ export function Workbench() {
    *   用户保存文件 tab 时，需要使用后端 baseHash 乐观锁写回当前 worktree，并刷新文件树元信息。
    *
    * Code Logic（这个函数做什么）:
-   *   找到目标 tab、校验 JSON/TOML、捕获提交内容和请求序号后调用 saveText；响应仍最新时更新保存基线，
+   *   找到目标 tab、校验 JSON/TOML/YAML、捕获提交内容和请求序号后调用 saveText；响应仍最新时更新保存基线，
    *   若保存期间又有内存编辑则保留当前 content 和 dirty=true，否则清除 dirty，并刷新路径信息。
    */
   const handleSaveFileTab = useCallback(
@@ -2258,7 +2264,7 @@ export function Workbench() {
 
   /**
    * Business Logic（为什么需要这个函数）:
-   *   用户需要在保存前格式化 JSON/TOML，但格式化不应自动写盘。
+   *   用户需要在保存前格式化 JSON/TOML/YAML，但格式化不应自动写盘。
    *
    * Code Logic（这个函数做什么）:
    *   捕获提交时的内容、project/worktree 和 tab 请求序号；响应回来后仍是最新请求且内容未变化时，
@@ -2269,7 +2275,9 @@ export function Workbench() {
       const tab = fileTabsRef.current.find((candidate) => candidate.id === id);
       if (!tab) return;
       const kind =
-        tab.opened.detectedType === 'json' || tab.opened.detectedType === 'toml'
+        tab.opened.detectedType === 'json' ||
+        tab.opened.detectedType === 'toml' ||
+        tab.opened.detectedType === 'yaml'
           ? tab.opened.detectedType
           : null;
       if (!kind) return;

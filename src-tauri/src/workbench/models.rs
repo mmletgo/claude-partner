@@ -352,6 +352,7 @@ pub enum WorkbenchDetectedFileType {
     Code,
     Json,
     Toml,
+    Yaml,
     Csv,
     Sqlite,
     Text,

@@ -520,7 +520,7 @@ async fn resolve_workbench_file_path(
 ///     保存文件时不能信任前端声明的文件类型，必须以后端检测出的真实文件名为准，避免只读文件被伪装成文本覆盖。
 ///
 /// Code Logic（这个函数做什么）:
-///     按文件名检测类型；只允许 Markdown/Code/Text/Json/Toml，且 JSON/TOML 会先解析校验但不改变用户内容。
+///     按文件名检测类型；只允许 Markdown/Code/Text/Json/Toml/Yaml，且结构化文件会先解析校验但不改变用户内容。
 fn validate_save_file_type(
     metadata_name: &str,
     content: &str,
@@ -532,6 +532,9 @@ fn validate_save_file_type(
         }
         WorkbenchDetectedFileType::Toml => {
             file_content::format_structured_content("toml", content)?;
+        }
+        WorkbenchDetectedFileType::Yaml => {
+            file_content::format_structured_content("yaml", content)?;
         }
         WorkbenchDetectedFileType::Markdown
         | WorkbenchDetectedFileType::Code
@@ -1674,6 +1677,7 @@ pub async fn open_workbench_file(
         | WorkbenchDetectedFileType::Code
         | WorkbenchDetectedFileType::Json
         | WorkbenchDetectedFileType::Toml
+        | WorkbenchDetectedFileType::Yaml
         | WorkbenchDetectedFileType::Text => {
             let base_modified_at = response.metadata.modified_at.clone();
             let read_path = file_path.clone();
@@ -2198,6 +2202,19 @@ mod tests {
             .expect_err("invalid json should be rejected");
 
         assert!(error.to_string().contains("JSON 格式无效"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     YAML 配置保存前必须由后端做语义校验，避免 Workbench 写入无效结构化配置。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     以 .yaml 文件名触发结构化校验，断言非法 YAML 被拒绝。
+    #[test]
+    fn validate_save_file_type_rejects_invalid_yaml() {
+        let error = validate_save_file_type("config.yaml", "name: [")
+            .expect_err("invalid yaml should be rejected");
+
+        assert!(error.to_string().contains("YAML"));
     }
 
     /// Business Logic（为什么需要这个测试）:

@@ -118,10 +118,10 @@ pub fn save_text_file_atomic(
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     JSON/TOML 文件保存前和编辑中需要可靠格式化，格式错误时必须拒绝，避免写入无效配置。
+///     JSON/TOML/YAML 文件保存前和编辑中需要可靠格式化，格式错误时必须拒绝，避免写入无效配置。
 ///
 /// Code Logic（这个函数做什么）:
-///     根据 kind 分发到 serde_json 或 toml_edit 解析器；解析成功返回格式化文本，未知类型返回业务错误。
+///     根据 kind 分发到 serde_json、toml_edit 或 serde_yaml 解析器；解析成功返回格式化文本，未知类型返回业务错误。
 pub fn format_structured_content(kind: &str, content: &str) -> Result<String, AppError> {
     match kind {
         "json" => {
@@ -136,6 +136,16 @@ pub fn format_structured_content(kind: &str, content: &str) -> Result<String, Ap
                 .parse::<toml_edit::DocumentMut>()
                 .map_err(|err| AppError::generic(format!("TOML 格式无效: {err}")))?;
             Ok(document.to_string())
+        }
+        "yaml" | "yml" => {
+            let value = serde_yaml::from_str::<serde_yaml::Value>(content)
+                .map_err(|err| AppError::generic(format!("YAML 语法错误: {err}")))?;
+            let mut formatted = serde_yaml::to_string(&value)
+                .map_err(|err| AppError::generic(format!("YAML 格式化失败: {err}")))?;
+            if !formatted.ends_with('\n') {
+                formatted.push('\n');
+            }
+            Ok(formatted)
         }
         other => Err(AppError::generic(format!(
             "暂不支持格式化 {other} 类型文件"
@@ -337,6 +347,17 @@ mod tests {
     }
 
     /// Business Logic（为什么需要这个测试）:
+    ///     用户格式化错误 YAML 时必须得到拒绝，避免无效结构化配置被保存。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     传入非法 YAML，断言格式化返回包含 YAML 提示的错误。
+    #[test]
+    fn rejects_invalid_yaml_formatting() {
+        let err = format_structured_content("yaml", "name: [").expect_err("invalid YAML rejected");
+        assert!(err.to_string().contains("YAML"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
     ///     JSON 文件格式化应产出可读缩进，方便用户在文件工作区检查配置。
     ///
     /// Code Logic（这个测试做什么）:
@@ -361,6 +382,20 @@ mod tests {
         assert!(formatted.contains("name"));
         assert!(formatted.contains("cc"));
         assert!(formatted.contains("[tool]"));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     YAML 文件格式化应在合法内容上成功，供 Workbench 结构化配置文件编辑使用。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     输入合法 YAML，断言输出保留关键字段并补齐末尾换行。
+    #[test]
+    fn formats_valid_yaml() {
+        let formatted = format_structured_content("yaml", "name: cc\nitems:\n- one\n")
+            .expect("valid YAML formatted");
+        assert!(formatted.contains("name: cc"));
+        assert!(formatted.contains("items:"));
+        assert!(formatted.ends_with('\n'));
     }
 
     /// Business Logic（为什么需要这个测试）:

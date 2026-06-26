@@ -2,6 +2,9 @@
 // tsx 测试上下文下类型缺失,故局部抑制(运行时 tsx 正常解析;node:fs 是 node 内置,无需安装)。
 // @ts-expect-error - 本仓库 tsconfig 未在 compilerOptions.types 纳入 node,node:fs 类型缺失,运行时 tsx 正常
 import { readFileSync } from 'node:fs';
+// @ts-expect-error - 本仓库 tsconfig 未在 compilerOptions.types 纳入 node,node:process 类型缺失,运行时 tsx 正常
+import { exit } from 'node:process';
+import { getWorkbenchCodeEditorLanguageExtensions } from './workbenchCodeEditorLanguage';
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -38,9 +41,20 @@ async function main(): Promise<void> {
   assertContains(themeSource, 'syntaxHighlighting(WORKBENCH_ONE_DARK_PRO_HIGHLIGHT)', 'CodeMirror syntax highlighting extension is exported');
   assertContains(editorSource, 'WORKBENCH_ONE_DARK_PRO_EXTENSION', 'One Dark Pro extension is injected into the editor');
 
+  if (getWorkbenchCodeEditorLanguageExtensions('yaml').length === 0) {
+    throw new Error('YAML language extension should be registered');
+  }
+
   if (cssSource.includes('.cm-gutters') || cssSource.includes('.cm-activeLine')) {
     throw new Error('CodeMirror internal color selectors should be owned by the One Dark Pro theme extension');
   }
 }
 
-void main();
+void main()
+  .then(() => {
+    exit(0);
+  })
+  .catch((error: unknown) => {
+    console.error(error);
+    exit(1);
+  });
