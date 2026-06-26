@@ -6,6 +6,9 @@
   border: 1px solid var(--border-soft);
   border-radius: var(--radius-md);
   background: var(--surface);
+  transition:
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .editorShell:focus-within {
