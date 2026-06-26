@@ -256,6 +256,9 @@ function Button({ prompt, onDelete }) { /* ❌ prompt 是业务数据 */ }
 | WorkbenchDependencyCard | compact, className | Workbench tmux 依赖状态与安装引导卡片 |
 | WorkbenchCodeEditor | value, language, readOnly, onChange | Workbench 代码/源码文件的 CodeMirror 编辑器 |
 | WorkbenchMarkdownEditor | value, mode, onModeChange, onChange | Workbench Markdown WYSIWYG/source/split 编辑器 |
+| WorkbenchImagePreview | preview, name | Workbench 图片只读预览 |
+| WorkbenchCsvPreview | preview | Workbench CSV 只读表格预览 |
+| WorkbenchSqlitePreview | preview, onSelectTable | Workbench SQLite 只读表/数据预览 |
 
 ## 5. 开发规范
 
