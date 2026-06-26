@@ -922,12 +922,33 @@ fn ensure_remote_event_bridge_for_context(
     state: &AppState,
     context: &RemoteWorkbenchProjectContext,
 ) {
+    ensure_remote_event_bridge_for_project_mapping(
+        state,
+        &context.device_id,
+        &context.base_url,
+        &context.inner_project_id,
+        &context.local_project_id,
+    );
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     id-only remote session/worktree 操作拿到 inner projectId 后，也要把事件桥项目映射补齐。
+///
+/// Code Logic（这个函数做什么）:
+///     用指定 device/base_url 和 inner/local projectId 调 registry，确保桥接任务存在并更新 project 映射。
+fn ensure_remote_event_bridge_for_project_mapping(
+    state: &AppState,
+    device_id: &str,
+    base_url: &str,
+    inner_project_id: &str,
+    local_project_id: &str,
+) {
     state.workbench_remote_event_bridges.ensure_bridge(
-        context.device_id.clone(),
-        context.base_url.clone(),
+        device_id.to_string(),
+        base_url.to_string(),
         Some(RemoteEventBridgeProjectMapping {
-            inner_project_id: context.inner_project_id.clone(),
-            local_project_id: context.local_project_id.clone(),
+            inner_project_id: inner_project_id.to_string(),
+            local_project_id: local_project_id.to_string(),
         }),
         state.app_handle.clone(),
     );
@@ -956,14 +977,12 @@ fn ensure_remote_event_bridge_for_worktree_context(
     state: &AppState,
     context: &RemoteWorkbenchWorktreeContext,
 ) {
-    state.workbench_remote_event_bridges.ensure_bridge(
-        context.device_id.clone(),
-        context.base_url.clone(),
-        Some(RemoteEventBridgeProjectMapping {
-            inner_project_id: context.inner_project_id.clone(),
-            local_project_id: context.local_project_id.clone(),
-        }),
-        state.app_handle.clone(),
+    ensure_remote_event_bridge_for_project_mapping(
+        state,
+        &context.device_id,
+        &context.base_url,
+        &context.inner_project_id,
+        &context.local_project_id,
     );
 }
 
@@ -2705,7 +2724,7 @@ pub(crate) async fn local_list_workbench_sessions(
 ///     前端需要按项目查看本机或远端 terminal window；未选项目时保持本机列表，避免轮询全部远端设备。
 ///
 /// Code Logic（这个函数做什么）:
-///     project_id 指向 remote shortcut 时转发到远端并映射 session/worktree id；否则调用本地 helper。
+///     project_id 指向 remote shortcut 时先建立事件桥与项目映射，再转发到远端并映射 session/worktree id；否则调用本地 helper。
 #[tauri::command]
 pub async fn list_workbench_sessions(
     state: State<'_, AppState>,
@@ -2716,10 +2735,10 @@ pub async fn list_workbench_sessions(
         let project = get_project(&state, project_id_value).await?;
         if project.kind == "remote" {
             let context = ensure_remote_project_context(&state, &project).await?;
+            ensure_remote_event_bridge_for_context(&state, &context);
             let items = RemoteWorkbenchClient::new()
                 .list_sessions(&context.base_url, Some(&context.inner_project_id))
                 .await?;
-            ensure_remote_event_bridge_for_context(&state, &context);
             return Ok(map_remote_session_dtos(
                 &context.device_id,
                 &context.local_project_id,
@@ -3158,7 +3177,7 @@ pub(crate) async fn local_rename_workbench_session(
 ///     remote terminal tab 重命名应写入远端 registry/SQLite/tmux window，本机只接收映射后的 DTO。
 ///
 /// Code Logic（这个函数做什么）:
-///     remote sessionId 走远端 rename 并映射返回 DTO；local sessionId 调用本地 helper。
+///     remote sessionId 走远端 rename，按返回 inner projectId 恢复本机 shortcut projectId 后映射 DTO；local sessionId 调用本地 helper。
 #[tauri::command]
 pub async fn rename_workbench_session(
     state: State<'_, AppState>,
@@ -3171,11 +3190,28 @@ pub async fn rename_workbench_session(
         let item = RemoteWorkbenchClient::new()
             .rename_session(&base_url, &inner_session_id, &name)
             .await?;
-        ensure_remote_event_bridge_for_device(&state, &parsed.device_id, &base_url);
-        return map_remote_session_dtos_with_project(&parsed.device_id, None, vec![item])
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::generic("远端 session 重命名结果为空"));
+        let local_project_id = local_project_id_for_remote_inner_project(
+            &state,
+            &parsed.device_id,
+            &base_url,
+            &item.project_id,
+        )
+        .await?;
+        ensure_remote_event_bridge_for_project_mapping(
+            &state,
+            &parsed.device_id,
+            &base_url,
+            &item.project_id,
+            &local_project_id,
+        );
+        return map_remote_session_dtos_with_project(
+            &parsed.device_id,
+            Some(&local_project_id),
+            vec![item],
+        )
+        .into_iter()
+        .next()
+        .ok_or_else(|| AppError::generic("远端 session 重命名结果为空"));
     }
     local_rename_workbench_session(&state, session_id, name).await
 }
@@ -3635,6 +3671,41 @@ mod tests {
             mapped[0].worktree_id.as_deref(),
             Some("remote:device-a:inner-worktree")
         );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     remote rename 这类 session-id-only 返回 DTO 也必须恢复本机 remote shortcut projectId。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     调用底层 session 映射 helper 并传入 local_project_id，断言 project_id 不退化为 inner project 的 remote entity。
+    #[test]
+    fn map_remote_session_dtos_with_project_uses_shortcut_for_remote_rename() {
+        let items = vec![WorkbenchSessionDto {
+            id: "inner-session".to_string(),
+            project_id: "inner-project".to_string(),
+            worktree_id: None,
+            name: "Renamed".to_string(),
+            command: "/bin/zsh".to_string(),
+            cwd: "/remote/repo".to_string(),
+            status: "running".to_string(),
+            cols: 120,
+            rows: 36,
+            started_at: "2026-06-26T00:00:00Z".to_string(),
+            exited_at: None,
+            exit_code: None,
+            supports_panes: true,
+            pane_count: 1,
+        }];
+
+        let mapped = map_remote_session_dtos_with_project(
+            "device-a",
+            Some("remote:device-a:project-hash"),
+            items,
+        );
+
+        assert_eq!(mapped[0].id, "remote:device-a:inner-session");
+        assert_eq!(mapped[0].project_id, "remote:device-a:project-hash");
+        assert_ne!(mapped[0].project_id, "remote:device-a:inner-project");
     }
 
     /// Business Logic（为什么需要这个测试）:

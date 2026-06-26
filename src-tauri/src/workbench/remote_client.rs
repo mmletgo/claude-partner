@@ -28,19 +28,21 @@ use std::time::Duration;
 
 const SHORT_REMOTE_WORKBENCH_TIMEOUT_SECS: u64 = 15;
 const LONG_REMOTE_WORKBENCH_TIMEOUT_SECS: u64 = 120;
+const VERY_LONG_REMOTE_WORKBENCH_TIMEOUT_SECS: u64 = 420;
 const REMOTE_ERROR_BODY_MAX_CHARS: usize = 240;
 
 /// 远端请求超时类别。
 ///
 /// Business Logic（为什么需要这个枚举）:
-///     Workbench 既有目录浏览这类短读操作，也有创建 worktree、保存文件等可能耗时的远端操作。
+///     Workbench 既有目录浏览这类短读操作，也有创建 worktree、保存文件、commit/merge 等耗时远端操作。
 ///
 /// Code Logic（这个枚举做什么）:
-///     区分短请求和长请求，供每个 reqwest request 单独设置 timeout。
+///     区分短请求、长请求和覆盖 Claude Code 子流程的超长请求，供每个 reqwest request 单独设置 timeout。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemoteRequestTimeoutKind {
     Short,
     Long,
+    VeryLong,
 }
 
 /// Workbench 远端 HTTP 客户端。
@@ -215,7 +217,7 @@ impl RemoteWorkbenchClient {
     ///     remote shortcut 的 Commit 按钮应在项目所在设备执行真实 git commit 和可选 message 生成。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     POST `{base_url}/api/workbench/worktrees/commit`，解析提交后的 worktree DTO。
+    ///     POST `{base_url}/api/workbench/worktrees/commit`，用 very-long timeout 解析提交后的 worktree DTO。
     pub async fn commit_worktree(
         &self,
         base_url: &str,
@@ -224,7 +226,7 @@ impl RemoteWorkbenchClient {
         self.post_json(
             endpoint_url(base_url, "/api/workbench/worktrees/commit"),
             &req,
-            RemoteRequestTimeoutKind::Long,
+            commit_worktree_timeout_kind(),
         )
         .await
     }
@@ -257,7 +259,7 @@ impl RemoteWorkbenchClient {
     ///     remote shortcut 的 Merge 按钮需要在项目所在设备关闭会话、merge 主工作区并清理 worktree。
     ///
     /// Code Logic（这个函数做什么）:
-    ///     POST `{base_url}/api/workbench/worktrees/merge`，返回对端 merge result JSON 供命令层映射 ID。
+    ///     POST `{base_url}/api/workbench/worktrees/merge`，用 very-long timeout 返回对端 merge result JSON 供命令层映射 ID。
     pub async fn merge_worktree(
         &self,
         base_url: &str,
@@ -268,7 +270,7 @@ impl RemoteWorkbenchClient {
             &RemoteWorktreeReq {
                 worktree_id: worktree_id.to_string(),
             },
-            RemoteRequestTimeoutKind::Long,
+            merge_worktree_timeout_kind(),
         )
         .await
     }
@@ -826,7 +828,28 @@ fn remote_request_timeout(kind: RemoteRequestTimeoutKind) -> Duration {
     match kind {
         RemoteRequestTimeoutKind::Short => Duration::from_secs(SHORT_REMOTE_WORKBENCH_TIMEOUT_SECS),
         RemoteRequestTimeoutKind::Long => Duration::from_secs(LONG_REMOTE_WORKBENCH_TIMEOUT_SECS),
+        RemoteRequestTimeoutKind::VeryLong => {
+            Duration::from_secs(VERY_LONG_REMOTE_WORKBENCH_TIMEOUT_SECS)
+        }
     }
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端 commit 可能在对端运行 180s commit message 生成，本机 HTTP 客户端不能提前超时。
+///
+/// Code Logic（这个函数做什么）:
+///     返回 commit-worktree 请求专用的超长 timeout 类别，供方法和测试复用。
+fn commit_worktree_timeout_kind() -> RemoteRequestTimeoutKind {
+    RemoteRequestTimeoutKind::VeryLong
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端 merge 冲突处理可能在对端运行 300s Claude Code 流程，本机 HTTP 客户端不能提前超时。
+///
+/// Code Logic（这个函数做什么）:
+///     返回 merge-worktree 请求专用的超长 timeout 类别，供方法和测试复用。
+fn merge_worktree_timeout_kind() -> RemoteRequestTimeoutKind {
+    RemoteRequestTimeoutKind::VeryLong
 }
 
 /// Business Logic（为什么需要这个函数）:
@@ -963,6 +986,29 @@ mod tests {
             remote_request_timeout(RemoteRequestTimeoutKind::Long),
             Duration::from_secs(120)
         );
+        assert_eq!(
+            remote_request_timeout(RemoteRequestTimeoutKind::VeryLong),
+            Duration::from_secs(420)
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 commit/merge 会包住本机 180s commit message 与 300s merge 冲突处理流程，HTTP 超时不能先断开。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     校验 commit/merge 的 timeout kind 均使用 very-long，且具体秒数覆盖本机长操作上限。
+    #[test]
+    fn commit_and_merge_use_very_long_timeout() {
+        assert_eq!(
+            commit_worktree_timeout_kind(),
+            RemoteRequestTimeoutKind::VeryLong
+        );
+        assert_eq!(
+            merge_worktree_timeout_kind(),
+            RemoteRequestTimeoutKind::VeryLong
+        );
+        assert!(remote_request_timeout(commit_worktree_timeout_kind()) >= Duration::from_secs(180));
+        assert!(remote_request_timeout(merge_worktree_timeout_kind()) >= Duration::from_secs(300));
     }
 
     /// Business Logic（为什么需要这个测试）:
