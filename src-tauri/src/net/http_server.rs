@@ -95,6 +95,50 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
             "/api/workbench/projects/open",
             post(workbench::open_remote_project),
         )
+        .route(
+            "/api/workbench/worktrees/list",
+            post(workbench::list_worktrees),
+        )
+        .route(
+            "/api/workbench/worktrees/create",
+            post(workbench::create_worktree),
+        )
+        .route(
+            "/api/workbench/git/commits",
+            post(workbench::list_git_commits),
+        )
+        .route(
+            "/api/workbench/files/list-dir",
+            post(workbench::list_workbench_dir),
+        )
+        .route(
+            "/api/workbench/files/info",
+            post(workbench::workbench_path_info),
+        )
+        .route(
+            "/api/workbench/files/open",
+            post(workbench::open_workbench_file),
+        )
+        .route(
+            "/api/workbench/files/save-text",
+            post(workbench::save_workbench_text_file),
+        )
+        .route(
+            "/api/workbench/files/create-file",
+            post(workbench::create_workbench_file),
+        )
+        .route(
+            "/api/workbench/files/create-dir",
+            post(workbench::create_workbench_dir),
+        )
+        .route(
+            "/api/workbench/files/rename",
+            post(workbench::rename_workbench_path),
+        )
+        .route(
+            "/api/workbench/files/delete",
+            post(workbench::delete_workbench_path),
+        )
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .with_state(state.clone());
 

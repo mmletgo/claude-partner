@@ -25,7 +25,13 @@ use crate::workbench::sessions::{
 };
 use crate::workbench::{
     file_content, file_preview, fs as workbench_fs, git as workbench_git, html_assets, projects,
-    remote_client::RemoteWorkbenchClient, remote_ids::remote_project_id, sqlite_preview,
+    remote_client::RemoteWorkbenchClient,
+    remote_ids::{parse_remote_entity_id, remote_entity_id, remote_project_id},
+    remote_protocol::{
+        RemoteCreatePathReq, RemoteCreateWorktreeReq, RemoteDeletePathReq, RemoteRenamePathReq,
+        RemoteSaveTextReq,
+    },
+    sqlite_preview,
 };
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -650,6 +656,88 @@ fn build_remote_project_shortcut_row(
     }
 }
 
+/// 远端项目网关上下文。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     本机 remote shortcut 只保存设备 ID 和远端真实路径；执行 worktree/Git/files 操作前需要恢复远端 local 项目 ID。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存设备 ID、对端 base URL、本机 shortcut projectId，以及远端设备上的 local projectId。
+#[derive(Debug, Clone)]
+struct RemoteWorkbenchProjectContext {
+    device_id: String,
+    base_url: String,
+    local_project_id: String,
+    inner_project_id: String,
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     每个 remote shortcut 操作都需要确保远端设备上存在对应的 local 项目记录，才能调用后续路由。
+///
+/// Code Logic（这个函数做什么）:
+///     校验 project.kind 为 remote，按 device_id 找 base URL，调用远端 open-project 用 path 恢复/创建远端 local project。
+async fn ensure_remote_project_context(
+    state: &AppState,
+    project: &WorkbenchProjectRow,
+) -> Result<RemoteWorkbenchProjectContext, AppError> {
+    if project.kind != "remote" {
+        return Err(AppError::generic("当前项目不是远端项目"));
+    }
+    if project.device_id.trim().is_empty() {
+        return Err(AppError::generic("远端项目缺少设备 ID"));
+    }
+    let base_url = device_base_url(state, &project.device_id)?;
+    let remote = RemoteWorkbenchClient::new()
+        .open_project(&base_url, &project.path)
+        .await?;
+    Ok(RemoteWorkbenchProjectContext {
+        device_id: project.device_id.clone(),
+        base_url,
+        local_project_id: project.id.clone(),
+        inner_project_id: remote.id,
+    })
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     远端返回的 worktree id 只能在远端设备上使用，本机前端需要带设备前缀的统一 ID。
+///
+/// Code Logic（这个函数做什么）:
+///     遍历远端 worktree DTO，把 id 映射为 `remote:<device_id>:<inner_id>`，project_id 改回本机 shortcut id。
+fn map_remote_worktree_dtos(
+    device_id: &str,
+    local_project_id: &str,
+    items: Vec<WorkbenchWorktreeDto>,
+) -> Vec<WorkbenchWorktreeDto> {
+    items
+        .into_iter()
+        .map(|mut item| {
+            item.id = remote_entity_id(device_id, &item.id);
+            item.project_id = local_project_id.to_string();
+            item
+        })
+        .collect()
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     本机前端传回的 remote worktreeId 需要剥掉设备前缀后才能发给远端设备。
+///
+/// Code Logic（这个函数做什么）:
+///     None 表示远端主 worktree；Some 必须是当前 device_id 的 `remote:<device_id>:<inner>`，成功返回 inner id。
+fn remote_inner_worktree_id(
+    device_id: &str,
+    worktree_id: Option<String>,
+) -> Result<Option<String>, AppError> {
+    let Some(worktree_id) = worktree_id else {
+        return Ok(None);
+    };
+    let parsed = parse_remote_entity_id(&worktree_id)
+        .ok_or_else(|| AppError::generic("远端 worktree ID 格式无效"))?;
+    if parsed.device_id != device_id {
+        return Err(AppError::generic("远端 worktree 不属于当前设备"));
+    }
+    Ok(Some(parsed.inner_id))
+}
+
 /// 添加或重新打开一个本机项目文件夹的共享实现。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -855,19 +943,45 @@ pub async fn touch_workbench_project(
 ///
 /// Code Logic（这个函数做什么）:
 ///     确保主 worktree 存在，同步 Git 已有 worktree 到 SQLite，再注入实时 Git 状态 DTO。
+pub(crate) async fn local_list_workbench_worktrees(
+    state: &AppState,
+    project_id: String,
+) -> Result<Vec<WorkbenchWorktreeDto>, AppError> {
+    let project = get_project(state, &project_id).await?;
+    ensure_main_worktree(state, &project).await?;
+    sync_git_worktrees(state, &project).await?;
+    let rows = state
+        .workbench_worktree_repo
+        .list_by_project(&project_id)
+        .await?;
+    Ok(rows.iter().map(worktree_to_dto).collect())
+}
+
+/// 列出项目下的 Git worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 顶部需要用 worktree 管理层替代项目路径说明，让用户在主工作区和功能 worktree 间切换。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目先恢复远端 local project id 并转发到对端；local 项目走原有本机 helper。
 #[tauri::command]
 pub async fn list_workbench_worktrees(
     state: State<'_, AppState>,
     project_id: String,
 ) -> Result<Vec<WorkbenchWorktreeDto>, AppError> {
     let project = get_project(&state, &project_id).await?;
-    ensure_main_worktree(&state, &project).await?;
-    sync_git_worktrees(&state, &project).await?;
-    let rows = state
-        .workbench_worktree_repo
-        .list_by_project(&project_id)
-        .await?;
-    Ok(rows.iter().map(worktree_to_dto).collect())
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let items = RemoteWorkbenchClient::new()
+            .list_worktrees(&context.base_url, &context.inner_project_id)
+            .await?;
+        return Ok(map_remote_worktree_dtos(
+            &context.device_id,
+            &context.local_project_id,
+            items,
+        ));
+    }
+    local_list_workbench_worktrees(&state, project_id).await
 }
 
 /// 创建一个项目 Git worktree。
@@ -877,14 +991,13 @@ pub async fn list_workbench_worktrees(
 ///
 /// Code Logic（这个函数做什么）:
 ///     校验 Git 仓库和分支名，生成应用数据目录下的 worktree 路径，执行 `git worktree add -b` 并持久化 row。
-#[tauri::command]
-pub async fn create_workbench_worktree(
-    state: State<'_, AppState>,
+pub(crate) async fn local_create_workbench_worktree(
+    state: &AppState,
     project_id: String,
     branch_name: String,
     base_branch: Option<String>,
 ) -> Result<WorkbenchWorktreeDto, AppError> {
-    let project = get_project(&state, &project_id).await?;
+    let project = get_project(state, &project_id).await?;
     let branch = branch_name.trim();
     if branch.is_empty() {
         return Err(AppError::generic("分支名不能为空"));
@@ -921,6 +1034,41 @@ pub async fn create_workbench_worktree(
     };
     state.workbench_worktree_repo.upsert(&row).await?;
     Ok(worktree_to_dto(&row))
+}
+
+/// 创建一个项目 Git worktree。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户希望在 Workbench 中直接从当前项目切出独立工作区，后续 terminal window、文件树和 Prompt 优化都绑定该路径。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把创建请求转发到远端设备并映射返回 ID；local 项目走原有本机 helper。
+#[tauri::command]
+pub async fn create_workbench_worktree(
+    state: State<'_, AppState>,
+    project_id: String,
+    branch_name: String,
+    base_branch: Option<String>,
+) -> Result<WorkbenchWorktreeDto, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let item = RemoteWorkbenchClient::new()
+            .create_worktree(
+                &context.base_url,
+                RemoteCreateWorktreeReq {
+                    project_id: context.inner_project_id,
+                    branch_name,
+                    base_branch,
+                },
+            )
+            .await?;
+        return map_remote_worktree_dtos(&context.device_id, &context.local_project_id, vec![item])
+            .into_iter()
+            .next()
+            .ok_or_else(|| AppError::generic("远端 worktree 创建结果为空"));
+    }
+    local_create_workbench_worktree(&state, project_id, branch_name, base_branch).await
 }
 
 /// 提交当前 worktree 的全部改动。
@@ -1814,6 +1962,25 @@ pub async fn remove_workbench_worktree(
 ///
 /// Code Logic（这个函数做什么）:
 ///     解析 project/worktree 根路径，按 limit 调用 `git log` helper；limit 默认 30，最大 100。
+pub(crate) async fn local_list_workbench_git_commits(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<WorkbenchGitCommitDto>, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let limit = limit.unwrap_or(30).clamp(1, 100);
+    workbench_git::list_commits(Path::new(&worktree.path), limit)
+}
+
+/// 列出当前 worktree 的最近 Git 提交。
+///
+/// Business Logic（为什么需要这个函数）:
+///     Workbench 右侧 Git 历史 tab 需要展示 active worktree 的提交历史，辅助用户确认 commit/merge 结果。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把 worktreeId 去掉远端前缀后转发；local 项目走原有本机 Git helper。
 #[tauri::command]
 pub async fn list_workbench_git_commits(
     state: State<'_, AppState>,
@@ -1822,9 +1989,20 @@ pub async fn list_workbench_git_commits(
     limit: Option<usize>,
 ) -> Result<Vec<WorkbenchGitCommitDto>, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let limit = limit.unwrap_or(30).clamp(1, 100);
-    workbench_git::list_commits(Path::new(&worktree.path), limit)
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        let limit = limit.unwrap_or(30).clamp(1, 100) as i64;
+        return RemoteWorkbenchClient::new()
+            .list_git_commits(
+                &context.base_url,
+                &context.inner_project_id,
+                inner_worktree_id.as_deref(),
+                limit,
+            )
+            .await;
+    }
+    local_list_workbench_git_commits(&state, project_id, worktree_id, limit).await
 }
 
 /// 打开当前 worktree 内的文件。
@@ -1835,15 +2013,14 @@ pub async fn list_workbench_git_commits(
 /// Code Logic（这个函数做什么）:
 ///     解析 project/worktree 和安全文件路径，按后端检测类型分发到文本（含 Markdown/HTML）、图片、CSV 或 SQLite 预览；
 ///     内容超限、非 UTF-8 或预览失败时返回 notice，不让一次预览失败阻断文件 tab 打开。
-#[tauri::command]
-pub async fn open_workbench_file(
-    state: State<'_, AppState>,
+pub(crate) async fn local_open_workbench_file(
+    state: &AppState,
     project_id: String,
     worktree_id: Option<String>,
     path: String,
 ) -> Result<WorkbenchOpenFileDto, AppError> {
-    let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
     let root = PathBuf::from(worktree.path);
     let (metadata, file_path) = resolve_workbench_file_path(root, path).await?;
     let detected_type = file_preview::detect_file_type(&metadata.name);
@@ -1926,6 +2103,36 @@ pub async fn open_workbench_file(
     Ok(response)
 }
 
+/// 打开当前 worktree 内的文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     文件工作区需要一次拿到文件 metadata、类型能力和可用的内容/预览数据，供前端打开 tab。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把请求转发到远端设备；local 项目走原有本机文件打开 helper。
+#[tauri::command]
+pub async fn open_workbench_file(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+) -> Result<WorkbenchOpenFileDto, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .open_file(
+                &context.base_url,
+                &context.inner_project_id,
+                inner_worktree_id.as_deref(),
+                &path,
+            )
+            .await;
+    }
+    local_open_workbench_file(&state, project_id, worktree_id, path).await
+}
+
 /// 保存当前 worktree 内的文本文件。
 ///
 /// Business Logic（为什么需要这个函数）:
@@ -1934,17 +2141,16 @@ pub async fn open_workbench_file(
 /// Code Logic（这个函数做什么）:
 ///     先解析安全文件路径并以后端 metadata.name 重新检测真实类型；JSON/TOML 做语义校验但不强制格式化；
 ///     随后调用原子保存 helper，并返回最新 metadata 与 hash 基线。
-#[tauri::command]
-pub async fn save_workbench_text_file(
-    state: State<'_, AppState>,
+pub(crate) async fn local_save_workbench_text_file(
+    state: &AppState,
     project_id: String,
     worktree_id: Option<String>,
     path: String,
     content: String,
     base_hash: String,
 ) -> Result<WorkbenchSaveTextResultDto, AppError> {
-    let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
     let root = PathBuf::from(worktree.path);
     let save_root = root.clone();
     let save_path = path.clone();
@@ -1962,6 +2168,42 @@ pub async fn save_workbench_text_file(
         base_hash,
         base_modified_at,
     })
+}
+
+/// 保存当前 worktree 内的文本文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     文件工作区编辑器需要安全保存 Markdown、代码、文本和结构化配置，同时防止覆盖外部修改。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把 content/baseHash 转发到远端设备执行；local 项目走原有本机保存 helper。
+#[tauri::command]
+pub async fn save_workbench_text_file(
+    state: State<'_, AppState>,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    content: String,
+    base_hash: String,
+) -> Result<WorkbenchSaveTextResultDto, AppError> {
+    let project = get_project(&state, &project_id).await?;
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .save_text_file(
+                &context.base_url,
+                RemoteSaveTextReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    path,
+                    content,
+                    base_hash,
+                },
+            )
+            .await;
+    }
+    local_save_workbench_text_file(&state, project_id, worktree_id, path, content, base_hash).await
 }
 
 /// 格式化 JSON 或 TOML 内容。
@@ -2266,6 +2508,26 @@ pub async fn rename_workbench_session(
 ///
 /// Code Logic（这个函数做什么）:
 ///     读取项目根路径，把阻塞 list_dir 放入 spawn_blocking 执行；path 为空表示项目根。
+pub(crate) async fn local_list_workbench_dir(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: Option<String>,
+) -> Result<Vec<WorkbenchFileNode>, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let relative = path.unwrap_or_default();
+    run_blocking_fs(move || workbench_fs::list_dir(&root, &relative)).await
+}
+
+/// 列出项目目录下的一级文件节点。
+///
+/// Business Logic（为什么需要这个函数）:
+///     右侧检查器需要交互式展开项目文件夹，本期先提供文件树，后续再做文件预览。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把相对路径转发到远端设备；local 项目走原有本机文件树 helper。
 #[tauri::command]
 pub async fn list_workbench_dir(
     state: State<'_, AppState>,
@@ -2274,10 +2536,19 @@ pub async fn list_workbench_dir(
     path: Option<String>,
 ) -> Result<Vec<WorkbenchFileNode>, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    let relative = path.unwrap_or_default();
-    run_blocking_fs(move || workbench_fs::list_dir(&root, &relative)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .list_workbench_dir(
+                &context.base_url,
+                &context.inner_project_id,
+                inner_worktree_id.as_deref(),
+                path.as_deref(),
+            )
+            .await;
+    }
+    local_list_workbench_dir(&state, project_id, worktree_id, path).await
 }
 
 /// 查询项目内某个路径的信息。
@@ -2287,6 +2558,25 @@ pub async fn list_workbench_dir(
 ///
 /// Code Logic（这个函数做什么）:
 ///     在 blocking pool 中调用 path_info，并保留项目根路径边界检查。
+pub(crate) async fn local_get_workbench_path_info(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+) -> Result<WorkbenchPathInfo, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    run_blocking_fs(move || workbench_fs::path_info(&root, &path)).await
+}
+
+/// 查询项目内某个路径的信息。
+///
+/// Business Logic（为什么需要这个函数）:
+///     前端选中文件或文件夹后，需要在检查器里显示类型、大小和更新时间。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把请求转发到远端设备；local 项目走原有本机 path_info helper。
 #[tauri::command]
 pub async fn get_workbench_path_info(
     state: State<'_, AppState>,
@@ -2295,9 +2585,19 @@ pub async fn get_workbench_path_info(
     path: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    run_blocking_fs(move || workbench_fs::path_info(&root, &path)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .workbench_path_info(
+                &context.base_url,
+                &context.inner_project_id,
+                inner_worktree_id.as_deref(),
+                &path,
+            )
+            .await;
+    }
+    local_get_workbench_path_info(&state, project_id, worktree_id, path).await
 }
 
 /// 在项目内创建文件。
@@ -2307,6 +2607,26 @@ pub async fn get_workbench_path_info(
 ///
 /// Code Logic（这个函数做什么）:
 ///     在 blocking pool 中验证父路径与单个文件名，create_new 空文件后返回 PathInfo。
+pub(crate) async fn local_create_workbench_file(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    parent_path: String,
+    name: String,
+) -> Result<WorkbenchPathInfo, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    run_blocking_fs(move || workbench_fs::create_file(&root, &parent_path, &name)).await
+}
+
+/// 在项目内创建文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户可从工作台快速创建项目文件，为后续代码或文档编辑打基础。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把创建请求转发到远端设备；local 项目走原有本机 create_file helper。
 #[tauri::command]
 pub async fn create_workbench_file(
     state: State<'_, AppState>,
@@ -2316,9 +2636,22 @@ pub async fn create_workbench_file(
     name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    run_blocking_fs(move || workbench_fs::create_file(&root, &parent_path, &name)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .create_file(
+                &context.base_url,
+                RemoteCreatePathReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    parent_path,
+                    name,
+                },
+            )
+            .await;
+    }
+    local_create_workbench_file(&state, project_id, worktree_id, parent_path, name).await
 }
 
 /// 在项目内创建文件夹。
@@ -2328,6 +2661,26 @@ pub async fn create_workbench_file(
 ///
 /// Code Logic（这个函数做什么）:
 ///     在 blocking pool 中验证父路径与单个目录名，创建目录后返回 PathInfo。
+pub(crate) async fn local_create_workbench_dir(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    parent_path: String,
+    name: String,
+) -> Result<WorkbenchPathInfo, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    run_blocking_fs(move || workbench_fs::create_dir(&root, &parent_path, &name)).await
+}
+
+/// 在项目内创建文件夹。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户可从工作台整理项目结构，新建文件夹承载代码、素材或文档。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把创建请求转发到远端设备；local 项目走原有本机 create_dir helper。
 #[tauri::command]
 pub async fn create_workbench_dir(
     state: State<'_, AppState>,
@@ -2337,9 +2690,22 @@ pub async fn create_workbench_dir(
     name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    run_blocking_fs(move || workbench_fs::create_dir(&root, &parent_path, &name)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .create_dir(
+                &context.base_url,
+                RemoteCreatePathReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    parent_path,
+                    name,
+                },
+            )
+            .await;
+    }
+    local_create_workbench_dir(&state, project_id, worktree_id, parent_path, name).await
 }
 
 /// 重命名项目内路径。
@@ -2349,6 +2715,26 @@ pub async fn create_workbench_dir(
 ///
 /// Code Logic（这个函数做什么）:
 ///     在 blocking pool 中调用安全 rename_path，保留 Phase B 的 symlink/path 边界检查。
+pub(crate) async fn local_rename_workbench_path(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    new_name: String,
+) -> Result<WorkbenchPathInfo, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    run_blocking_fs(move || workbench_fs::rename_path(&root, &path, &new_name)).await
+}
+
+/// 重命名项目内路径。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户可在文件树中重命名文件或文件夹，但不能覆盖已有路径或逃出项目根目录。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把重命名请求转发到远端设备；local 项目走原有本机 rename helper。
 #[tauri::command]
 pub async fn rename_workbench_path(
     state: State<'_, AppState>,
@@ -2358,9 +2744,22 @@ pub async fn rename_workbench_path(
     new_name: String,
 ) -> Result<WorkbenchPathInfo, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    run_blocking_fs(move || workbench_fs::rename_path(&root, &path, &new_name)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .rename_path(
+                &context.base_url,
+                RemoteRenamePathReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    path,
+                    new_name,
+                },
+            )
+            .await;
+    }
+    local_rename_workbench_path(&state, project_id, worktree_id, path, new_name).await
 }
 
 /// 删除项目内路径。
@@ -2370,6 +2769,27 @@ pub async fn rename_workbench_path(
 ///
 /// Code Logic（这个函数做什么）:
 ///     在 blocking pool 中调用 delete_path；symlink 删除只删除链接本身，不删除目标文件。
+pub(crate) async fn local_delete_workbench_path(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+) -> Result<serde_json::Value, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let deleted_path = path.clone();
+    run_blocking_fs(move || workbench_fs::delete_path(&root, &path)).await?;
+    Ok(serde_json::json!({ "ok": true, "path": deleted_path }))
+}
+
+/// 删除项目内路径。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户可在文件树中删除项目内文件或文件夹；删除项目根目录被明确拒绝。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把删除请求转发到远端设备；local 项目走原有本机 delete helper。
 #[tauri::command]
 pub async fn delete_workbench_path(
     state: State<'_, AppState>,
@@ -2378,11 +2798,21 @@ pub async fn delete_workbench_path(
     path: String,
 ) -> Result<serde_json::Value, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    let deleted_path = path.clone();
-    run_blocking_fs(move || workbench_fs::delete_path(&root, &path)).await?;
-    Ok(serde_json::json!({ "ok": true, "path": deleted_path }))
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .delete_path(
+                &context.base_url,
+                RemoteDeletePathReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    path,
+                },
+            )
+            .await;
+    }
+    local_delete_workbench_path(&state, project_id, worktree_id, path).await
 }
 
 #[cfg(test)]
@@ -2465,6 +2895,73 @@ mod tests {
         assert_eq!(row.created_at, existing.created_at);
         assert_eq!(row.device_name, "Current Device");
         assert_eq!(row.last_opened_at, "2026-06-26T00:00:00Z");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 worktree 返回给前端时需要映射 worktree id，但 worktree.projectId 必须仍指向本机 remote shortcut。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造远端返回的 local worktree DTO，经过映射 helper 后断言 id 带 remote 前缀、project_id 保持本机项目 ID。
+    #[test]
+    fn map_remote_worktree_dtos_prefixes_worktree_id_and_keeps_local_project_id() {
+        let items = vec![WorkbenchWorktreeDto {
+            id: "inner-main".to_string(),
+            project_id: "inner-project".to_string(),
+            name: "main".to_string(),
+            branch: Some("main".to_string()),
+            base_branch: None,
+            path: "/remote/repo".to_string(),
+            is_main: true,
+            status: WorkbenchGitStatusDto::default(),
+            created_at: "2026-06-26T00:00:00Z".to_string(),
+            updated_at: "2026-06-26T00:00:00Z".to_string(),
+        }];
+
+        let mapped = map_remote_worktree_dtos("device-a", "remote:device-a:project-hash", items);
+
+        assert_eq!(mapped[0].id, "remote:device-a:inner-main");
+        assert_eq!(mapped[0].project_id, "remote:device-a:project-hash");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     本机收到远端 worktreeId 后必须确认它属于当前远端项目的设备，避免把 A 设备 ID 转发给 B 设备。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     用 device-a 解析 device-b 的远端 worktree id，断言 helper 返回设备不匹配错误。
+    #[test]
+    fn remote_inner_worktree_id_rejects_device_mismatch() {
+        let error = remote_inner_worktree_id(
+            "device-a",
+            Some("remote:device-b:inner-worktree".to_string()),
+        )
+        .expect_err("device mismatch should be rejected");
+
+        assert_eq!(error.to_string(), "远端 worktree 不属于当前设备");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端项目未指定 worktreeId 时表示使用远端主工作区，网关不应伪造或强制要求前端传 ID。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     传入 None，断言 helper 也返回 None，供 remote client 发送空 worktreeId。
+    #[test]
+    fn remote_inner_worktree_id_allows_none_for_main_worktree() {
+        let value = remote_inner_worktree_id("device-a", None).unwrap();
+
+        assert!(value.is_none());
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     本机 worktree id 不能被误转发给远端设备，否则远端会在自己的数据库里查找不存在或错误的行。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     传入未带 remote 前缀的本机 id，断言 helper 返回格式错误。
+    #[test]
+    fn remote_inner_worktree_id_rejects_unprefixed_local_id() {
+        let error = remote_inner_worktree_id("device-a", Some("local-worktree-id".to_string()))
+            .expect_err("unprefixed local id should be rejected");
+
+        assert_eq!(error.to_string(), "远端 worktree ID 格式无效");
     }
 
     /// Business Logic（为什么需要这个测试）:

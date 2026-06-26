@@ -18,5 +18,6 @@ pub mod projects;
 pub mod remote_client;
 pub mod remote_directory;
 pub mod remote_ids;
+pub mod remote_protocol;
 pub mod sessions;
 pub mod sqlite_preview;
