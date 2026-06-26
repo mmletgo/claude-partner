@@ -10,6 +10,8 @@
   "removeProject": "Remove project",
   "emptyProjects": "No project folders yet",
   "openWorkbench": "Open workbench",
+  "remoteBadge": "Remote",
+  "remoteOfflineNotice": "{{device}} is currently offline. Remote write actions are paused; refresh or retry later. You can still remove the project shortcut.",
   "projectSources": {
     "local": "Local project",
     "localDescription": "Choose a project folder on this computer",

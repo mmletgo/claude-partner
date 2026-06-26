@@ -162,6 +162,33 @@
   font-size: var(--text-xs);
 }
 
+.projectDevice {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.projectDevice > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.remoteBadge {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent-soft);
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklab, var(--accent) 8%, transparent);
+  color: var(--accent);
+  font-family: var(--font-body);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  line-height: 1;
+  padding: 2px var(--space-1);
+}
+
 .projectStats {
   display: inline-flex;
   flex: 0 0 auto;

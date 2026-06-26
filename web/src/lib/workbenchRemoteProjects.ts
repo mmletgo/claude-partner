@@ -4,6 +4,8 @@ import type {
   WorkbenchRemotePathInfo,
 } from './types';
 
+const REMOTE_WORKBENCH_OFFLINE_ERROR = '远端设备不在线';
+
 /**
  * Business Logic（为什么需要这个函数）:
  *   本机和远端项目都进入同一侧栏最近项目列表，打开远端项目后应立即置顶且不重复。
@@ -96,4 +98,37 @@ export function canOpenRemoteProjectSelection(
       !pathInfoLoading &&
       !openBusy,
   );
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   远端设备掉线时，后端会返回固定业务错误，前端需要识别它来展示离线提示并禁用远端写操作。
+ *
+ * Code Logic（这个函数做什么）:
+ *   从 Error/message/string 中提取文本，判断是否包含后端固定的远端离线错误。
+ */
+export function isRemoteWorkbenchOfflineError(error: unknown): boolean {
+  const message =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : error === null || error === undefined
+          ? ''
+          : String(error);
+  return message.includes(REMOTE_WORKBENCH_OFFLINE_ERROR);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench 需要把“当前远端项目离线”作为页面级状态，而不是影响本机项目或其他远端项目。
+ *
+ * Code Logic（这个函数做什么）:
+ *   当前项目为 remote 且 id 匹配离线项目 id 时返回 true。
+ */
+export function isRemoteWorkbenchProjectOffline(
+  project: WorkbenchProject | null | undefined,
+  offlineProjectId: string | null,
+): boolean {
+  return Boolean(project?.kind === 'remote' && offlineProjectId && project.id === offlineProjectId);
 }

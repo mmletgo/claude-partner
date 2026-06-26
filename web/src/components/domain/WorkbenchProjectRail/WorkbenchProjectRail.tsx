@@ -207,7 +207,12 @@ export function WorkbenchProjectRail() {
                   <span className={styles.projectName}>{project.name}</span>
                   <span className={styles.projectPath}>{project.path}</span>
                   <span className={styles.projectMeta}>
-                    <span>{project.deviceName}</span>
+                    <span className={styles.projectDevice}>
+                      {project.kind === 'remote' ? (
+                        <span className={styles.remoteBadge}>{t('workbench:remoteBadge')}</span>
+                      ) : null}
+                      <span>{project.deviceName}</span>
+                    </span>
                     <span
                       className={styles.projectStats}
                       aria-label={`${windowCountLabel}, ${paneCountLabel}`}

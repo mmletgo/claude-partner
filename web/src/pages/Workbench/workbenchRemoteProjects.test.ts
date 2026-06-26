@@ -6,6 +6,8 @@ import type {
 import {
   canOpenRemoteProjectSelection,
   insertWorkbenchProjectAtTop,
+  isRemoteWorkbenchOfflineError,
+  isRemoteWorkbenchProjectOffline,
   remoteParentPath,
   sortRemoteDirectoryEntries,
 } from '../../lib/workbenchRemoteProjects';
@@ -155,6 +157,51 @@ function testCanOpenRemoteProjectSelectionRequiresCurrentReadableDirectory(): vo
 }
 
 /**
+ * Business Logic（为什么需要这个测试）:
+ *   远端设备离线后，Workbench 只应禁用当前离线远端项目的写操作，不应影响本机项目或其他远端项目。
+ *
+ * Code Logic（这个测试做什么）:
+ *   校验离线错误文本识别，以及 project/offlineProjectId 匹配逻辑。
+ */
+function testRemoteOfflineStateOnlyMatchesCurrentRemoteProject(): void {
+  const remoteProject: WorkbenchProject = {
+    ...baseProject,
+    id: 'remote:device-a:abc',
+    kind: 'remote',
+    deviceId: 'device-a',
+    deviceName: 'Studio Mac',
+    path: '/Users/hans/app',
+  };
+  const otherRemoteProject: WorkbenchProject = {
+    ...remoteProject,
+    id: 'remote:device-b:def',
+    deviceId: 'device-b',
+  };
+
+  assert(isRemoteWorkbenchOfflineError(new Error('远端设备不在线')), 'offline backend error should be detected');
+  assert(
+    isRemoteWorkbenchOfflineError('读取终端失败: 远端设备不在线'),
+    'composed UI error should still be detected',
+  );
+  assert(
+    !isRemoteWorkbenchOfflineError(new Error('读取终端失败')),
+    'unrelated errors should not mark the project offline',
+  );
+  assert(
+    isRemoteWorkbenchProjectOffline(remoteProject, 'remote:device-a:abc'),
+    'matching remote project should be offline',
+  );
+  assert(
+    !isRemoteWorkbenchProjectOffline(baseProject, 'remote:device-a:abc'),
+    'local project should not be treated as remote offline',
+  );
+  assert(
+    !isRemoteWorkbenchProjectOffline(otherRemoteProject, 'remote:device-a:abc'),
+    'other remote project should remain enabled',
+  );
+}
+
+/**
  * Business Logic（为什么需要这个函数）:
  *   远端项目选择器 helper 覆盖多个独立 UI 契约，需要一个顺序执行入口便于 npm/tsx 调用。
  *
@@ -166,6 +213,7 @@ async function main(): Promise<void> {
   testRemoteParentPathHandlesUnixAndWindowsPaths();
   testSortRemoteDirectoryEntriesPutsDirsBeforeFiles();
   testCanOpenRemoteProjectSelectionRequiresCurrentReadableDirectory();
+  testRemoteOfflineStateOnlyMatchesCurrentRemoteProject();
 }
 
 void main()

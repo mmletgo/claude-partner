@@ -33,6 +33,10 @@ import {
   useWorkbenchTerminalBuffers,
 } from '@/hooks/workbenchTerminalBuffersContext';
 import {
+  isRemoteWorkbenchOfflineError,
+  isRemoteWorkbenchProjectOffline,
+} from '@/lib/workbenchRemoteProjects';
+import {
   ChevronRightIcon,
   CopyIcon,
   EditIcon,
@@ -756,6 +760,7 @@ export function Workbench() {
   const [sessionNameDraft, setSessionNameDraft] = useState<string>('');
   const [sessionBusy, setSessionBusy] = useState<boolean>(false);
   const [sessionError, setSessionError] = useState<string | null>(null);
+  const [remoteOfflineProjectId, setRemoteOfflineProjectId] = useState<string | null>(null);
   const [worktrees, setWorktrees] = useState<WorkbenchWorktree[]>([]);
   const [activeWorktreeId, setActiveWorktreeId] = useState<string | null>(null);
   const [worktreeBusy, setWorktreeBusy] = useState<string | null>(null);
@@ -863,6 +868,11 @@ export function Workbench() {
   const canUsePanes = Boolean(
     activeSession?.supportsPanes && activeSession.status === 'running',
   );
+  const remoteProjectOffline = isRemoteWorkbenchProjectOffline(
+    activeProject,
+    remoteOfflineProjectId,
+  );
+  const remoteWriteDisabled = remoteProjectOffline;
   const promptWorkingDirectory = activeRootPath || undefined;
   const composedWorktreeBranchName = composeWorktreeBranchName(
     createWorktreeBranchPrefix,
@@ -932,6 +942,34 @@ export function Workbench() {
 
   /**
    * Business Logic（为什么需要这个函数）:
+   *   远端项目一旦发现设备离线，页面需要进入只读/不可写状态，避免用户继续点击必然失败的远端写操作。
+   *
+   * Code Logic（这个函数做什么）:
+   *   只在当前 active project 仍是同一个 remote project 且错误包含后端离线文案时，记录离线 projectId。
+   */
+  const markRemoteOfflineFromError = useCallback(
+    (projectId: string, error: unknown) => {
+      if (activeProjectIdRef.current !== projectId) return;
+      if (activeProject?.id !== projectId || activeProject.kind !== 'remote') return;
+      if (!isRemoteWorkbenchOfflineError(error)) return;
+      setRemoteOfflineProjectId(projectId);
+    },
+    [activeProject],
+  );
+
+  /**
+   * Business Logic（为什么需要这个函数）:
+   *   远端设备恢复在线并有请求成功后，应恢复当前项目的可写操作。
+   *
+   * Code Logic（这个函数做什么）:
+   *   仅当成功请求对应当前记录的离线 projectId 时清空状态，避免误清其他项目的离线提示。
+   */
+  const clearRemoteOfflineForProject = useCallback((projectId: string) => {
+    setRemoteOfflineProjectId((current) => (current === projectId ? null : current));
+  }, []);
+
+  /**
+   * Business Logic（为什么需要这个函数）:
    *   成功 merge 后用户只需要短暂看到完成反馈，不应长期保留状态条占位。
    *
    * Code Logic（这个函数做什么）:
@@ -969,6 +1007,8 @@ export function Workbench() {
     let cancelled = false;
     void workbenchApi.sessions.focus(activeSessionId).catch((error) => {
       if (cancelled) return;
+      const projectId = activeProjectIdRef.current;
+      if (projectId) markRemoteOfflineFromError(projectId, error);
       setSessionError(
         displayErrorMessage(
           error,
@@ -980,7 +1020,7 @@ export function Workbench() {
     return () => {
       cancelled = true;
     };
-  }, [activeSessionId, desktopUnavailableMessage, t]);
+  }, [activeSessionId, desktopUnavailableMessage, markRemoteOfflineFromError, t]);
 
   useEffect(() => {
     if (!activeProjectId || !activeWorktreeSessionId || scopedSessions.length === 0) {
@@ -1016,18 +1056,27 @@ export function Workbench() {
         setSessionError(null);
         const list = await workbenchApi.sessions.list(projectId);
         if (activeProjectIdRef.current !== projectId) return;
+        clearRemoteOfflineForProject(projectId);
         knownSessionIdsRef.current = new Set(list.map((session) => session.id));
         setSessions(list);
         updateActiveSession(list);
         void refreshProjectSessionStats(projectId);
       } catch (error) {
         if (activeProjectIdRef.current !== projectId) return;
+        markRemoteOfflineFromError(projectId, error);
         setSessionError(
           displayErrorMessage(error, t('workbench:errors.sessions'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, refreshProjectSessionStats, t, updateActiveSession],
+    [
+      clearRemoteOfflineForProject,
+      desktopUnavailableMessage,
+      markRemoteOfflineFromError,
+      refreshProjectSessionStats,
+      t,
+      updateActiveSession,
+    ],
   );
 
   const loadWorktrees = useCallback(
@@ -1036,6 +1085,7 @@ export function Workbench() {
         setWorktreeError(null);
         const list = await workbenchApi.worktrees.list(projectId);
         if (activeProjectIdRef.current !== projectId) return;
+        clearRemoteOfflineForProject(projectId);
         setWorktrees(list);
         setActiveWorktreeId((current) => {
           if (current && list.some((worktree) => worktree.id === current)) return current;
@@ -1043,12 +1093,13 @@ export function Workbench() {
         });
       } catch (error) {
         if (activeProjectIdRef.current !== projectId) return;
+        markRemoteOfflineFromError(projectId, error);
         setWorktreeError(
           displayErrorMessage(error, t('workbench:errors.worktrees'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, t],
+    [clearRemoteOfflineForProject, desktopUnavailableMessage, markRemoteOfflineFromError, t],
   );
 
   /**
@@ -1082,6 +1133,7 @@ export function Workbench() {
         } else {
           setChildrenByPath((current) => ({ ...current, [path]: nodes }));
         }
+        clearRemoteOfflineForProject(projectId);
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
@@ -1090,6 +1142,7 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.files'), desktopUnavailableMessage),
         );
@@ -1103,7 +1156,7 @@ export function Workbench() {
         }
       }
     },
-    [desktopUnavailableMessage, t],
+    [clearRemoteOfflineForProject, desktopUnavailableMessage, markRemoteOfflineFromError, t],
   );
 
   /**
@@ -1144,6 +1197,7 @@ export function Workbench() {
         return;
       }
       setGitCommits(commits);
+      clearRemoteOfflineForProject(projectId);
     } catch (error) {
       if (
         activeProjectIdRef.current !== projectId ||
@@ -1151,6 +1205,7 @@ export function Workbench() {
       ) {
         return;
       }
+      markRemoteOfflineFromError(projectId, error);
       setGitCommits([]);
       setGitHistoryError(
         displayErrorMessage(error, t('workbench:errors.gitHistory'), desktopUnavailableMessage),
@@ -1160,7 +1215,7 @@ export function Workbench() {
         setGitHistoryLoading(false);
       }
     }
-  }, [desktopUnavailableMessage, t]);
+  }, [clearRemoteOfflineForProject, desktopUnavailableMessage, markRemoteOfflineFromError, t]);
 
   const loadPathInfo = useCallback(
     async (path: string) => {
@@ -1177,6 +1232,7 @@ export function Workbench() {
         }
         setSelectedInfo(info);
         setRenameName(info.name);
+        clearRemoteOfflineForProject(projectId);
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
@@ -1184,16 +1240,21 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.pathInfo'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, t],
+    [clearRemoteOfflineForProject, desktopUnavailableMessage, markRemoteOfflineFromError, t],
   );
 
   useEffect(() => {
     activeProjectIdRef.current = activeProjectId;
+  }, [activeProjectId]);
+
+  useEffect(() => {
+    setRemoteOfflineProjectId(null);
   }, [activeProjectId]);
 
   useEffect(() => {
@@ -1476,6 +1537,7 @@ export function Workbench() {
       ) {
         return;
       }
+      markRemoteOfflineFromError(projectId, error);
       setSessionError(
         displayErrorMessage(
           error,
@@ -1486,16 +1548,25 @@ export function Workbench() {
     } finally {
       setSessionBusy(false);
     }
-  }, [desktopUnavailableMessage, focusSession, refreshProjectSessionStats, resetTerminalBuffer, t]);
+  }, [
+    desktopUnavailableMessage,
+    focusSession,
+    markRemoteOfflineFromError,
+    refreshProjectSessionStats,
+    resetTerminalBuffer,
+    t,
+  ]);
 
   const handleSplitPane = useCallback(
     async (direction: 'right' | 'down') => {
       if (!activeSession) return;
+      if (remoteWriteDisabled) return;
       try {
         setSessionError(null);
         await workbenchApi.sessions.splitPane(activeSession.id, direction);
         await loadSessions(activeSession.projectId);
       } catch (error) {
+        markRemoteOfflineFromError(activeSession.projectId, error);
         setSessionError(
           displayErrorMessage(
             error,
@@ -1505,11 +1576,19 @@ export function Workbench() {
         );
       }
     },
-    [activeSession, desktopUnavailableMessage, loadSessions, t],
+    [
+      activeSession,
+      desktopUnavailableMessage,
+      loadSessions,
+      markRemoteOfflineFromError,
+      remoteWriteDisabled,
+      t,
+    ],
   );
 
   const handleClosePane = useCallback(async () => {
     if (!activeSession) return;
+    if (remoteWriteDisabled) return;
     try {
       setSessionError(null);
       const result = await workbenchApi.sessions.closePane(activeSession.id);
@@ -1525,6 +1604,7 @@ export function Workbench() {
       }
       await loadSessions(projectId);
     } catch (error) {
+      markRemoteOfflineFromError(activeSession.projectId, error);
       setSessionError(
         displayErrorMessage(error, t('workbench:errors.closePane'), desktopUnavailableMessage),
       );
@@ -1533,18 +1613,21 @@ export function Workbench() {
     activeSession,
     desktopUnavailableMessage,
     loadSessions,
+    markRemoteOfflineFromError,
     removeTerminalBuffer,
+    remoteWriteDisabled,
     t,
     updateActiveSession,
   ]);
 
   const handleInput = useCallback(async (sessionId: string, data: string) => {
+    if (remoteWriteDisabled) return;
     try {
       await workbenchApi.sessions.writeInput(sessionId, data);
     } catch {
       // 输入写入失败时通常是会话刚退出；状态事件或下一次操作会反映错误。
     }
-  }, []);
+  }, [remoteWriteDisabled]);
 
   const openPromptOptimizerPanel = useCallback(() => {
     const reset = resetPromptOptimizerTextState();
@@ -1580,6 +1663,12 @@ export function Workbench() {
         setSessionError(t('workbench:promptOptimizer.fillFailed'));
         return;
       }
+      if (remoteWriteDisabled) {
+        setSessionError(t('workbench:remoteOfflineNotice', {
+          device: activeProject?.deviceName ?? emptyValue,
+        }));
+        return;
+      }
       try {
         setPromptOptimizing(true);
         await promptOptimizerApi.streamToTerminal(promptInput, {
@@ -1589,6 +1678,9 @@ export function Workbench() {
         });
         setPromptPanelOpen(false);
       } catch (error) {
+        if (activeProjectIdRef.current) {
+          markRemoteOfflineFromError(activeProjectIdRef.current, error);
+        }
         setSessionError(
           displayErrorMessage(
             error,
@@ -1602,17 +1694,22 @@ export function Workbench() {
     },
     [
       activeSession,
+      activeProject?.deviceName,
       desktopUnavailableMessage,
+      emptyValue,
+      markRemoteOfflineFromError,
       promptInput,
       promptOptimizing,
       promptOptimizerFillLanguage,
       promptWorkingDirectory,
+      remoteWriteDisabled,
       t,
     ],
   );
 
   const triggerPromptOptimizerShortcut = useCallback(() => {
     if (!activeProjectIdRef.current || workspaceView !== 'terminal') return;
+    if (remoteWriteDisabled && !promptPanelOpen) return;
     const action = promptOptimizerShortcutAction(promptPanelOpen, promptInput);
     if (action === 'open') {
       openPromptOptimizerPanel();
@@ -1623,7 +1720,14 @@ export function Workbench() {
       return;
     }
     void runPromptOptimization();
-  }, [openPromptOptimizerPanel, promptInput, promptPanelOpen, runPromptOptimization, workspaceView]);
+  }, [
+    openPromptOptimizerPanel,
+    promptInput,
+    promptPanelOpen,
+    remoteWriteDisabled,
+    runPromptOptimization,
+    workspaceView,
+  ]);
 
   useEffect(() => {
     const handleShortcutEvent = (event: KeyboardEvent) => {
@@ -1670,6 +1774,7 @@ export function Workbench() {
 
   const handleCloseSession = useCallback(
     async (sessionId: string) => {
+      if (remoteWriteDisabled) return;
       try {
         await workbenchApi.sessions.close(sessionId);
         setSessions((current) => {
@@ -1682,6 +1787,8 @@ export function Workbench() {
         const projectId = activeProjectIdRef.current;
         if (projectId) void refreshProjectSessionStats(projectId);
       } catch (error) {
+        const projectId = activeProjectIdRef.current;
+        if (projectId) markRemoteOfflineFromError(projectId, error);
         setSessionError(
           displayErrorMessage(
             error,
@@ -1693,8 +1800,10 @@ export function Workbench() {
     },
     [
       desktopUnavailableMessage,
+      markRemoteOfflineFromError,
       refreshProjectSessionStats,
       removeTerminalBuffer,
+      remoteWriteDisabled,
       t,
       updateActiveSession,
     ],
@@ -1702,6 +1811,7 @@ export function Workbench() {
 
   const handleRenameSession = useCallback(async () => {
     if (!activeSession || !sessionNameDraft.trim()) return;
+    if (remoteWriteDisabled) return;
     try {
       setSessionError(null);
       const renamed = await workbenchApi.sessions.rename(activeSession.id, sessionNameDraft.trim());
@@ -1709,19 +1819,27 @@ export function Workbench() {
         current.map((session) => (session.id === renamed.id ? renamed : session)),
       );
     } catch (error) {
+      markRemoteOfflineFromError(activeSession.projectId, error);
       setSessionError(
         displayErrorMessage(error, t('workbench:errors.renameSession'), desktopUnavailableMessage),
       );
     }
-  }, [activeSession, desktopUnavailableMessage, sessionNameDraft, t]);
+  }, [
+    activeSession,
+    desktopUnavailableMessage,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
+    sessionNameDraft,
+    t,
+  ]);
 
   const handleOpenCreateWorktree = useCallback(() => {
-    if (!activeProjectIdRef.current || worktreeBusy !== null) return;
+    if (!activeProjectIdRef.current || worktreeBusy !== null || remoteWriteDisabled) return;
     setWorktreeError(null);
     setCreateWorktreeBranchPrefix(DEFAULT_WORKTREE_BRANCH_PREFIX);
     setCreateWorktreeBranchSuffixDraft('');
     setCreateWorktreeOpen(true);
-  }, [worktreeBusy]);
+  }, [remoteWriteDisabled, worktreeBusy]);
 
   const handleCancelCreateWorktree = useCallback(() => {
     if (worktreeBusy === 'create') return;
@@ -1733,6 +1851,7 @@ export function Workbench() {
   const handleCreateWorktree = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId) return;
+    if (remoteWriteDisabled) return;
     const branchName = composeWorktreeBranchName(
       createWorktreeBranchPrefix,
       createWorktreeBranchSuffixDraft,
@@ -1750,6 +1869,7 @@ export function Workbench() {
       setCreateWorktreeBranchSuffixDraft('');
     } catch (error) {
       if (activeProjectIdRef.current !== projectId) return;
+      markRemoteOfflineFromError(projectId, error);
       setWorktreeError(
         displayErrorMessage(
           error,
@@ -1765,11 +1885,14 @@ export function Workbench() {
     createWorktreeBranchSuffixDraft,
     desktopUnavailableMessage,
     loadWorktrees,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
     t,
   ]);
 
   const handleCommitWorktree = useCallback(async () => {
     if (!activeWorktree) return;
+    if (remoteWriteDisabled) return;
     try {
       setWorktreeBusy('commit');
       setWorktreeError(null);
@@ -1777,6 +1900,7 @@ export function Workbench() {
       await loadWorktrees(activeWorktree.projectId);
       if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
+      markRemoteOfflineFromError(activeWorktree.projectId, error);
       await loadWorktrees(activeWorktree.projectId);
       if (inspectorTab === 'history') await loadGitHistory();
       setWorktreeError(
@@ -1785,10 +1909,20 @@ export function Workbench() {
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, inspectorTab, loadGitHistory, loadWorktrees, t]);
+  }, [
+    activeWorktree,
+    desktopUnavailableMessage,
+    inspectorTab,
+    loadGitHistory,
+    loadWorktrees,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
+    t,
+  ]);
 
   const handlePushWorktree = useCallback(async () => {
     if (!activeWorktree) return;
+    if (remoteWriteDisabled) return;
     try {
       setWorktreeBusy('push');
       setWorktreeError(null);
@@ -1796,16 +1930,27 @@ export function Workbench() {
       await loadWorktrees(activeWorktree.projectId);
       if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
+      markRemoteOfflineFromError(activeWorktree.projectId, error);
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.pushWorktree'), desktopUnavailableMessage),
       );
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, inspectorTab, loadGitHistory, loadWorktrees, t]);
+  }, [
+    activeWorktree,
+    desktopUnavailableMessage,
+    inspectorTab,
+    loadGitHistory,
+    loadWorktrees,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
+    t,
+  ]);
 
   const handleMergeWorktree = useCallback(async () => {
     if (!activeWorktree || activeWorktree.isMain) return;
+    if (remoteWriteDisabled) return;
     if (!window.confirm(t('workbench:worktrees.mergeConfirm', { name: activeWorktree.name }))) {
       return;
     }
@@ -1840,6 +1985,7 @@ export function Workbench() {
       void refreshProjectSessionStats(projectId);
       if (inspectorTab === 'history') await loadGitHistory();
     } catch (error) {
+      markRemoteOfflineFromError(projectId, error);
       const message = displayErrorMessage(
         error,
         t('workbench:errors.mergeWorktree'),
@@ -1870,6 +2016,8 @@ export function Workbench() {
     loadGitHistory,
     loadSessions,
     loadWorktrees,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
     refreshProjectSessionStats,
     removeTerminalBuffer,
     scheduleMergeStagePanelDismiss,
@@ -1879,6 +2027,7 @@ export function Workbench() {
 
   const handleRemoveWorktree = useCallback(async () => {
     if (!activeWorktree || activeWorktree.isMain) return;
+    if (remoteWriteDisabled) return;
     if (!window.confirm(t('workbench:worktrees.removeConfirm', { name: activeWorktree.name }))) {
       return;
     }
@@ -1892,13 +2041,22 @@ export function Workbench() {
       }
       await loadWorktrees(activeWorktree.projectId);
     } catch (error) {
+      markRemoteOfflineFromError(activeWorktree.projectId, error);
       setWorktreeError(
         displayErrorMessage(error, t('workbench:errors.removeWorktree'), desktopUnavailableMessage),
       );
     } finally {
       setWorktreeBusy(null);
     }
-  }, [activeWorktree, desktopUnavailableMessage, loadWorktrees, t, worktrees]);
+  }, [
+    activeWorktree,
+    desktopUnavailableMessage,
+    loadWorktrees,
+    markRemoteOfflineFromError,
+    remoteWriteDisabled,
+    t,
+    worktrees,
+  ]);
 
   const handleToggleNode = useCallback(
     (node: WorkbenchFileNode) => {
@@ -1981,12 +2139,13 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.openFile'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, setFileTabsState, t],
+    [desktopUnavailableMessage, markRemoteOfflineFromError, setFileTabsState, t],
   );
 
   /**
@@ -2128,10 +2287,11 @@ export function Workbench() {
    *   按 tab id 更新 content 并设置 dirty=true，其他 tab 保持不变。
    */
   const handleFileContentChange = useCallback((id: string, value: string) => {
+    if (remoteWriteDisabled) return;
     setFileTabsState((currentTabs) =>
       currentTabs.map((tab) => (tab.id === id ? { ...tab, content: value, dirty: true } : tab)),
     );
-  }, [setFileTabsState]);
+  }, [remoteWriteDisabled, setFileTabsState]);
 
   /**
    * Business Logic（为什么需要这个函数）:
@@ -2187,6 +2347,7 @@ export function Workbench() {
     async (id: string) => {
       const tab = fileTabsRef.current.find((candidate) => candidate.id === id);
       if (!tab) return;
+      if (remoteWriteDisabled) return;
 
       const baseHash = tab.opened.text?.baseHash;
       if (!baseHash) {
@@ -2267,6 +2428,7 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.saveFile'), desktopUnavailableMessage),
         );
@@ -2286,6 +2448,8 @@ export function Workbench() {
       refreshParentDir,
       setFileTabsState,
       selectedPath,
+      markRemoteOfflineFromError,
+      remoteWriteDisabled,
       t,
       validateStructuredFileTab,
     ],
@@ -2303,6 +2467,7 @@ export function Workbench() {
     async (id: string) => {
       const tab = fileTabsRef.current.find((candidate) => candidate.id === id);
       if (!tab) return;
+      if (remoteWriteDisabled) return;
       const kind =
         tab.opened.detectedType === 'json' ||
         tab.opened.detectedType === 'toml' ||
@@ -2365,7 +2530,13 @@ export function Workbench() {
         );
       }
     },
-    [desktopUnavailableMessage, setFileTabsState, t, validateStructuredFileTab],
+    [
+      desktopUnavailableMessage,
+      remoteWriteDisabled,
+      setFileTabsState,
+      t,
+      validateStructuredFileTab,
+    ],
   );
 
   /**
@@ -2424,18 +2595,20 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.previewSqlite'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, setFileTabsState, t],
+    [desktopUnavailableMessage, markRemoteOfflineFromError, setFileTabsState, t],
   );
 
   const handleCreateEntry = useCallback(
     async (kind: 'file' | 'dir') => {
       const projectId = activeProjectIdRef.current;
       if (!projectId || !newEntryName.trim()) return;
+      if (remoteWriteDisabled) return;
       const worktreeId = activeWorktreeIdRef.current;
       try {
         setFileError(null);
@@ -2476,12 +2649,21 @@ export function Workbench() {
         ) {
           return;
         }
+        markRemoteOfflineFromError(projectId, error);
         setFileError(
           displayErrorMessage(error, t('workbench:errors.createPath'), desktopUnavailableMessage),
         );
       }
     },
-    [desktopUnavailableMessage, loadDir, newEntryName, selectedParentPath, t],
+    [
+      desktopUnavailableMessage,
+      loadDir,
+      markRemoteOfflineFromError,
+      newEntryName,
+      remoteWriteDisabled,
+      selectedParentPath,
+      t,
+    ],
   );
 
   /**
@@ -2495,6 +2677,7 @@ export function Workbench() {
   const handleRenamePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo || !renameName.trim()) return;
+    if (remoteWriteDisabled) return;
     const worktreeId = activeWorktreeIdRef.current;
     try {
       setFileError(null);
@@ -2564,6 +2747,7 @@ export function Workbench() {
       ) {
         return;
       }
+      markRemoteOfflineFromError(projectId, error);
       setFileError(
         displayErrorMessage(error, t('workbench:errors.renamePath'), desktopUnavailableMessage),
       );
@@ -2571,8 +2755,10 @@ export function Workbench() {
   }, [
     desktopUnavailableMessage,
     invalidateDirRequestsForPath,
+    markRemoteOfflineFromError,
     refreshParentDir,
     renameName,
+    remoteWriteDisabled,
     selectedInfo,
     setFileTabsState,
     t,
@@ -2590,6 +2776,7 @@ export function Workbench() {
   const handleDeletePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo) return;
+    if (remoteWriteDisabled) return;
     const affectedTabs = collectTabsForPath(fileTabsRef.current, selectedInfo.path, selectedInfo.kind);
     const affectedDirtyNames = dirtyTabNames(affectedTabs);
     if (
@@ -2645,6 +2832,7 @@ export function Workbench() {
       ) {
         return;
       }
+      markRemoteOfflineFromError(projectId, error);
       setFileError(
         displayErrorMessage(error, t('workbench:errors.deletePath'), desktopUnavailableMessage),
       );
@@ -2652,7 +2840,9 @@ export function Workbench() {
   }, [
     desktopUnavailableMessage,
     invalidateDirRequestsForPath,
+    markRemoteOfflineFromError,
     refreshParentDir,
+    remoteWriteDisabled,
     selectedInfo,
     setFileTabsState,
     t,
@@ -2764,7 +2954,7 @@ export function Workbench() {
                   <select
                     className={styles.worktreePrefixSelect}
                     value={createWorktreeBranchPrefix}
-                    disabled={worktreeBusy === 'create'}
+                    disabled={worktreeBusy === 'create' || remoteWriteDisabled}
                     aria-label={t('workbench:worktrees.prefixLabel')}
                     onChange={(event) =>
                       setCreateWorktreeBranchPrefix(event.target.value as WorktreeBranchPrefix)
@@ -2786,7 +2976,7 @@ export function Workbench() {
                   value={createWorktreeBranchSuffixDraft}
                   placeholder={t('workbench:worktrees.suffixPlaceholder')}
                   aria-label={t('workbench:worktrees.suffixLabel')}
-                  disabled={worktreeBusy === 'create'}
+                  disabled={worktreeBusy === 'create' || remoteWriteDisabled}
                   onChange={(event) => setCreateWorktreeBranchSuffixDraft(event.target.value)}
                 />
                 <Button
@@ -2794,7 +2984,7 @@ export function Workbench() {
                   size="sm"
                   variant="primary"
                   loading={worktreeBusy === 'create'}
-                  disabled={!composedWorktreeBranchName || worktreeBusy !== null}
+                  disabled={!composedWorktreeBranchName || worktreeBusy !== null || remoteWriteDisabled}
                 >
                   {t('common:action.confirm')}
                 </Button>
@@ -2813,7 +3003,7 @@ export function Workbench() {
                 variant="secondary"
                 icon={<PlusIcon />}
                 loading={worktreeBusy === 'create'}
-                disabled={!activeProjectId || worktreeBusy !== null}
+                disabled={!activeProjectId || worktreeBusy !== null || remoteWriteDisabled}
                 onClick={handleOpenCreateWorktree}
               >
                 {t('workbench:worktrees.create')}
@@ -2825,13 +3015,20 @@ export function Workbench() {
               title={t('workbench:worktrees.remove')}
               aria-label={t('workbench:worktrees.remove')}
               loading={worktreeBusy === 'remove'}
-              disabled={!canRemoveWorktree(activeWorktree, worktreeBusy)}
+              disabled={!canRemoveWorktree(activeWorktree, worktreeBusy) || remoteWriteDisabled}
               onClick={() => void handleRemoveWorktree()}
             />
           </div>
         </section>
 
         <div className={styles.noticeStack}>
+          {remoteProjectOffline ? (
+            <div className={styles.noticeBox}>
+              {t('workbench:remoteOfflineNotice', {
+                device: activeProject?.deviceName ?? emptyValue,
+              })}
+            </div>
+          ) : null}
           {sessionError ? <div className={styles.errorBox}>{sessionError}</div> : null}
           {worktreeError ? <div className={styles.errorBox}>{worktreeError}</div> : null}
           {dependencyStatus.status !== 'ready' ? (
@@ -2877,7 +3074,7 @@ export function Workbench() {
                     size="sm"
                     icon={<PlusIcon />}
                     loading={sessionBusy}
-                    disabled={!activeProjectId || !activeWorktree}
+                    disabled={!activeProjectId || !activeWorktree || remoteWriteDisabled}
                     onClick={() => void handleCreateSession()}
                   >
                     {t('workbench:newSession')}
@@ -2894,6 +3091,7 @@ export function Workbench() {
                     title={t('workbench:promptOptimizer.open')}
                     aria-label={t('workbench:promptOptimizer.open')}
                     data-active={promptPanelOpen || undefined}
+                    disabled={!activeSession || (remoteWriteDisabled && !promptPanelOpen)}
                     onClick={() => {
                       if (promptPanelOpen) {
                         setPromptPanelOpen(false);
@@ -2911,7 +3109,7 @@ export function Workbench() {
                     icon={<SplitRightIcon />}
                     title={t('workbench:splitPaneRight')}
                     aria-label={t('workbench:splitPaneRight')}
-                    disabled={!canUsePanes}
+                    disabled={!canUsePanes || remoteWriteDisabled}
                     onClick={() => void handleSplitPane('right')}
                   >
                     {t('workbench:splitPaneRight')}
@@ -2923,7 +3121,7 @@ export function Workbench() {
                     icon={<SplitDownIcon />}
                     title={t('workbench:splitPaneDown')}
                     aria-label={t('workbench:splitPaneDown')}
-                    disabled={!canUsePanes}
+                    disabled={!canUsePanes || remoteWriteDisabled}
                     onClick={() => void handleSplitPane('down')}
                   >
                     {t('workbench:splitPaneDown')}
@@ -2935,7 +3133,7 @@ export function Workbench() {
                     icon={<XIcon />}
                     title={t('workbench:closePane')}
                     aria-label={t('workbench:closePane')}
-                    disabled={!canUsePanes}
+                    disabled={!canUsePanes || remoteWriteDisabled}
                     onClick={() => void handleClosePane()}
                   >
                     {t('workbench:closePane')}
@@ -2984,7 +3182,7 @@ export function Workbench() {
                     }}
                     placeholder={t('promptOptimizer:inputPlaceholder')}
                     aria-label={t('promptOptimizer:inputAriaLabel')}
-                    disabled={promptOptimizing}
+                    disabled={promptOptimizing || remoteWriteDisabled}
                   />
                 </aside>
               ) : null}
@@ -3036,7 +3234,9 @@ export function Workbench() {
                       onInput={handleInput}
                       onResize={handleResize}
                       inputEnabled={
-                        workspaceView === 'terminal' && session.id === renderedActiveSessionId
+                        workspaceView === 'terminal' &&
+                        session.id === renderedActiveSessionId &&
+                        !remoteWriteDisabled
                       }
                       onCursorAnchorChange={
                         workspaceView === 'terminal' && session.id === renderedActiveSessionId
@@ -3058,6 +3258,7 @@ export function Workbench() {
               tabs={fileTabs}
               activeTabId={activeFileTabId}
               saving={fileSaving}
+              writeDisabled={remoteWriteDisabled}
               onActivate={handleActivateFileTab}
               onClose={handleCloseFileTab}
               onReturnToTerminal={handleReturnToTerminal}
@@ -3132,14 +3333,14 @@ export function Workbench() {
               onChange={(event) => setSessionNameDraft(event.target.value)}
               placeholder={t('workbench:sessionNamePlaceholder')}
               size="sm"
-              disabled={!activeSession}
+              disabled={!activeSession || remoteWriteDisabled}
             />
             <div className={styles.statusButtonRow}>
               <Button
                 size="sm"
                 variant="secondary"
                 icon={<EditIcon />}
-                disabled={!activeSession || !sessionNameDraft.trim()}
+                disabled={!activeSession || !sessionNameDraft.trim() || remoteWriteDisabled}
                 onClick={() => void handleRenameSession()}
               >
                 {t('workbench:renameSession')}
@@ -3148,7 +3349,7 @@ export function Workbench() {
                 size="sm"
                 variant="danger"
                 icon={<XIcon />}
-                disabled={!activeSession}
+                disabled={!activeSession || remoteWriteDisabled}
                 onClick={() => activeSession && void handleCloseSession(activeSession.id)}
               >
                 {t('workbench:closeTerminal')}
@@ -3209,7 +3410,7 @@ export function Workbench() {
                   size="sm"
                   variant="secondary"
                   icon={<FileIcon />}
-                  disabled={!activeProjectId || !newEntryName.trim()}
+                  disabled={!activeProjectId || !newEntryName.trim() || remoteWriteDisabled}
                   onClick={() => void handleCreateEntry('file')}
                 >
                   {t('workbench:createFile')}
@@ -3218,7 +3419,7 @@ export function Workbench() {
                   size="sm"
                   variant="secondary"
                   icon={<FolderIcon />}
-                  disabled={!activeProjectId || !newEntryName.trim()}
+                  disabled={!activeProjectId || !newEntryName.trim() || remoteWriteDisabled}
                   onClick={() => void handleCreateEntry('dir')}
                 >
                   {t('workbench:createFolder')}
@@ -3275,7 +3476,7 @@ export function Workbench() {
                   onChange={(event) => setRenameName(event.target.value)}
                   placeholder={t('workbench:renamePlaceholder')}
                   size="sm"
-                  disabled={!selectedInfo}
+                  disabled={!selectedInfo || remoteWriteDisabled}
                 />
                 <Button
                   size="sm"
@@ -3290,7 +3491,7 @@ export function Workbench() {
                   size="sm"
                   variant="secondary"
                   icon={<EditIcon />}
-                  disabled={!selectedInfo || !renameName.trim()}
+                  disabled={!selectedInfo || !renameName.trim() || remoteWriteDisabled}
                   onClick={() => void handleRenamePath()}
                 >
                   {t('workbench:rename')}
@@ -3299,7 +3500,7 @@ export function Workbench() {
                   size="sm"
                   variant="danger"
                   icon={<TrashIcon />}
-                  disabled={!selectedInfo}
+                  disabled={!selectedInfo || remoteWriteDisabled}
                   onClick={() => void handleDeletePath()}
                 >
                   {t('workbench:delete')}
@@ -3336,7 +3537,7 @@ export function Workbench() {
                   variant={activeWorktreeChangedCount > 0 ? 'primary' : 'secondary'}
                   icon={<EditIcon />}
                   loading={worktreeBusy === 'commit'}
-                  disabled={!canCommitWorktree(activeWorktree, worktreeBusy)}
+                  disabled={!canCommitWorktree(activeWorktree, worktreeBusy) || remoteWriteDisabled}
                   onClick={() => void handleCommitWorktree()}
                 >
                   {t('workbench:worktrees.commit')}
@@ -3346,7 +3547,7 @@ export function Workbench() {
                   variant="secondary"
                   icon={<UploadIcon />}
                   loading={worktreeBusy === 'push'}
-                  disabled={!canPushWorktree(activeWorktree, worktreeBusy)}
+                  disabled={!canPushWorktree(activeWorktree, worktreeBusy) || remoteWriteDisabled}
                   onClick={() => void handlePushWorktree()}
                 >
                   {t('workbench:worktrees.push')}
@@ -3356,7 +3557,7 @@ export function Workbench() {
                   variant="secondary"
                   icon={<SyncIcon />}
                   loading={worktreeBusy === 'merge'}
-                  disabled={!canMergeWorktree(activeWorktree, worktreeBusy)}
+                  disabled={!canMergeWorktree(activeWorktree, worktreeBusy) || remoteWriteDisabled}
                   onClick={() => void handleMergeWorktree()}
                 >
                   {t('workbench:worktrees.merge')}
