@@ -2379,7 +2379,7 @@ export function Workbench() {
    *
    * Code Logic（这个函数做什么）:
    *   调用后端 rename 后按原路径映射所有受影响 tab 的 path/id/metadata；activeFileTabId 同步改名后的 id，
-   *   content、dirty、mode 和保存基线保持不变。
+   *   content、dirty、mode 和保存基线保持不变，并让此前发出的旧路径 open 响应失效。
    */
   const handleRenamePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
@@ -2401,6 +2401,7 @@ export function Workbench() {
       ) {
         return;
       }
+      openFileRequestSeqRef.current += 1;
       const renamedTabIds = new Map<string, string>();
       const nextTabs = fileTabsRef.current.map((tab) => {
         const nextPath = renamedPathForTab(tab.path, originalPath, renamed.path);
@@ -2454,7 +2455,7 @@ export function Workbench() {
    *
    * Code Logic（这个函数做什么）:
    *   调用后端 delete 后关闭命中的文件 tab；如果 active tab 被删除，按相邻/剩余 tab 重新选择，
-   *   没有剩余 tab 时切回终端视图。
+   *   没有剩余 tab 时切回终端视图，并让此前发出的旧路径 open 响应失效。
    */
   const handleDeletePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
@@ -2472,6 +2473,7 @@ export function Workbench() {
       ) {
         return;
       }
+      openFileRequestSeqRef.current += 1;
       const removedTabIds = new Set(
         fileTabsRef.current
           .filter((tab) =>
