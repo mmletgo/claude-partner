@@ -241,7 +241,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
         return;
       }
 
-      let nextIndex: number | null = null;
+      let nextIndex: number;
 
       switch (event.key) {
         case 'ArrowRight':

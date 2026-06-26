@@ -110,29 +110,33 @@ export function WorkbenchMarkdownEditor({
   }, [editor, readOnly]);
 
   useEffect(() => {
-    if (!editor) {
-      setSourceValue(value);
-      return;
-    }
+    let nextSourceValue: string | undefined;
+    let nextSyncError = false;
 
     try {
-      const currentMarkdown = editor.getMarkdown();
-
-      if (currentMarkdown === value) {
-        setSourceValue(value);
-        setSyncError(false);
-        return;
-      }
-
-      if (trySetEditorMarkdown(editor, value)) {
-        setSourceValue(value);
-        setSyncError(false);
+      if (!editor) {
+        nextSourceValue = value;
       } else {
-        setSyncError(true);
+        const currentMarkdown = editor.getMarkdown();
+
+        if (currentMarkdown === value || trySetEditorMarkdown(editor, value)) {
+          nextSourceValue = value;
+        } else {
+          nextSyncError = true;
+        }
       }
     } catch {
-      setSyncError(true);
+      nextSyncError = true;
     }
+
+    const syncTimer = window.setTimeout(() => {
+      if (nextSourceValue !== undefined) {
+        setSourceValue(nextSourceValue);
+      }
+      setSyncError(nextSyncError);
+    }, 0);
+
+    return () => window.clearTimeout(syncTimer);
   }, [editor, value]);
 
   const handleWysiwygMode = useCallback(() => {
