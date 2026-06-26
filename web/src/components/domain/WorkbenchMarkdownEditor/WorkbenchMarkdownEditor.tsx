@@ -7,8 +7,8 @@
  *
  * Code Logic（这个组件做什么）:
  *   - 使用 Tiptap StarterKit + Markdown extension 渲染 WYSIWYG 编辑区，并用 WorkbenchCodeEditor 复用源码编辑能力
- *   - 维护一份本地 Markdown 字符串，在 WYSIWYG/source/split 三种模式之间同步内容并向上层派发 onChange
- *   - 捕获 Markdown 序列化或解析失败，保留当前编辑内容并展示本地化同步错误提示
+ *   - 维护一份本地 Markdown 字符串，只有 Tiptap 成功接受 Markdown 后才从源码侧提交内容
+ *   - 捕获 Markdown 序列化或解析失败，保留当前模式内容并展示本地化同步错误提示
  */
 
 import type { Editor } from '@tiptap/core';
@@ -33,6 +33,28 @@ export interface WorkbenchMarkdownEditorProps {
 const MARKDOWN_EDITOR_EXTENSIONS = [StarterKit, Markdown];
 
 /**
+ * 尝试把 Markdown 写入 Tiptap 编辑器
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   Workbench Markdown 编辑器需要确保 WYSIWYG 文档和源码字符串始终来自同一次成功同步；
+ *   如果 Tiptap 解析失败，不能提前把失败内容提交给父级，避免后续 WYSIWYG 更新覆盖源码。
+ *
+ * Code Logic（这个函数做什么）:
+ *   调用 Tiptap setContent 写入 Markdown，并指定 contentType 与 emitUpdate:false；命令返回 false 或抛错都视为失败，
+ *   调用方据此决定是否更新 sourceValue 和触发 onChange。
+ */
+function trySetEditorMarkdown(editor: Editor, markdown: string): boolean {
+  try {
+    return editor.commands.setContent(markdown, {
+      contentType: 'markdown',
+      emitUpdate: false,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 渲染工作台 Markdown 编辑器
  *
  * Business Logic（为什么需要这个组件）:
@@ -41,8 +63,8 @@ const MARKDOWN_EDITOR_EXTENSIONS = [StarterKit, Markdown];
  *
  * Code Logic（这个组件做什么）:
  *   初始化 Tiptap Markdown 编辑器和本地 sourceValue 状态；WYSIWYG 更新时用 editor.getMarkdown() 序列化，
- *   源码更新和外部 value 更新时用 editor.commands.setContent(..., { contentType: 'markdown', emitUpdate: false })
- *   回写 Tiptap，并通过 syncError 状态展示同步失败提示。
+ *   源码更新和外部 value 更新时先通过 trySetEditorMarkdown 确认 Tiptap 接受内容，成功后才更新 sourceValue/父级，
+ *   并通过 syncError 状态展示同步失败提示。
  */
 export function WorkbenchMarkdownEditor({
   value,
@@ -79,20 +101,26 @@ export function WorkbenchMarkdownEditor({
   }, [onChange]);
 
   useEffect(() => {
-    setSourceValue(value);
-
     if (!editor) {
+      setSourceValue(value);
       return;
     }
 
     try {
-      if (editor.getMarkdown() !== value) {
-        editor.commands.setContent(value, {
-          contentType: 'markdown',
-          emitUpdate: false,
-        });
+      const currentMarkdown = editor.getMarkdown();
+
+      if (currentMarkdown === value) {
+        setSourceValue(value);
+        setSyncError(false);
+        return;
       }
-      setSyncError(false);
+
+      if (trySetEditorMarkdown(editor, value)) {
+        setSourceValue(value);
+        setSyncError(false);
+      } else {
+        setSyncError(true);
+      }
     } catch {
       setSyncError(true);
     }
@@ -112,22 +140,14 @@ export function WorkbenchMarkdownEditor({
 
   const handleSourceChange = useCallback(
     (next: string) => {
-      setSourceValue(next);
-      setSyncError(false);
-      onChangeRef.current(next);
-
-      if (!editor) {
+      if (editor && !trySetEditorMarkdown(editor, next)) {
+        setSyncError(true);
         return;
       }
 
-      try {
-        editor.commands.setContent(next, {
-          contentType: 'markdown',
-          emitUpdate: false,
-        });
-      } catch {
-        setSyncError(true);
-      }
+      setSyncError(false);
+      setSourceValue(next);
+      onChangeRef.current(next);
     },
     [editor],
   );
