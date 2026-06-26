@@ -202,6 +202,91 @@ function basename(path: string, rootLabel: string): string {
 
 /**
  * Business Logic（为什么需要这个函数）:
+ *   文件工作区 tab id 需要同时区分 main worktree 与功能 worktree，避免同一路径跨 worktree 冲突。
+ *
+ * Code Logic（这个函数做什么）:
+ *   按当前 worktreeId 和文件相对路径生成稳定 tab id；主工作区使用 main 前缀。
+ */
+function workbenchFileTabId(worktreeId: string | null, path: string): string {
+  return `${worktreeId ?? 'main'}:${path}`;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   重命名目录或删除目录时，需要判断某个已打开文件 tab 是否位于目标目录下。
+ *
+ * Code Logic（这个函数做什么）:
+ *   对同一路径直接命中；非空目录路径则用 `path/` 前缀判断后代路径。
+ */
+function isSameOrDescendantPath(path: string, targetPath: string): boolean {
+  if (path === targetPath) return true;
+  if (!targetPath) return path.length > 0;
+  return path.startsWith(`${targetPath}/`);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   用户重命名文件或目录后，已打开 tab 需要继续指向新的相对路径并保留未保存编辑。
+ *
+ * Code Logic（这个函数做什么）:
+ *   命中原路径时返回新路径；命中原目录后代时拼接新目录路径和原后缀；不相关路径返回 null。
+ */
+function renamedPathForTab(path: string, originalPath: string, renamedPath: string): string | null {
+  if (path === originalPath) return renamedPath;
+  if (!originalPath || !path.startsWith(`${originalPath}/`)) return null;
+  return `${renamedPath}${path.slice(originalPath.length)}`;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   dirty tab 重新打开时可以刷新 preview/metadata，但不能刷新保存基线，否则会绕过后端 optimistic lock。
+ *
+ * Code Logic（这个函数做什么）:
+ *   基于后端最新 opened payload 更新 metadata/preview；当 tab 已 dirty 时保留原 opened.text 作为 baseHash、
+ *   baseModifiedAt 和打开时 content 的来源。
+ */
+function mergeOpenedForReopenedTab(
+  existingTab: WorkbenchOpenFileTab,
+  freshTab: WorkbenchOpenFileTab,
+): WorkbenchOpenFileTab {
+  if (!existingTab.dirty) return freshTab;
+
+  return {
+    ...existingTab,
+    path: freshTab.path,
+    name: freshTab.name,
+    opened: {
+      ...freshTab.opened,
+      text: existingTab.opened.text,
+    },
+  };
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   关闭或删除 tab 后需要选择合理的相邻 tab，避免 activeFileTabId 指向不存在的文件。
+ *
+ * Code Logic（这个函数做什么）:
+ *   如果当前 active tab 未被移除则保持不变；否则优先选择原 active 前一个邻居，再退到最后一个剩余 tab。
+ */
+function nextActiveFileTabIdAfterRemoval(
+  currentTabs: WorkbenchOpenFileTab[],
+  removedTabIds: Set<string>,
+  activeTabId: string | null,
+): string | null {
+  const remainingTabs = currentTabs.filter((tab) => !removedTabIds.has(tab.id));
+  if (remainingTabs.length === 0) return null;
+  if (activeTabId && !removedTabIds.has(activeTabId)) return activeTabId;
+
+  const activeIndex = activeTabId
+    ? currentTabs.findIndex((tab) => tab.id === activeTabId)
+    : -1;
+  const fallbackIndex = activeIndex >= 0 ? Math.max(0, activeIndex - 1) : 0;
+  return remainingTabs[Math.min(fallbackIndex, remainingTabs.length - 1)]?.id ?? null;
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
  *   检查器要展示文件大小，直接展示字节数不利于扫描。
  *
  * Code Logic（这个函数做什么）:
@@ -727,6 +812,11 @@ export function Workbench() {
   const lastLocalFocusAtRef = useRef<number>(0);
   const mergeProgressWorktreeIdRef = useRef<string | null>(null);
   const mergeStageDismissTimerRef = useRef<ReturnType<typeof window.setTimeout> | null>(null);
+  const fileTabsRef = useRef<WorkbenchOpenFileTab[]>([]);
+  const activeFileTabIdRef = useRef<string | null>(null);
+  const openFileRequestSeqRef = useRef<number>(0);
+  const formatRequestSeqRef = useRef<Record<string, number>>({});
+  const sqlitePreviewRequestSeqRef = useRef<Record<string, number>>({});
 
   const activeWorktree = useMemo(
     () => worktrees.find((worktree) => worktree.id === activeWorktreeId) ?? worktrees[0] ?? null,
@@ -1090,6 +1180,14 @@ export function Workbench() {
   }, [sessions]);
 
   useEffect(() => {
+    fileTabsRef.current = fileTabs;
+  }, [fileTabs]);
+
+  useEffect(() => {
+    activeFileTabIdRef.current = activeFileTabId;
+  }, [activeFileTabId]);
+
+  useEffect(() => {
     return deferEffect(() => {
       setActiveSessionId((current) => {
         if (current && scopedSessions.some((session) => session.id === current)) return current;
@@ -1150,6 +1248,11 @@ export function Workbench() {
     return deferEffect(() => {
       clearMergeStagePanel();
       if (!activeProjectId) {
+        openFileRequestSeqRef.current += 1;
+        formatRequestSeqRef.current = {};
+        sqlitePreviewRequestSeqRef.current = {};
+        fileTabsRef.current = [];
+        activeFileTabIdRef.current = null;
         knownSessionIdsRef.current = new Set();
         setSessions([]);
         setActiveSessionId(null);
@@ -1173,6 +1276,11 @@ export function Workbench() {
         setGitHistoryError(null);
         return;
       }
+      openFileRequestSeqRef.current += 1;
+      formatRequestSeqRef.current = {};
+      sqlitePreviewRequestSeqRef.current = {};
+      fileTabsRef.current = [];
+      activeFileTabIdRef.current = null;
       setRootNodes([]);
       knownSessionIdsRef.current = new Set();
       setWorktrees([]);
@@ -1199,6 +1307,11 @@ export function Workbench() {
 
   useEffect(() => {
     return deferEffect(() => {
+      openFileRequestSeqRef.current += 1;
+      formatRequestSeqRef.current = {};
+      sqlitePreviewRequestSeqRef.current = {};
+      fileTabsRef.current = [];
+      activeFileTabIdRef.current = null;
       setRootNodes([]);
       setChildrenByPath({});
       setExpandedPaths(new Set());
@@ -1458,6 +1571,7 @@ export function Workbench() {
 
   useEffect(() => {
     const handleShortcutEvent = (event: KeyboardEvent) => {
+      if (workspaceView !== 'terminal') return;
       const result = reducePromptOptimizerShortcut(
         promptShortcutStateRef.current,
         {
@@ -1484,7 +1598,7 @@ export function Workbench() {
       window.removeEventListener('keydown', handleShortcutEvent, { capture: true });
       window.removeEventListener('keyup', handleShortcutEvent, { capture: true });
     };
-  }, [promptOptimizerHotkey, triggerPromptOptimizerShortcut]);
+  }, [promptOptimizerHotkey, triggerPromptOptimizerShortcut, workspaceView]);
 
   const handleResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
     try {
@@ -1754,8 +1868,8 @@ export function Workbench() {
    *   用户从右侧文件树点选文件时，需要在 Workbench 中打开文件工作区，同时保留终端会话上下文。
    *
    * Code Logic（这个函数做什么）:
-   *   对当前 project/worktree 发起 open 文件请求；响应回来后校验是否仍是同一上下文，创建或刷新文件 tab，
-   *   已有 dirty tab 保留用户编辑内容和模式，只更新后端 metadata/preview。
+   *   对当前 project/worktree 发起带序号的 open 文件请求；只有最后一次点击的响应允许激活 tab。
+   *   已有 dirty tab 保留用户编辑内容、模式和原 opened.text 保存基线，只更新后端 metadata/preview。
    */
   const handleOpenFile = useCallback(
     async (node: WorkbenchFileNode) => {
@@ -1763,6 +1877,8 @@ export function Workbench() {
       const projectId = activeProjectIdRef.current;
       if (!projectId) return;
       const worktreeId = activeWorktreeIdRef.current;
+      const requestSeq = openFileRequestSeqRef.current + 1;
+      openFileRequestSeqRef.current = requestSeq;
 
       try {
         setFileError(null);
@@ -1770,12 +1886,13 @@ export function Workbench() {
         const opened = await workbenchApi.files.open(projectId, node.path, worktreeId);
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          openFileRequestSeqRef.current !== requestSeq
         ) {
           return;
         }
 
-        const tabId = `${worktreeId ?? 'main'}:${opened.metadata.path}`;
+        const tabId = workbenchFileTabId(worktreeId, opened.metadata.path);
         const freshTab: WorkbenchOpenFileTab = {
           id: tabId,
           path: opened.metadata.path,
@@ -1794,24 +1911,17 @@ export function Workbench() {
 
           return currentTabs.map((tab) => {
             if (tab.id !== tabId) return tab;
-            if (tab.dirty) {
-              return {
-                ...tab,
-                path: opened.metadata.path,
-                name: opened.metadata.name,
-                opened,
-              };
-            }
-
-            return freshTab;
+            return mergeOpenedForReopenedTab(tab, freshTab);
           });
         });
+        activeFileTabIdRef.current = tabId;
         setActiveFileTabId(tabId);
         setWorkspaceView('files');
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          openFileRequestSeqRef.current !== requestSeq
         ) {
           return;
         }
@@ -1859,6 +1969,7 @@ export function Workbench() {
    *   只更新 activeFileTabId 和 workspaceView，具体 tab 内容由 WorkbenchFileWorkspace 根据 id 渲染。
    */
   const handleActivateFileTab = useCallback((id: string) => {
+    activeFileTabIdRef.current = id;
     setActiveFileTabId(id);
     setWorkspaceView('files');
   }, []);
@@ -1872,27 +1983,21 @@ export function Workbench() {
    */
   const handleCloseFileTab = useCallback(
     (id: string) => {
-      const closingIndex = fileTabs.findIndex((tab) => tab.id === id);
-      if (closingIndex < 0) return;
-
+      if (!fileTabs.some((tab) => tab.id === id)) return;
+      const removedTabIds = new Set([id]);
       const nextTabs = fileTabs.filter((tab) => tab.id !== id);
+      const nextActiveTabId = nextActiveFileTabIdAfterRemoval(
+        fileTabs,
+        removedTabIds,
+        activeFileTabIdRef.current,
+      );
+      fileTabsRef.current = nextTabs;
+      activeFileTabIdRef.current = nextActiveTabId;
       setFileTabs(nextTabs);
-
-      if (nextTabs.length === 0) {
-        setActiveFileTabId(null);
-        setWorkspaceView('terminal');
-        return;
-      }
-
-      if (activeFileTabId !== id) {
-        return;
-      }
-
-      const nextActiveTab = nextTabs[Math.max(0, closingIndex - 1)] ?? nextTabs.at(-1) ?? null;
-      setActiveFileTabId(nextActiveTab?.id ?? null);
-      setWorkspaceView('files');
+      setActiveFileTabId(nextActiveTabId);
+      setWorkspaceView(nextActiveTabId ? 'files' : 'terminal');
     },
-    [activeFileTabId, fileTabs],
+    [fileTabs],
   );
 
   /**
@@ -2065,7 +2170,8 @@ export function Workbench() {
    *   用户需要在保存前格式化 JSON/TOML，但格式化不应自动写盘。
    *
    * Code Logic（这个函数做什么）:
-   *   先用前端校验器阻止非法内容，再调用后端格式化命令获得统一输出，并把 tab 标记为 dirty。
+   *   捕获提交时的内容、project/worktree 和 tab 请求序号；响应回来后仍是最新请求且内容未变化时，
+   *   才用后端格式化输出更新 tab 并标记 dirty。
    */
   const handleFormatFileTab = useCallback(
     async (id: string) => {
@@ -2082,14 +2188,39 @@ export function Workbench() {
         setFileError(`${t('workbench:errors.formatFile')}: ${validationMessage}`);
         return;
       }
+      const projectId = activeProjectIdRef.current;
+      if (!projectId) return;
+      const worktreeId = activeWorktreeIdRef.current;
+      const submittedContent = tab.content;
+      const requestSeq = (formatRequestSeqRef.current[id] ?? 0) + 1;
+      formatRequestSeqRef.current[id] = requestSeq;
 
       try {
         setFileError(null);
         setFileNotice(null);
-        const result = await workbenchApi.files.formatStructured(kind, tab.content);
+        const result = await workbenchApi.files.formatStructured(kind, submittedContent);
+        const latestTab = fileTabsRef.current.find((candidate) => candidate.id === id);
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId ||
+          formatRequestSeqRef.current[id] !== requestSeq ||
+          !latestTab ||
+          latestTab.content !== submittedContent
+        ) {
+          return;
+        }
+        fileTabsRef.current = fileTabsRef.current.map((currentTab) =>
+          currentTab.id === id
+            ? {
+                ...currentTab,
+                content: result.formatted,
+                dirty: true,
+              }
+            : currentTab,
+        );
         setFileTabs((currentTabs) =>
           currentTabs.map((currentTab) =>
-            currentTab.id === id
+            currentTab.id === id && currentTab.content === submittedContent
               ? {
                   ...currentTab,
                   content: result.formatted,
@@ -2100,6 +2231,16 @@ export function Workbench() {
         );
         setFileNotice(t('workbench:fileWorkspace.formatted'));
       } catch (error) {
+        const latestTab = fileTabsRef.current.find((candidate) => candidate.id === id);
+        if (
+          activeProjectIdRef.current !== projectId ||
+          activeWorktreeIdRef.current !== worktreeId ||
+          formatRequestSeqRef.current[id] !== requestSeq ||
+          !latestTab ||
+          latestTab.content !== submittedContent
+        ) {
+          return;
+        }
         setFileError(
           displayErrorMessage(error, t('workbench:errors.formatFile'), desktopUnavailableMessage),
         );
@@ -2113,7 +2254,8 @@ export function Workbench() {
    *   SQLite 文件预览需要按用户选择的表重新加载行数据，而不是重新打开整个文件 tab。
    *
    * Code Logic（这个函数做什么）:
-   *   调用 previewSqlite 获取指定表前 100 行；响应仍属于当前 project/worktree 时只替换 tab.opened.sqlite。
+   *   为每个 tab 的表预览请求递增序号；响应仍属于当前 project/worktree 且是该 tab 最新请求时，
+   *   才替换 tab.opened.sqlite。
    */
   const handleSelectSqliteTable = useCallback(
     async (id: string, table: string) => {
@@ -2121,6 +2263,8 @@ export function Workbench() {
       const projectId = activeProjectIdRef.current;
       if (!tab || !projectId) return;
       const worktreeId = activeWorktreeIdRef.current;
+      const requestSeq = (sqlitePreviewRequestSeqRef.current[id] ?? 0) + 1;
+      sqlitePreviewRequestSeqRef.current[id] = requestSeq;
 
       try {
         setFileError(null);
@@ -2133,10 +2277,23 @@ export function Workbench() {
         );
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          sqlitePreviewRequestSeqRef.current[id] !== requestSeq ||
+          !fileTabsRef.current.some((candidate) => candidate.id === id)
         ) {
           return;
         }
+        fileTabsRef.current = fileTabsRef.current.map((currentTab) =>
+          currentTab.id === id
+            ? {
+                ...currentTab,
+                opened: {
+                  ...currentTab.opened,
+                  sqlite,
+                },
+              }
+            : currentTab,
+        );
         setFileTabs((currentTabs) =>
           currentTabs.map((currentTab) =>
             currentTab.id === id
@@ -2153,7 +2310,9 @@ export function Workbench() {
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          sqlitePreviewRequestSeqRef.current[id] !== requestSeq ||
+          !fileTabsRef.current.some((candidate) => candidate.id === id)
         ) {
           return;
         }
@@ -2217,6 +2376,14 @@ export function Workbench() {
     [desktopUnavailableMessage, loadDir, newEntryName, selectedParentPath, t],
   );
 
+  /**
+   * Business Logic（为什么需要这个函数）:
+   *   文件树重命名成功后，用户已经打开的文件 tab 应继续指向新路径，且不能丢失未保存编辑。
+   *
+   * Code Logic（这个函数做什么）:
+   *   调用后端 rename 后按原路径映射所有受影响 tab 的 path/id/metadata；activeFileTabId 同步改名后的 id，
+   *   content、dirty、mode 和保存基线保持不变。
+   */
   const handleRenamePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo || !renameName.trim()) return;
@@ -2237,6 +2404,37 @@ export function Workbench() {
       ) {
         return;
       }
+      const renamedTabIds = new Map<string, string>();
+      const nextTabs = fileTabsRef.current.map((tab) => {
+        const nextPath = renamedPathForTab(tab.path, originalPath, renamed.path);
+        if (!nextPath) return tab;
+
+        const nextId = workbenchFileTabId(worktreeId, nextPath);
+        const nextName = tab.path === originalPath ? renamed.name : basename(nextPath, tab.name);
+        renamedTabIds.set(tab.id, nextId);
+        return {
+          ...tab,
+          id: nextId,
+          path: nextPath,
+          name: nextName,
+          opened: {
+            ...tab.opened,
+            metadata: {
+              ...tab.opened.metadata,
+              ...(tab.path === originalPath ? renamed : {}),
+              path: nextPath,
+              name: nextName,
+            },
+          },
+        };
+      });
+      fileTabsRef.current = nextTabs;
+      setFileTabs(nextTabs);
+      const nextActiveFileTabId = activeFileTabIdRef.current
+        ? renamedTabIds.get(activeFileTabIdRef.current) ?? activeFileTabIdRef.current
+        : null;
+      activeFileTabIdRef.current = nextActiveFileTabId;
+      setActiveFileTabId(nextActiveFileTabId);
       setSelectedPath(renamed.path);
       setSelectedInfo(renamed);
       setRenameName(renamed.name);
@@ -2254,6 +2452,14 @@ export function Workbench() {
     }
   }, [desktopUnavailableMessage, refreshParentDir, renameName, selectedInfo, t]);
 
+  /**
+   * Business Logic（为什么需要这个函数）:
+   *   文件树删除路径成功后，被删除文件或目录下的已打开 tab 不能继续指向不存在的路径。
+   *
+   * Code Logic（这个函数做什么）:
+   *   调用后端 delete 后关闭命中的文件 tab；如果 active tab 被删除，按相邻/剩余 tab 重新选择，
+   *   没有剩余 tab 时切回终端视图。
+   */
   const handleDeletePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo) return;
@@ -2270,6 +2476,24 @@ export function Workbench() {
       ) {
         return;
       }
+      const removedTabIds = new Set(
+        fileTabsRef.current
+          .filter((tab) =>
+            selectedInfo.kind === 'dir' ? isSameOrDescendantPath(tab.path, path) : tab.path === path,
+          )
+          .map((tab) => tab.id),
+      );
+      const nextActiveTabId = nextActiveFileTabIdAfterRemoval(
+        fileTabsRef.current,
+        removedTabIds,
+        activeFileTabIdRef.current,
+      );
+      const nextTabs = fileTabsRef.current.filter((tab) => !removedTabIds.has(tab.id));
+      fileTabsRef.current = nextTabs;
+      activeFileTabIdRef.current = nextActiveTabId;
+      setFileTabs(nextTabs);
+      setActiveFileTabId(nextActiveTabId);
+      setWorkspaceView(nextActiveTabId ? 'files' : 'terminal');
       setSelectedPath(null);
       setSelectedInfo(null);
       setRenameName('');
