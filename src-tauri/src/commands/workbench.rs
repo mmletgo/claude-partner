@@ -567,17 +567,16 @@ pub async fn list_workbench_projects(
     Ok(rows.iter().map(WorkbenchProjectRow::to_dto).collect())
 }
 
-/// 添加或重新打开一个本机项目文件夹。
+/// 添加或重新打开一个本机项目文件夹的共享实现。
 ///
 /// Business Logic（为什么需要这个函数）:
-///     用户指定本机或已挂载局域网文件夹后，工作台需要保存它并在该目录中启动终端与文件树。
+///     本机 Tauri 命令和远端 HTTP open-project 路由都需要在执行设备上创建或复用本地项目记录。
 ///
 /// Code Logic（这个函数做什么）:
 ///     canonicalize 输入路径并要求是目录；同路径已有记录则复用 id/created_at，只更新时间；
 ///     新路径生成 UUID 项目 id，kind 固定为 local，设备信息来自 AppState/config。
-#[tauri::command]
-pub async fn add_workbench_project(
-    state: State<'_, AppState>,
+pub async fn add_local_workbench_project_from_path(
+    state: &AppState,
     path: String,
 ) -> Result<WorkbenchProjectDto, AppError> {
     let root = run_blocking_fs(move || projects::canonical_project_root(&path)).await?;
@@ -613,6 +612,21 @@ pub async fn add_workbench_project(
     };
     state.workbench_project_repo.upsert(&row).await?;
     Ok(row.to_dto())
+}
+
+/// 添加或重新打开一个本机项目文件夹。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户指定本机或已挂载局域网文件夹后，工作台需要保存它并在该目录中启动终端与文件树。
+///
+/// Code Logic（这个函数做什么）:
+///     Tauri invoke thin wrapper，委托共享实现处理 canonicalize、复用已有项目和写库。
+#[tauri::command]
+pub async fn add_workbench_project(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<WorkbenchProjectDto, AppError> {
+    add_local_workbench_project_from_path(&state, path).await
 }
 
 /// 从工作台最近项目中移除记录。

@@ -13,7 +13,7 @@
 
 use crate::net::routes::{
     cc_history, claude_code_assets, claude_md_sync, health, scratchpad_sync, ssh_target_sync, sync,
-    transfer,
+    transfer, workbench,
 };
 use crate::state::AppState;
 use axum::extract::DefaultBodyLimit;
@@ -86,6 +86,14 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
         .route(
             "/api/claude-code/assets/bundle",
             post(claude_code_assets::assets_bundle),
+        )
+        // Workbench 远端目录选择与项目打开：远端设备执行本机 helper，调用方后续再建立 remote shortcut
+        .route("/api/workbench/fs/roots", get(workbench::remote_roots))
+        .route("/api/workbench/fs/list", post(workbench::remote_list_dir))
+        .route("/api/workbench/fs/info", post(workbench::remote_path_info))
+        .route(
+            "/api/workbench/projects/open",
+            post(workbench::open_remote_project),
         )
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))
         .with_state(state.clone());
