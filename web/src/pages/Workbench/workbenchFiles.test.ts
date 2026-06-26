@@ -1,11 +1,15 @@
 import {
+  collectTabsForPath,
   detectWorkbenchFileType,
+  dirtyTabNames,
   fileCapabilitiesForType,
   formatJsonText,
   formatTomlText,
+  isLatestRequest,
   reduceFileTabs,
   validateJsonText,
   validateTomlText,
+  workbenchDirRequestKey,
 } from './workbenchFiles';
 
 /**
@@ -144,6 +148,33 @@ async function main(): Promise<void> {
   const mutableCaps = fileCapabilitiesForType('markdown');
   mutableCaps.availableModes.push('viewer');
   assert(!fileCapabilitiesForType('markdown').availableModes.includes('viewer'), 'capabilities return copied modes');
+
+  const openedTabs = [
+    { id: 'readme', path: 'README.md', name: 'README.md', dirty: true },
+    { id: 'src-main', path: 'src/main.ts', name: 'main.ts', dirty: false },
+    { id: 'src-app', path: 'src/App.tsx', name: 'App.tsx', dirty: true },
+    { id: 'docs', path: 'docs/guide.md', name: 'guide.md', dirty: false },
+  ];
+  assert(
+    collectTabsForPath(openedTabs, 'README.md', 'file').map((tab) => tab.id).join(',') === 'readme',
+    'file path collection only matches the exact file tab',
+  );
+  assert(
+    collectTabsForPath(openedTabs, 'src', 'dir').map((tab) => tab.id).join(',') === 'src-main,src-app',
+    'directory path collection includes descendant file tabs',
+  );
+  assert(
+    dirtyTabNames(collectTabsForPath(openedTabs, 'src', 'dir')).join(',') === 'App.tsx',
+    'dirty tab names only include dirty affected tabs',
+  );
+
+  const mainRootKey = workbenchDirRequestKey('project-1', null, '');
+  const worktreeRootKey = workbenchDirRequestKey('project-1', 'wt-1', '');
+  const worktreeSrcKey = workbenchDirRequestKey('project-1', 'wt-1', 'src');
+  assert(mainRootKey !== worktreeRootKey, 'dir request key separates main workspace from worktree');
+  assert(worktreeRootKey !== worktreeSrcKey, 'dir request key separates paths');
+  assert(!isLatestRequest(2, 1), 'older request seq is not latest');
+  assert(isLatestRequest(2, 2), 'matching request seq is latest');
 }
 
 void main();

@@ -61,6 +61,12 @@ export interface FormatResult {
   message: string | null;
 }
 
+export interface WorkbenchPathTabCandidate {
+  path: string;
+  name: string;
+  dirty: boolean;
+}
+
 const IMAGE_EXTENSIONS = new Set(['avif', 'bmp', 'gif', 'ico', 'jpeg', 'jpg', 'png', 'svg', 'tif', 'tiff', 'webp']);
 const MARKDOWN_EXTENSIONS = new Set(['markdown', 'md', 'mdown', 'mdx', 'mkd']);
 const JSON_EXTENSIONS = new Set(['json']);
@@ -242,6 +248,57 @@ const FILE_CAPABILITIES: Record<WorkbenchDetectedFileType, WorkbenchFileCapabili
     availableModes: ['viewer'],
   },
 };
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   关闭或删除路径前需要知道哪些已打开文件 tab 会受影响，避免静默丢弃未保存编辑。
+ *
+ * Code Logic（这个函数做什么）:
+ *   文件路径只匹配同路径 tab；目录路径匹配同路径和所有后代路径，返回原 tab 对象列表。
+ */
+export function collectTabsForPath<Tab extends WorkbenchPathTabCandidate>(
+  tabs: Tab[],
+  path: string,
+  kind: 'file' | 'dir' | string,
+): Tab[] {
+  if (kind === 'dir') {
+    return tabs.filter((tab) => tab.path === path || (!path ? tab.path.length > 0 : tab.path.startsWith(`${path}/`)));
+  }
+  return tabs.filter((tab) => tab.path === path);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   确认放弃未保存修改时，提示文案需要列出受影响的 dirty 文件名。
+ *
+ * Code Logic（这个函数做什么）:
+ *   从 tab 列表中过滤 dirty=true 的项并返回文件名数组，保持原顺序。
+ */
+export function dirtyTabNames<Tab extends WorkbenchPathTabCandidate>(tabs: Tab[]): string[] {
+  return tabs.filter((tab) => tab.dirty).map((tab) => tab.name);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   文件树目录加载请求需要按项目、worktree 和路径隔离顺序号，避免旧响应覆盖新目录内容。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将 projectId、worktreeId 和 path 序列化为稳定 key；main worktree 用固定标记区分。
+ */
+export function workbenchDirRequestKey(projectId: string, worktreeId: string | null, path: string): string {
+  return JSON.stringify([projectId, worktreeId ?? 'main', path]);
+}
+
+/**
+ * Business Logic（为什么需要这个函数）:
+ *   异步请求返回时需要统一判断当前序号是否仍是最新，旧响应不应写入 UI 状态。
+ *
+ * Code Logic（这个函数做什么）:
+ *   比较当前保存的最新序号与请求发起时捕获的序号，完全相等才允许应用结果。
+ */
+export function isLatestRequest(currentSeq: number | undefined, requestSeq: number): boolean {
+  return currentSeq === requestSeq;
+}
 
 /**
  * Business Logic（为什么需要这个函数）:

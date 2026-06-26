@@ -96,8 +96,12 @@ import {
 } from './workbenchWorktrees';
 import type { WorktreeBranchPrefix } from './workbenchWorktrees';
 import {
+  collectTabsForPath,
+  dirtyTabNames,
+  isLatestRequest,
   validateJsonText,
   validateTomlText,
+  workbenchDirRequestKey,
 } from './workbenchFiles';
 import type { WorkbenchFileWorkspaceView } from './workbenchFiles';
 
@@ -209,19 +213,6 @@ function basename(path: string, rootLabel: string): string {
  */
 function workbenchFileTabId(worktreeId: string | null, path: string): string {
   return `${worktreeId ?? 'main'}:${path}`;
-}
-
-/**
- * Business Logic（为什么需要这个函数）:
- *   重命名目录或删除目录时，需要判断某个已打开文件 tab 是否位于目标目录下。
- *
- * Code Logic（这个函数做什么）:
- *   对同一路径直接命中；非空目录路径则用 `path/` 前缀判断后代路径。
- */
-function isSameOrDescendantPath(path: string, targetPath: string): boolean {
-  if (path === targetPath) return true;
-  if (!targetPath) return path.length > 0;
-  return path.startsWith(`${targetPath}/`);
 }
 
 /**
@@ -815,8 +806,10 @@ export function Workbench() {
   const fileTabsRef = useRef<WorkbenchOpenFileTab[]>([]);
   const activeFileTabIdRef = useRef<string | null>(null);
   const openFileRequestSeqRef = useRef<number>(0);
+  const saveRequestSeqRef = useRef<Record<string, number>>({});
   const formatRequestSeqRef = useRef<Record<string, number>>({});
   const sqlitePreviewRequestSeqRef = useRef<Record<string, number>>({});
+  const dirRequestSeqRef = useRef<Record<string, number>>({});
 
   const activeWorktree = useMemo(
     () => worktrees.find((worktree) => worktree.id === activeWorktreeId) ?? worktrees[0] ?? null,
@@ -1052,18 +1045,29 @@ export function Workbench() {
     [desktopUnavailableMessage, t],
   );
 
+  /**
+   * Business Logic（为什么需要这个函数）:
+   *   文件树展开和刷新会对同一路径发起多次异步请求，旧响应不能覆盖最新目录内容或错误状态。
+   *
+   * Code Logic（这个函数做什么）:
+   *   按 project/worktree/path 生成请求 key 并递增序号；响应、错误和 loading 清理只在当前序号仍最新时回写。
+   */
   const loadDir = useCallback(
     async (path: string) => {
       const projectId = activeProjectIdRef.current;
       if (!projectId) return;
       const worktreeId = activeWorktreeIdRef.current;
+      const requestKey = workbenchDirRequestKey(projectId, worktreeId, path);
+      const requestSeq = (dirRequestSeqRef.current[requestKey] ?? 0) + 1;
+      dirRequestSeqRef.current[requestKey] = requestSeq;
       try {
         setFileError(null);
         setFileLoadingPath(path);
         const nodes = await workbenchApi.files.listDir(projectId, path, worktreeId);
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          !isLatestRequest(dirRequestSeqRef.current[requestKey], requestSeq)
         ) {
           return;
         }
@@ -1075,7 +1079,8 @@ export function Workbench() {
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          !isLatestRequest(dirRequestSeqRef.current[requestKey], requestSeq)
         ) {
           return;
         }
@@ -1083,8 +1088,12 @@ export function Workbench() {
           displayErrorMessage(error, t('workbench:errors.files'), desktopUnavailableMessage),
         );
       } finally {
-        if (activeProjectIdRef.current === projectId && activeWorktreeIdRef.current === worktreeId) {
-          setFileLoadingPath(null);
+        if (
+          activeProjectIdRef.current === projectId &&
+          activeWorktreeIdRef.current === worktreeId &&
+          isLatestRequest(dirRequestSeqRef.current[requestKey], requestSeq)
+        ) {
+          setFileLoadingPath((current) => (current === path ? null : current));
         }
       }
     },
@@ -1269,8 +1278,10 @@ export function Workbench() {
       clearMergeStagePanel();
       if (!activeProjectId) {
         openFileRequestSeqRef.current += 1;
+        saveRequestSeqRef.current = {};
         formatRequestSeqRef.current = {};
         sqlitePreviewRequestSeqRef.current = {};
+        dirRequestSeqRef.current = {};
         activeFileTabIdRef.current = null;
         knownSessionIdsRef.current = new Set();
         setSessions([]);
@@ -1296,8 +1307,10 @@ export function Workbench() {
         return;
       }
       openFileRequestSeqRef.current += 1;
+      saveRequestSeqRef.current = {};
       formatRequestSeqRef.current = {};
       sqlitePreviewRequestSeqRef.current = {};
+      dirRequestSeqRef.current = {};
       activeFileTabIdRef.current = null;
       setRootNodes([]);
       knownSessionIdsRef.current = new Set();
@@ -1326,8 +1339,10 @@ export function Workbench() {
   useEffect(() => {
     return deferEffect(() => {
       openFileRequestSeqRef.current += 1;
+      saveRequestSeqRef.current = {};
       formatRequestSeqRef.current = {};
       sqlitePreviewRequestSeqRef.current = {};
+      dirRequestSeqRef.current = {};
       activeFileTabIdRef.current = null;
       setRootNodes([]);
       setChildrenByPath({});
@@ -1993,15 +2008,26 @@ export function Workbench() {
 
   /**
    * Business Logic（为什么需要这个函数）:
-   *   用户关闭文件 tab 后，工作区需要选择相邻文件继续显示；全部关闭时自动回到终端。
+   *   用户关闭文件 tab 后，工作区需要选择相邻文件继续显示；dirty tab 不能在未确认时丢弃修改。
    *
    * Code Logic（这个函数做什么）:
-   *   基于当前 tabs 移除目标 tab；关闭 active tab 时优先选前一个邻居，否则选第一个剩余 tab。
+   *   关闭前检查目标 tab 是否 dirty；用户确认后移除目标 tab，并在关闭 active tab 时选择相邻或剩余 tab。
    */
   const handleCloseFileTab = useCallback(
     (id: string) => {
       const currentTabs = fileTabsRef.current;
-      if (!currentTabs.some((tab) => tab.id === id)) return;
+      const targetTab = currentTabs.find((tab) => tab.id === id);
+      if (!targetTab) return;
+      if (
+        targetTab.dirty &&
+        !window.confirm(
+          t('workbench:confirmCloseDirtyFile', {
+            names: dirtyTabNames([targetTab]).join(', '),
+          }),
+        )
+      ) {
+        return;
+      }
       const removedTabIds = new Set([id]);
       const nextTabs = currentTabs.filter((tab) => tab.id !== id);
       const nextActiveTabId = nextActiveFileTabIdAfterRemoval(
@@ -2014,7 +2040,7 @@ export function Workbench() {
       setActiveFileTabId(nextActiveTabId);
       setWorkspaceView(nextActiveTabId ? 'files' : 'terminal');
     },
-    [setFileTabsState],
+    [setFileTabsState, t],
   );
 
   /**
@@ -2083,8 +2109,8 @@ export function Workbench() {
    *   用户保存文件 tab 时，需要使用后端 baseHash 乐观锁写回当前 worktree，并刷新文件树元信息。
    *
    * Code Logic（这个函数做什么）:
-   *   找到目标 tab、校验 JSON/TOML、调用 saveText；响应仍属于当前 project/worktree 时更新 tab 的保存基线、
-   *   清除 dirty 状态，并刷新选中路径信息和父目录列表。
+   *   找到目标 tab、校验 JSON/TOML、捕获提交内容和请求序号后调用 saveText；响应仍最新时更新保存基线，
+   *   若保存期间又有内存编辑则保留当前 content 和 dirty=true，否则清除 dirty，并刷新路径信息。
    */
   const handleSaveFileTab = useCallback(
     async (id: string) => {
@@ -2106,6 +2132,9 @@ export function Workbench() {
       const projectId = activeProjectIdRef.current;
       if (!projectId) return;
       const worktreeId = activeWorktreeIdRef.current;
+      const submittedContent = tab.content;
+      const requestSeq = (saveRequestSeqRef.current[id] ?? 0) + 1;
+      saveRequestSeqRef.current[id] = requestSeq;
 
       try {
         setFileSaving(true);
@@ -2114,13 +2143,16 @@ export function Workbench() {
         const saved = await workbenchApi.files.saveText(
           projectId,
           tab.path,
-          tab.content,
+          submittedContent,
           baseHash,
           worktreeId,
         );
+        const latestTab = fileTabsRef.current.find((candidate) => candidate.id === id);
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          !isLatestRequest(saveRequestSeqRef.current[id], requestSeq) ||
+          !latestTab
         ) {
           return;
         }
@@ -2128,24 +2160,25 @@ export function Workbench() {
         setFileTabsState((currentTabs) =>
           currentTabs.map((currentTab) => {
             if (currentTab.id !== id) return currentTab;
+            const contentChangedAfterSubmit = currentTab.content !== submittedContent;
             return {
               ...currentTab,
               path: saved.metadata.path,
               name: saved.metadata.name,
-              dirty: false,
+              dirty: contentChangedAfterSubmit,
               opened: {
                 ...currentTab.opened,
                 metadata: saved.metadata,
                 text: currentTab.opened.text
                   ? {
                       ...currentTab.opened.text,
-                      content: tab.content,
+                      content: submittedContent,
                       baseHash: saved.baseHash,
                       baseModifiedAt: saved.baseModifiedAt,
                     }
                   : currentTab.opened.text,
               },
-              content: tab.content,
+              content: contentChangedAfterSubmit ? currentTab.content : submittedContent,
             };
           }),
         );
@@ -2158,7 +2191,8 @@ export function Workbench() {
       } catch (error) {
         if (
           activeProjectIdRef.current !== projectId ||
-          activeWorktreeIdRef.current !== worktreeId
+          activeWorktreeIdRef.current !== worktreeId ||
+          !isLatestRequest(saveRequestSeqRef.current[id], requestSeq)
         ) {
           return;
         }
@@ -2166,7 +2200,11 @@ export function Workbench() {
           displayErrorMessage(error, t('workbench:errors.saveFile'), desktopUnavailableMessage),
         );
       } finally {
-        if (activeProjectIdRef.current === projectId && activeWorktreeIdRef.current === worktreeId) {
+        if (
+          activeProjectIdRef.current === projectId &&
+          activeWorktreeIdRef.current === worktreeId &&
+          isLatestRequest(saveRequestSeqRef.current[id], requestSeq)
+        ) {
           setFileSaving(false);
         }
       }
@@ -2451,15 +2489,28 @@ export function Workbench() {
 
   /**
    * Business Logic（为什么需要这个函数）:
-   *   文件树删除路径成功后，被删除文件或目录下的已打开 tab 不能继续指向不存在的路径。
+   *   文件树删除路径成功后，被删除文件或目录下的已打开 tab 不能继续指向不存在的路径；
+   *   如果这些 tab 有未保存编辑，必须先让用户确认放弃。
    *
    * Code Logic（这个函数做什么）:
-   *   调用后端 delete 后关闭命中的文件 tab；如果 active tab 被删除，按相邻/剩余 tab 重新选择，
-   *   没有剩余 tab 时切回终端视图，并让此前发出的旧路径 open 响应失效。
+   *   删除前用当前 tabs 收集受影响路径并提示 dirty 文件；确认后调用后端 delete，成功后关闭命中 tab，
+   *   active tab 被删除时按相邻/剩余 tab 重新选择，并让此前发出的旧路径 open 响应失效。
    */
   const handleDeletePath = useCallback(async () => {
     const projectId = activeProjectIdRef.current;
     if (!projectId || !selectedInfo) return;
+    const affectedTabs = collectTabsForPath(fileTabsRef.current, selectedInfo.path, selectedInfo.kind);
+    const affectedDirtyNames = dirtyTabNames(affectedTabs);
+    if (
+      affectedDirtyNames.length > 0 &&
+      !window.confirm(
+        t('workbench:confirmDeleteDirtyFiles', {
+          names: affectedDirtyNames.join(', '),
+        }),
+      )
+    ) {
+      return;
+    }
     if (!window.confirm(t('workbench:confirmDeletePath', { name: selectedInfo.name }))) return;
     const worktreeId = activeWorktreeIdRef.current;
     const path = selectedInfo.path;
@@ -2475,11 +2526,7 @@ export function Workbench() {
       }
       openFileRequestSeqRef.current += 1;
       const removedTabIds = new Set(
-        fileTabsRef.current
-          .filter((tab) =>
-            selectedInfo.kind === 'dir' ? isSameOrDescendantPath(tab.path, path) : tab.path === path,
-          )
-          .map((tab) => tab.id),
+        collectTabsForPath(fileTabsRef.current, path, selectedInfo.kind).map((tab) => tab.id),
       );
       const nextActiveTabId = nextActiveFileTabIdAfterRemoval(
         fileTabsRef.current,

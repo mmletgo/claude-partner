@@ -181,6 +181,8 @@
   "copyRelativePath": "复制相对路径",
   "pathCopied": "已复制相对路径",
   "confirmDeletePath": "确定删除“{{name}}”？",
+  "confirmCloseDirtyFile": "文件 {{names}} 有未保存修改，关闭会放弃这些修改，是否继续？",
+  "confirmDeleteDirtyFiles": "文件 {{names}} 有未保存修改，删除会放弃这些修改，是否继续？",
   "errors": {
     "projects": "读取项目失败",
     "desktopUnavailable": "工作台需要在 Tauri 桌面应用中使用",
