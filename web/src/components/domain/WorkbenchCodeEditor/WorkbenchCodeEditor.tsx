@@ -6,7 +6,7 @@
  *   展示语法高亮、行号、折叠与搜索等基础编辑能力，同时在只读预览和可编辑文件之间复用同一套交互体验。
  *
  * Code Logic（这个组件做什么）:
- *   - 封装 @uiw/react-codemirror，统一 CodeMirror 的基础 setup、容器样式和 100% 高度布局
+ *   - 封装 @uiw/react-codemirror，统一 CodeMirror 的基础 setup、One Dark Pro 高亮主题和 100% 高度布局
  *   - 根据 language prop 通过 useMemo 计算语言扩展，未知语言返回空数组并按纯文本渲染
  *   - 将 CodeMirror 的 onChange value 透传给调用方，由上层负责保存、脏状态和文件生命周期
  */
@@ -26,6 +26,7 @@ import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { toml } from '@codemirror/legacy-modes/mode/toml';
 import { useCallback, useMemo } from 'react';
 import type { ReactElement } from 'react';
+import { WORKBENCH_ONE_DARK_PRO_EXTENSION } from './workbenchCodeEditorTheme';
 import styles from './WorkbenchCodeEditor.module.css';
 
 export interface WorkbenchCodeEditorProps {
@@ -108,8 +109,8 @@ function languageExtensions(language: string): Extension[] {
  *   切换只读和编辑模式，避免页面层重复配置 CodeMirror。
  *
  * Code Logic（这个组件做什么）:
- *   使用 useMemo 按 language 缓存语言扩展，渲染 100% 高度的 CodeMirror，并启用行号、折叠 gutter、
- *   当前行高亮、括号匹配和搜索快捷键；内容变化时只把最新字符串回传给 onChange。
+ *   使用 useMemo 按 language 缓存语言扩展并追加 One Dark Pro theme/highlight，渲染 100% 高度的 CodeMirror，
+ *   并启用行号、折叠 gutter、当前行高亮、括号匹配和搜索快捷键；内容变化时只把最新字符串回传给 onChange。
  */
 export function WorkbenchCodeEditor({
   value,
@@ -117,7 +118,7 @@ export function WorkbenchCodeEditor({
   readOnly = false,
   onChange,
 }: WorkbenchCodeEditorProps): ReactElement {
-  const extensions = useMemo(() => languageExtensions(language), [language]);
+  const extensions = useMemo(() => [...languageExtensions(language), WORKBENCH_ONE_DARK_PRO_EXTENSION], [language]);
   const handleChange = useCallback(
     (next: string) => {
       onChange(next);

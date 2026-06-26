@@ -21,23 +21,10 @@
   height: 100%;
   font-family: var(--font-mono);
   font-size: var(--text-sm);
-  background: var(--surface);
-  color: var(--fg);
 }
 
 .editorShell :global(.cm-scroller) {
   font-family: var(--font-mono);
-}
-
-.editorShell :global(.cm-gutters) {
-  background: var(--surface-warm);
-  color: var(--meta);
-  border-right: 1px solid var(--border-soft);
-}
-
-.editorShell :global(.cm-activeLine),
-.editorShell :global(.cm-activeLineGutter) {
-  background: var(--accent-soft);
 }
 
 .editorShell :global(.cm-focused) {
