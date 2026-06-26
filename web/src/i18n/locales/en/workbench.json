@@ -100,6 +100,15 @@
     "optimizeFailed": "Failed to optimize prompt",
     "fillFailed": "Failed to fill terminal"
   },
+  "markdownEditor": {
+    "modeBar": "Markdown edit mode",
+    "modes": {
+      "wysiwyg": "WYSIWYG",
+      "source": "Source",
+      "split": "Split"
+    },
+    "syncError": "Markdown content failed to sync. Keep the current mode content and try again."
+  },
   "splitPaneRight": "Split right",
   "splitPaneDown": "Split down",
   "closePane": "Close current pane",
