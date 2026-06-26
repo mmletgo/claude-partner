@@ -208,8 +208,8 @@ export const workbenchApi = {
         baseHash,
       }),
 
-    /** 格式化 JSON/TOML 内容，不直接保存文件。 */
-    formatStructured: (kind: 'json' | 'toml', content: string) =>
+    /** 格式化 JSON/TOML/YAML 内容，不直接保存文件。 */
+    formatStructured: (kind: 'json' | 'toml' | 'yaml', content: string) =>
       invoke<WorkbenchFormatResult>('format_workbench_structured_content', { kind, content }),
 
     /** 重新预览 SQLite 文件的指定表。 */

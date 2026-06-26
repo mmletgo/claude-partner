@@ -41,7 +41,7 @@ pub const MAX_CSV_BYTES: u64 = 2 * 1024 * 1024;
 ///     前端文件查看器需要后端按文件名给出权威类型，避免 UI helper 和后端读写能力不一致。
 ///
 /// Code Logic（这个函数做什么）:
-///     提取文件名和扩展名，按图片、Markdown、JSON、TOML、CSV/TSV、SQLite、代码、文本、
+///     提取文件名和扩展名，按图片、Markdown、JSON、TOML、YAML、CSV/TSV、SQLite、代码、文本、
 ///     已知二进制和未知类型返回 `WorkbenchDetectedFileType`；jsonc 明确归为 Unsupported。
 pub fn detect_file_type(name: &str) -> WorkbenchDetectedFileType {
     let file_name = Path::new(name)
@@ -73,14 +73,15 @@ pub fn detect_file_type(name: &str) -> WorkbenchDetectedFileType {
         "md" | "markdown" | "mdx" | "mdown" | "mkd" => WorkbenchDetectedFileType::Markdown,
         "json" => WorkbenchDetectedFileType::Json,
         "toml" => WorkbenchDetectedFileType::Toml,
+        "yaml" | "yml" => WorkbenchDetectedFileType::Yaml,
         "csv" | "tsv" => WorkbenchDetectedFileType::Csv,
         "db" | "sqlite" | "sqlite3" => WorkbenchDetectedFileType::Sqlite,
         "rs" | "ts" | "tsx" | "js" | "jsx" | "mjs" | "cjs" | "py" | "go" | "java" | "c" | "h"
         | "cc" | "cpp" | "cxx" | "hpp" | "cs" | "swift" | "kt" | "kts" | "php" | "rb" | "sh"
         | "bash" | "zsh" | "fish" | "ps1" | "sql" | "html" | "htm" | "css" | "scss" | "sass"
-        | "less" | "vue" | "svelte" | "yml" | "yaml" | "xml" | "graphql" | "gql" | "proto"
-        | "lua" | "pl" | "pm" | "r" | "dart" | "ex" | "exs" | "erl" | "hrl" | "clj" | "cljs"
-        | "fs" | "fsx" | "scala" | "gradle" => WorkbenchDetectedFileType::Code,
+        | "less" | "vue" | "svelte" | "xml" | "graphql" | "gql" | "proto" | "lua" | "pl" | "pm"
+        | "r" | "dart" | "ex" | "exs" | "erl" | "hrl" | "clj" | "cljs" | "fs" | "fsx" | "scala"
+        | "gradle" => WorkbenchDetectedFileType::Code,
         "txt" | "text" | "log" | "env" | "ini" | "conf" | "config" | "properties" | "lock"
         | "gitignore" | "dockerignore" | "editorconfig" | "gitattributes" => {
             WorkbenchDetectedFileType::Text
@@ -99,9 +100,9 @@ pub fn detect_file_type(name: &str) -> WorkbenchDetectedFileType {
 ///     根据检测类型返回 preview/edit/format/validate 开关，以及默认模式与可用模式列表。
 pub fn capabilities_for_type(kind: &WorkbenchDetectedFileType) -> WorkbenchFileCapabilities {
     match kind {
-        WorkbenchDetectedFileType::Json | WorkbenchDetectedFileType::Toml => {
-            editable_capabilities(true)
-        }
+        WorkbenchDetectedFileType::Json
+        | WorkbenchDetectedFileType::Toml
+        | WorkbenchDetectedFileType::Yaml => editable_capabilities(true),
         WorkbenchDetectedFileType::Markdown => WorkbenchFileCapabilities {
             can_preview: true,
             can_edit: true,
@@ -202,7 +203,7 @@ pub fn preview_csv_file(path: &Path, limit_rows: usize) -> Result<WorkbenchCsvPr
 }
 
 /// Business Logic（为什么需要这个函数）:
-///     JSON/TOML/Code/Text 共用编辑器模式能力，避免能力矩阵在多个 match 分支重复且不一致。
+///     JSON/TOML/YAML/Code/Text 共用编辑器模式能力，避免能力矩阵在多个 match 分支重复且不一致。
 ///
 /// Code Logic（这个函数做什么）:
 ///     根据是否需要结构化格式化和保存前校验，返回 editor 单模式能力。
@@ -515,6 +516,14 @@ mod tests {
             WorkbenchDetectedFileType::Toml
         );
         assert_eq!(
+            serde_json::to_string(&detect_file_type("config.yaml")).expect("serialize yaml type"),
+            "\"yaml\""
+        );
+        assert_eq!(
+            serde_json::to_string(&detect_file_type("workflow.yml")).expect("serialize yml type"),
+            "\"yaml\""
+        );
+        assert_eq!(
             detect_file_type("table.csv"),
             WorkbenchDetectedFileType::Csv
         );
@@ -597,6 +606,13 @@ mod tests {
             assert!(capabilities.must_validate_before_save);
             assert_eq!(capabilities.default_mode, WorkbenchFileMode::Editor);
         }
+
+        let yaml = capabilities_for_type(&detect_file_type("config.yaml"));
+        assert!(yaml.can_preview);
+        assert!(yaml.can_edit);
+        assert!(yaml.can_format);
+        assert!(yaml.must_validate_before_save);
+        assert_eq!(yaml.default_mode, WorkbenchFileMode::Editor);
     }
 
     /// Business Logic（为什么需要这个测试）:

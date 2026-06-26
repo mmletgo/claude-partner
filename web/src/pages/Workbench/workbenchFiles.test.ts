@@ -7,15 +7,19 @@ import {
   fileCapabilitiesForType,
   formatJsonText,
   formatTomlText,
+  formatYamlText,
   isLatestRequest,
   isSameOrDescendantPath,
   parseWorkbenchDirRequestKey,
   reduceFileTabs,
   validateJsonText,
   validateTomlText,
+  validateYamlText,
   workbenchDirRequestKey,
   workbenchDirRequestKeyMatchesPath,
 } from './workbenchFiles';
+// @ts-expect-error - 本仓库 tsconfig 未在 compilerOptions.types 纳入 node,node:process 类型缺失,运行时 tsx 正常
+import { exit } from 'node:process';
 
 /**
  * Business Logic（为什么需要这个函数）:
@@ -47,6 +51,8 @@ async function main(): Promise<void> {
   assert(detectWorkbenchFileType('src/index.mjs', null) === 'code', 'mjs extension detected as code');
   assert(detectWorkbenchFileType('data.csv', null) === 'csv', 'csv extension detected');
   assert(detectWorkbenchFileType('config.toml', null) === 'toml', 'toml extension detected');
+  assert(detectWorkbenchFileType('config.yaml', null) === 'yaml', 'yaml extension detected');
+  assert(detectWorkbenchFileType('workflow.yml', null) === 'yaml', 'yml extension detected');
   assert(detectWorkbenchFileType('data.sqlite', null) === 'sqlite', 'sqlite extension detected');
   assert(detectWorkbenchFileType('logo.png', null) === 'image', 'png extension detected');
   assert(detectWorkbenchFileType('scan.tiff', null) === 'image', 'tiff extension detected');
@@ -60,6 +66,12 @@ async function main(): Promise<void> {
   assert(jsonCaps.canEdit, 'json is editable');
   assert(jsonCaps.canFormat, 'json can format');
   assert(jsonCaps.mustValidateBeforeSave, 'json validates before save');
+
+  const yamlCaps = fileCapabilitiesForType('yaml');
+  assert(yamlCaps.canPreview, 'yaml can preview');
+  assert(yamlCaps.canEdit, 'yaml is editable');
+  assert(yamlCaps.canFormat, 'yaml can format');
+  assert(yamlCaps.mustValidateBeforeSave, 'yaml validates before save');
 
   const markdownCaps = fileCapabilitiesForType('markdown');
   assert(markdownCaps.availableModes.includes('source'), 'markdown exposes source mode');
@@ -138,6 +150,8 @@ async function main(): Promise<void> {
   assert(!validateJsonText('{bad').ok, 'invalid json rejected');
   assert(validateTomlText('title = "cc-partner"').ok, 'valid toml accepted');
   assert(!validateTomlText('title = ').ok, 'invalid toml rejected');
+  assert(validateYamlText('name: cc-partner\nitems:\n  - workbench\n').ok, 'valid yaml accepted');
+  assert(!validateYamlText('name: [').ok, 'invalid yaml rejected');
 
   const formattedJson = formatJsonText('{"ok":true}');
   assert(formattedJson.ok && formattedJson.text === '{\n  "ok": true\n}\n', 'valid json formatted');
@@ -149,6 +163,19 @@ async function main(): Promise<void> {
     'valid toml formatted',
   );
   assert(!formatTomlText('title = ').ok, 'invalid toml format rejected');
+
+  const formattedYaml = formatYamlText('name: cc-partner\nitems:\n- yaml\n');
+  assert(
+    formattedYaml.endsWith('\n') && formattedYaml.includes('items:'),
+    'valid yaml formatted with trailing newline',
+  );
+  let yamlFormatFailed = false;
+  try {
+    formatYamlText('name: [');
+  } catch {
+    yamlFormatFailed = true;
+  }
+  assert(yamlFormatFailed, 'invalid yaml format rejected');
 
   const mutableCaps = fileCapabilitiesForType('markdown');
   mutableCaps.availableModes.push('viewer');
@@ -206,4 +233,11 @@ async function main(): Promise<void> {
   assert(isLatestRequest(2, 2), 'matching request seq is latest');
 }
 
-void main();
+void main()
+  .then(() => {
+    exit(0);
+  })
+  .catch((error: unknown) => {
+    console.error(error);
+    exit(1);
+  });
