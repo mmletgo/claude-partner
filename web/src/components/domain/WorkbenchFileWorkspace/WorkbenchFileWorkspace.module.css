@@ -16,18 +16,15 @@
   gap: var(--space-1);
   min-width: 0;
   overflow-x: auto;
-  border-bottom: 1px solid var(--border-soft);
-  padding: var(--space-2) var(--space-3);
-  background: var(--surface-warm);
 }
 
 .fileTab {
   display: grid;
-  flex: 0 0 220px;
+  flex: 0 1 320px;
   grid-template-columns: minmax(0, 1fr) var(--space-7);
   align-items: center;
   min-width: 150px;
-  max-width: 240px;
+  max-width: 420px;
   height: calc(var(--space-8) + var(--space-1));
   overflow: hidden;
   border: 1px solid var(--border-soft);
@@ -113,54 +110,11 @@
 
 .fileBody {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   background: var(--bg);
-}
-
-.fileToolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: var(--space-3);
-  min-width: 0;
-  min-height: 52px;
-  border-bottom: 1px solid var(--border-soft);
-  padding: var(--space-3);
-  background: var(--surface);
-}
-
-.fileTitleBlock {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
-.fileName {
-  flex: 0 1 auto;
-  min-width: min-content;
-  overflow: hidden;
-  color: var(--fg);
-  font-size: var(--text-base);
-  font-weight: var(--weight-semibold);
-  line-height: var(--leading-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.filePath {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: var(--leading-tight);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .toolbarActions {
@@ -173,10 +127,6 @@
 }
 
 @media (max-width: 900px) {
-  .fileToolbar {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
   .toolbarActions {
     justify-content: flex-start;
   }
@@ -242,10 +192,6 @@
 @media (max-width: 760px) {
   .fileTab {
     flex-basis: 180px;
-  }
-
-  .fileToolbar {
-    align-items: stretch;
   }
 
   .toolbarActions {

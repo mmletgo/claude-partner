@@ -6,6 +6,7 @@
  *  - NavItem: 侧边导航项
  *  - ThemeToggle: 浅色/深色主题切换
  *  - AppShell: 整个应用外壳
+ *  - WorkbenchWorkspaceNav: Workbench 终端/文件预览共享导航栏
  */
 export { Sidebar } from './Sidebar';
 export type { SidebarProps } from './Sidebar';
@@ -18,3 +19,6 @@ export type { ThemeToggleProps } from './ThemeToggle';
 
 export { AppShell } from './AppShell';
 export type { AppShellProps } from './AppShell';
+
+export { WorkbenchWorkspaceNav } from './WorkbenchWorkspaceNav';
+export type { WorkbenchWorkspaceNavProps } from './WorkbenchWorkspaceNav';

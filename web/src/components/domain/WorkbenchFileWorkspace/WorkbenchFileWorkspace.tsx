@@ -13,6 +13,7 @@
 import { useCallback, useMemo } from 'react';
 import type { KeyboardEvent, MouseEvent, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
+import { WorkbenchWorkspaceNav } from '@/components/layout';
 import { Button } from '@/components/primitives';
 import { CheckIcon, RefreshIcon, TerminalIcon, XIcon } from '@/lib/icons';
 import type { WorkbenchFileMode, WorkbenchOpenFile } from '@/lib/types';
@@ -172,7 +173,7 @@ function deriveEditorLanguage(opened: WorkbenchOpenFile): string {
  *   修改可编辑内容并回到终端继续操作。
  *
  * Code Logic（这个组件做什么）:
- *   选择 activeTabId 对应 tab（缺失时回退第一个 tab），渲染横向 tab strip、工具栏、notice 和内容区；
+ *   选择 activeTabId 对应 tab（缺失时回退第一个 tab），渲染横向 tab header、notice 和内容区；
  *   内容区按文件类型分发到既有 preview/editor 组件，并通过稳定回调携带当前 tab id 上抛事件。
  */
 export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): ReactElement {
@@ -365,64 +366,56 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
 
   return (
     <section className={styles.fileWorkspace}>
-      <div className={styles.fileTabs} role="tablist" aria-label={t('workbench:fileWorkspace.tabs')}>
-        {tabs.map((tab) => {
-          const active = tab.id === activeTab?.id;
-          const tabAriaIds = createTabAriaIds(tab.id);
+      <WorkbenchWorkspaceNav
+        ariaLabel={t('workbench:fileWorkspace.tabs')}
+        actionsAriaLabel={t('workbench:fileWorkspace.actions')}
+        tabs={
+          <div className={styles.fileTabs} role="tablist" aria-label={t('workbench:fileWorkspace.tabs')}>
+            {tabs.map((tab) => {
+              const active = tab.id === activeTab?.id;
+              const tabAriaIds = createTabAriaIds(tab.id);
 
-          return (
-            <div key={tab.id} className={styles.fileTab} data-active={active}>
-              <button
-                id={tabAriaIds.tabButtonId}
-                type="button"
-                role="tab"
-                className={styles.tabButton}
-                data-tab-id={tab.id}
-                aria-controls={active ? tabAriaIds.tabPanelId : undefined}
-                aria-selected={active}
-                tabIndex={active ? 0 : -1}
-                title={tab.path}
-                onClick={handleTabActivate}
-                onKeyDown={handleTabKeyDown}
-              >
-                <span className={styles.tabName}>{tab.name}</span>
-                {tab.dirty ? (
-                  <span
-                    className={styles.dirtyMarker}
-                    role="img"
-                    aria-label={t('workbench:fileWorkspace.dirty')}
-                    title={t('workbench:fileWorkspace.dirty')}
-                  />
-                ) : null}
-              </button>
-              <button
-                type="button"
-                className={styles.closeTabButton}
-                data-tab-id={tab.id}
-                aria-label={t('workbench:fileWorkspace.closeTab', { name: tab.name })}
-                onClick={handleTabClose}
-              >
-                <XIcon size={14} aria-hidden="true" />
-              </button>
-            </div>
-          );
-        })}
-      </div>
-
-      {activeTab ? (
-        <div
-          id={activeAriaIds?.tabPanelId}
-          className={styles.fileBody}
-          role="tabpanel"
-          aria-labelledby={activeAriaIds?.tabButtonId}
-        >
-          <div className={styles.fileToolbar}>
-            <div className={styles.fileTitleBlock}>
-              <strong className={styles.fileName}>{activeTab.name}</strong>
-              <span className={styles.filePath} title={activeTab.path}>
-                {activeTab.path}
-              </span>
-            </div>
+              return (
+                <div key={tab.id} className={styles.fileTab} data-active={active}>
+                  <button
+                    id={tabAriaIds.tabButtonId}
+                    type="button"
+                    role="tab"
+                    className={styles.tabButton}
+                    data-tab-id={tab.id}
+                    aria-controls={active ? tabAriaIds.tabPanelId : undefined}
+                    aria-selected={active}
+                    tabIndex={active ? 0 : -1}
+                    title={tab.path}
+                    onClick={handleTabActivate}
+                    onKeyDown={handleTabKeyDown}
+                  >
+                    <span className={styles.tabName}>{tab.path}</span>
+                    {tab.dirty ? (
+                      <span
+                        className={styles.dirtyMarker}
+                        role="img"
+                        aria-label={t('workbench:fileWorkspace.dirty')}
+                        title={t('workbench:fileWorkspace.dirty')}
+                      />
+                    ) : null}
+                  </button>
+                  <button
+                    type="button"
+                    className={styles.closeTabButton}
+                    data-tab-id={tab.id}
+                    aria-label={t('workbench:fileWorkspace.closeTab', { name: tab.name })}
+                    onClick={handleTabClose}
+                  >
+                    <XIcon size={14} aria-hidden="true" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        }
+        actions={
+          activeTab ? (
             <div className={styles.toolbarActions}>
               {activeTab.opened.capabilities.canFormat ? (
                 <Button
@@ -456,8 +449,17 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
                 {t('workbench:fileWorkspace.returnTerminal')}
               </Button>
             </div>
-          </div>
+          ) : null
+        }
+      />
 
+      {activeTab ? (
+        <div
+          id={activeAriaIds?.tabPanelId}
+          className={styles.fileBody}
+          role="tabpanel"
+          aria-labelledby={activeAriaIds?.tabButtonId}
+        >
           <div className={styles.fileContentStack}>
             {activeTab.opened.notice ? (
               <div className={styles.fileNotice} role="status">

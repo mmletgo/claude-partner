@@ -126,14 +126,6 @@
   flex-wrap: wrap;
 }
 
-.paneActions {
-  display: inline-flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  min-width: 0;
-}
-
 .treeIcon,
 .workspaceTitleGroup {
   display: inline-flex;
@@ -392,13 +384,10 @@
 }
 
 .sessionTabs {
-  min-height: 64px;
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  overflow-x: auto;
-  padding: var(--space-4) var(--space-6);
-  border-bottom: 1px solid var(--border-soft);
+  min-width: 0;
 }
 
 .mainWorkspace {
@@ -461,16 +450,6 @@
 
 .newSessionButton {
   flex: 0 0 auto;
-}
-
-.sessionTabs .paneActions {
-  margin-left: auto;
-  flex: 0 1 auto;
-}
-
-.paneActions :global(button[data-active='true']) {
-  background: var(--accent-soft);
-  color: var(--accent);
 }
 
 .terminalActionButton {
@@ -1084,8 +1063,7 @@
     padding: var(--space-6) var(--space-5) var(--space-3);
   }
 
-  .contextBar,
-  .sessionTabs {
+  .contextBar {
     padding-right: var(--space-5);
     padding-left: var(--space-5);
   }

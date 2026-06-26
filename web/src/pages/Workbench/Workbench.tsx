@@ -24,6 +24,7 @@ import { promptOptimizerApi } from '@/api/promptOptimizer';
 import { workbenchApi } from '@/api/workbench';
 import { WorkbenchDependencyCard, WorkbenchFileWorkspace } from '@/components/domain';
 import type { WorkbenchOpenFileTab } from '@/components/domain';
+import { WorkbenchWorkspaceNav } from '@/components/layout';
 import { Button, Card, Input, Pill } from '@/components/primitives';
 import { useWorkbenchDependency } from '@/hooks/workbenchDependencyContext';
 import { useWorkbenchProjects } from '@/hooks/workbenchProjectsContext';
@@ -2815,109 +2816,117 @@ export function Workbench() {
             className={styles.terminalLayer}
             data-hidden={workspaceView === 'files' || undefined}
           >
-            <section className={styles.sessionTabs} aria-label={t('workbench:terminalTabs')}>
-              {scopedSessions.map((session) => (
-                <button
-                  key={session.id}
-                  type="button"
-                  className={styles.sessionTab}
-                  data-active={session.id === activeSessionId || undefined}
-                  onClick={() => focusSession(session.id)}
-                >
-                  <span className={styles.sessionDot} data-status={session.status} />
-                  <span className={styles.sessionName}>{session.name}</span>
+            <WorkbenchWorkspaceNav
+              ariaLabel={t('workbench:terminalTabs')}
+              actionsAriaLabel={t('workbench:paneActions')}
+              tabs={
+                <div className={styles.sessionTabs} role="tablist">
+                  {scopedSessions.map((session) => (
+                    <button
+                      key={session.id}
+                      type="button"
+                      className={styles.sessionTab}
+                      data-active={session.id === activeSessionId || undefined}
+                      onClick={() => focusSession(session.id)}
+                    >
+                      <span className={styles.sessionDot} data-status={session.status} />
+                      <span className={styles.sessionName}>{session.name}</span>
+                      <Button
+                        variant="icon"
+                        icon={<XIcon />}
+                        title={t('workbench:closeTerminal')}
+                        aria-label={t('workbench:closeTerminal')}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void handleCloseSession(session.id);
+                        }}
+                      />
+                    </button>
+                  ))}
                   <Button
-                    variant="icon"
-                    icon={<XIcon />}
-                    title={t('workbench:closeTerminal')}
-                    aria-label={t('workbench:closeTerminal')}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void handleCloseSession(session.id);
+                    className={styles.newSessionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<PlusIcon />}
+                    loading={sessionBusy}
+                    disabled={!activeProjectId || !activeWorktree}
+                    onClick={() => void handleCreateSession()}
+                  >
+                    {t('workbench:newSession')}
+                  </Button>
+                </div>
+              }
+              actions={
+                <>
+                  <Button
+                    className={styles.terminalActionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<EditIcon />}
+                    title={t('workbench:promptOptimizer.open')}
+                    aria-label={t('workbench:promptOptimizer.open')}
+                    data-active={promptPanelOpen || undefined}
+                    onClick={() => {
+                      if (promptPanelOpen) {
+                        setPromptPanelOpen(false);
+                      } else {
+                        openPromptOptimizerPanel();
+                      }
                     }}
-                  />
-                </button>
-              ))}
-              <Button
-                className={styles.newSessionButton}
-                variant="secondary"
-                size="sm"
-                icon={<PlusIcon />}
-                loading={sessionBusy}
-                disabled={!activeProjectId || !activeWorktree}
-                onClick={() => void handleCreateSession()}
-              >
-                {t('workbench:newSession')}
-              </Button>
-              <div className={styles.paneActions} aria-label={t('workbench:paneActions')}>
-                <Button
-                  className={styles.terminalActionButton}
-                  variant="secondary"
-                  size="sm"
-                  icon={<EditIcon />}
-                  title={t('workbench:promptOptimizer.open')}
-                  aria-label={t('workbench:promptOptimizer.open')}
-                  data-active={promptPanelOpen || undefined}
-                  onClick={() => {
-                    if (promptPanelOpen) {
-                      setPromptPanelOpen(false);
-                    } else {
-                      openPromptOptimizerPanel();
-                    }
-                  }}
-                >
-                  {t('workbench:promptOptimizer.open')}
-                </Button>
-                <Button
-                  className={styles.terminalActionButton}
-                  variant="secondary"
-                  size="sm"
-                  icon={<FileIcon />}
-                  title={t('workbench:fileWorkspace.openFiles')}
-                  aria-label={t('workbench:fileWorkspace.openFiles')}
-                  disabled={fileTabs.length === 0}
-                  onClick={handleReturnToFiles}
-                >
-                  {t('workbench:fileWorkspace.openFiles')}
-                </Button>
-                <Button
-                  className={styles.terminalActionButton}
-                  variant="secondary"
-                  size="sm"
-                  icon={<SplitRightIcon />}
-                  title={t('workbench:splitPaneRight')}
-                  aria-label={t('workbench:splitPaneRight')}
-                  disabled={!canUsePanes}
-                  onClick={() => void handleSplitPane('right')}
-                >
-                  {t('workbench:splitPaneRight')}
-                </Button>
-                <Button
-                  className={styles.terminalActionButton}
-                  variant="secondary"
-                  size="sm"
-                  icon={<SplitDownIcon />}
-                  title={t('workbench:splitPaneDown')}
-                  aria-label={t('workbench:splitPaneDown')}
-                  disabled={!canUsePanes}
-                  onClick={() => void handleSplitPane('down')}
-                >
-                  {t('workbench:splitPaneDown')}
-                </Button>
-                <Button
-                  className={styles.terminalActionButton}
-                  variant="secondary"
-                  size="sm"
-                  icon={<XIcon />}
-                  title={t('workbench:closePane')}
-                  aria-label={t('workbench:closePane')}
-                  disabled={!canUsePanes}
-                  onClick={() => void handleClosePane()}
-                >
-                  {t('workbench:closePane')}
-                </Button>
-              </div>
-            </section>
+                  >
+                    {t('workbench:promptOptimizer.open')}
+                  </Button>
+                  <Button
+                    className={styles.terminalActionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<SplitRightIcon />}
+                    title={t('workbench:splitPaneRight')}
+                    aria-label={t('workbench:splitPaneRight')}
+                    disabled={!canUsePanes}
+                    onClick={() => void handleSplitPane('right')}
+                  >
+                    {t('workbench:splitPaneRight')}
+                  </Button>
+                  <Button
+                    className={styles.terminalActionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<SplitDownIcon />}
+                    title={t('workbench:splitPaneDown')}
+                    aria-label={t('workbench:splitPaneDown')}
+                    disabled={!canUsePanes}
+                    onClick={() => void handleSplitPane('down')}
+                  >
+                    {t('workbench:splitPaneDown')}
+                  </Button>
+                  <Button
+                    className={styles.terminalActionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<XIcon />}
+                    title={t('workbench:closePane')}
+                    aria-label={t('workbench:closePane')}
+                    disabled={!canUsePanes}
+                    onClick={() => void handleClosePane()}
+                  >
+                    {t('workbench:closePane')}
+                  </Button>
+                  <Button
+                    className={styles.terminalActionButton}
+                    variant="secondary"
+                    size="sm"
+                    icon={<FileIcon />}
+                    title={t('workbench:fileWorkspace.openFiles')}
+                    aria-label={t('workbench:fileWorkspace.openFiles')}
+                    disabled={fileTabs.length === 0}
+                    onClick={handleReturnToFiles}
+                  >
+                    {t('workbench:fileWorkspace.openFiles')}
+                  </Button>
+                </>
+              }
+            />
 
             <div className={styles.terminalArea} ref={terminalAreaRef}>
               {promptPanelOpen ? (

@@ -240,6 +240,7 @@ function Button({ prompt, onDelete }) { /* ❌ prompt 是业务数据 */ }
 | Sidebar | children, footer | 侧边栏 |
 | NavItem | icon, label, to, badge | 路由导航项 |
 | ThemeToggle | - | 主题切换按钮 |
+| WorkbenchWorkspaceNav | ariaLabel, actionsAriaLabel, tabs, actions | Workbench 终端/文件预览共享导航栏 |
 
 **domain（业务）**：
 
