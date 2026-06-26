@@ -168,6 +168,56 @@ pub struct WorkbenchWorktreeDto {
     pub updated_at: String,
 }
 
+/// Workbench 远端目录选择器根入口 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     用户从局域网设备添加远端项目时，需要先看到对端常用目录入口以快速开始浏览。
+///
+/// Code Logic（这个结构体做什么）:
+///     表达一个可选根目录的展示名、绝对路径和类型，字段使用 camelCase 序列化给前端。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchRemoteRootDto {
+    pub label: String,
+    pub path: String,
+    pub kind: String,
+}
+
+/// Workbench 远端目录条目 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     远端项目选择器需要展示某个目录下的一级文件夹和文件，并标记可作为项目的 Git 仓库。
+///
+/// Code Logic（这个结构体做什么）:
+///     表达目录浏览中的单个条目，包含名称、绝对路径、类型、修改时间和 Git 仓库标识。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchRemoteDirectoryEntryDto {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub modified_at: Option<String>,
+    pub is_git_repo: bool,
+}
+
+/// Workbench 远端路径信息 DTO。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     用户选中远端路径时，前端需要知道它是否可读、是否是 Git 仓库以及建议的项目名称。
+///
+/// Code Logic（这个结构体做什么）:
+///     表达单个远端路径的元信息，字段使用 camelCase 序列化并用于打开远端项目的确认界面。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkbenchRemotePathInfoDto {
+    pub name: String,
+    pub path: String,
+    pub kind: String,
+    pub readable: bool,
+    pub is_git_repo: bool,
+    pub suggested_project_name: String,
+}
+
 impl WorkbenchProjectRow {
     /// Business Logic（为什么需要这个函数）:
     ///     前端只消费 camelCase DTO，数据库 row 不应直接泄露给 UI。

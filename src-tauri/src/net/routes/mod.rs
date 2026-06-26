@@ -15,3 +15,4 @@ pub mod scratchpad_sync;
 pub mod ssh_target_sync;
 pub mod sync;
 pub mod transfer;
+pub mod workbench;

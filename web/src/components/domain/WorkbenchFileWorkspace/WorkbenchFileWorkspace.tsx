@@ -42,6 +42,7 @@ export interface WorkbenchFileWorkspaceProps {
   tabs: WorkbenchOpenFileTab[];
   activeTabId: string | null;
   saving: boolean;
+  writeDisabled?: boolean;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onReturnToTerminal: () => void;
@@ -199,6 +200,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
     tabs,
     activeTabId,
     saving,
+    writeDisabled = false,
     onActivate,
     onClose,
     onReturnToTerminal,
@@ -219,6 +221,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
     return tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   }, [activeTabId, tabs]);
   const activeTabStableId = activeTab?.id ?? null;
+  const writeLocked = saving || writeDisabled;
   const activeAriaIds = useMemo(
     () => (activeTab ? createTabAriaIds(activeTab.id) : null),
     [activeTab],
@@ -357,7 +360,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
             value={activeTab.content}
             documentPath={activeTab.path}
             mode={coerceMarkdownMode(activeTab.mode)}
-            readOnly={saving}
+            readOnly={writeLocked}
             loadAsset={loadHtmlAsset}
             onModeChange={handleMarkdownModeChange}
             onChange={handleContentChange}
@@ -370,7 +373,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
             value={activeTab.content}
             documentPath={activeTab.path}
             mode={coerceHtmlMode(activeTab.mode)}
-            readOnly={saving}
+            readOnly={writeLocked}
             loadAsset={loadHtmlAsset}
             onModeChange={handleHtmlModeChange}
             onChange={handleContentChange}
@@ -406,7 +409,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
           <WorkbenchCodeEditor
             value={activeTab.content}
             language={deriveEditorLanguage(opened)}
-            readOnly={!opened.capabilities.canEdit || saving}
+            readOnly={!opened.capabilities.canEdit || writeLocked}
             onChange={handleContentChange}
           />
         );
@@ -472,7 +475,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
                   variant="secondary"
                   size="sm"
                   icon={<RefreshIcon aria-hidden="true" />}
-                  disabled={saving}
+                  disabled={writeLocked}
                   onClick={handleFormat}
                 >
                   {t('workbench:fileWorkspace.format')}
@@ -484,7 +487,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
                   size="sm"
                   icon={<CheckIcon aria-hidden="true" />}
                   loading={saving}
-                  disabled={!activeTab.dirty || saving}
+                  disabled={!activeTab.dirty || writeLocked}
                   onClick={handleSave}
                 >
                   {t('workbench:fileWorkspace.save')}
