@@ -140,6 +140,13 @@
   font-family: var(--font-mono);
 }
 
+.table .emptyRowCell {
+  color: var(--muted);
+  font-family: var(--font-body);
+  text-align: center;
+  white-space: normal;
+}
+
 .table th:last-child,
 .table td:last-child {
   border-right: none;

@@ -25,31 +25,36 @@ export interface WorkbenchSqlitePreviewProps {
  *   用户查看 SQLite 文件时需要在多个表之间切换，并快速扫描当前表数据，同时避免任何写入入口。
  *
  * Code Logic（这个组件做什么）:
- *   用 preview.tables 生成可点击表列表，selectedTable 标记当前表；右侧复用只读表格结构展示 columns/rows，
+ *   用 preview.tables 生成可点击表列表，selectedTable 标记当前表；右侧有 columns 时保留 schema 表头，
  *   并在空表列表、空数据行和截断状态下渲染本地化提示。
  */
 export function WorkbenchSqlitePreview(props: WorkbenchSqlitePreviewProps): ReactElement {
   const { preview, onSelectTable } = props;
   const { t } = useTranslation(['workbench']);
   const hasTables = preview.tables.length > 0;
+  const hasColumns = preview.columns.length > 0;
   const hasRows = preview.rows.length > 0;
 
   return (
     <section className={styles.shell}>
-      <aside className={styles.tableList}>
+      <aside className={styles.tableList} aria-label={t('workbench:filePreviews.tables')}>
         {hasTables ? (
-          preview.tables.map((table) => (
-            <button
-              key={table}
-              type="button"
-              className={styles.tableButton}
-              data-active={table === preview.selectedTable}
-              aria-pressed={table === preview.selectedTable}
-              onClick={() => onSelectTable(table)}
-            >
-              {table}
-            </button>
-          ))
+          preview.tables.map((table) => {
+            const active = table === preview.selectedTable;
+
+            return (
+              <button
+                key={table}
+                type="button"
+                className={styles.tableButton}
+                data-active={active}
+                aria-current={active ? 'true' : undefined}
+                onClick={() => onSelectTable(table)}
+              >
+                {table}
+              </button>
+            );
+          })
         ) : (
           <div className={styles.emptyTables}>{t('workbench:filePreviews.emptyTables')}</div>
         )}
@@ -62,7 +67,7 @@ export function WorkbenchSqlitePreview(props: WorkbenchSqlitePreviewProps): Reac
 
         {!hasTables ? (
           <div className={styles.emptyState}>{t('workbench:filePreviews.emptyTables')}</div>
-        ) : !hasRows ? (
+        ) : !hasColumns ? (
           <div className={styles.emptyState}>{t('workbench:filePreviews.emptyRows')}</div>
         ) : (
           <div className={styles.tableScroller}>
@@ -77,13 +82,21 @@ export function WorkbenchSqlitePreview(props: WorkbenchSqlitePreviewProps): Reac
                 </tr>
               </thead>
               <tbody>
-                {preview.rows.map((row, rowIndex) => (
-                  <tr key={rowIndex}>
-                    {preview.columns.map((column, columnIndex) => (
-                      <td key={`${column}-${columnIndex}`}>{row[columnIndex] ?? ''}</td>
-                    ))}
+                {hasRows ? (
+                  preview.rows.map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {preview.columns.map((column, columnIndex) => (
+                        <td key={`${column}-${columnIndex}`}>{row[columnIndex] ?? ''}</td>
+                      ))}
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className={styles.emptyRowCell} colSpan={preview.columns.length}>
+                      {t('workbench:filePreviews.emptyRows')}
+                    </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>

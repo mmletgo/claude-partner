@@ -45,3 +45,9 @@ export type { RemoteAssetPickerProps } from './RemoteAssetPicker';
 
 export { WorkbenchProjectRail } from './WorkbenchProjectRail';
 export { WorkbenchDependencyCard } from './WorkbenchDependencyCard';
+export { WorkbenchImagePreview } from './WorkbenchImagePreview';
+export type { WorkbenchImagePreviewProps } from './WorkbenchImagePreview';
+export { WorkbenchCsvPreview } from './WorkbenchCsvPreview';
+export type { WorkbenchCsvPreviewProps } from './WorkbenchCsvPreview';
+export { WorkbenchSqlitePreview } from './WorkbenchSqlitePreview';
+export type { WorkbenchSqlitePreviewProps } from './WorkbenchSqlitePreview';

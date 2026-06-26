@@ -109,6 +109,7 @@
     "truncated": "仅显示前几行内容。",
     "emptyRows": "暂无可预览行",
     "emptyTables": "暂无用户表",
+    "tables": "SQLite 表",
     "mime": "MIME",
     "dimensions": "尺寸"
   },
