@@ -33,7 +33,8 @@ use crate::workbench::{
     remote_ids::{parse_remote_entity_id, remote_entity_id, remote_project_id},
     remote_protocol::{
         RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq,
-        RemoteCreateWorktreeReq, RemoteDeletePathReq, RemoteRenamePathReq, RemoteSaveTextReq,
+        RemoteCreateWorktreeReq, RemoteDeletePathReq, RemotePreviewHtmlAssetReq,
+        RemotePreviewSqliteReq, RemoteRenamePathReq, RemoteSaveTextReq,
     },
     sqlite_preview,
 };
@@ -2664,6 +2665,28 @@ pub async fn format_workbench_structured_content(
 ///
 /// Code Logic（这个函数做什么）:
 ///     解析安全文件路径后调用 SQLite 只读预览 helper；只允许枚举表和 LIMIT 查询，不执行用户 SQL。
+pub(crate) async fn local_preview_workbench_sqlite(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    path: String,
+    table: Option<String>,
+    limit_rows: Option<i64>,
+) -> Result<WorkbenchSqlitePreview, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    let (_, file_path) = resolve_workbench_file_path(root, path).await?;
+    sqlite_preview::preview_sqlite_file(&file_path, table, limit_rows.unwrap_or(100)).await
+}
+
+/// 预览当前 worktree 内的 SQLite 文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     用户切换 SQLite 表或调整预览行数时，本机/远端项目都应读取项目所在设备上的数据库。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把请求转发到远端设备；local 项目走本机 SQLite 只读预览 helper。
 #[tauri::command]
 pub async fn preview_workbench_sqlite(
     state: State<'_, AppState>,
@@ -2674,10 +2697,23 @@ pub async fn preview_workbench_sqlite(
     limit_rows: Option<i64>,
 ) -> Result<WorkbenchSqlitePreview, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    let (_, file_path) = resolve_workbench_file_path(root, path).await?;
-    sqlite_preview::preview_sqlite_file(&file_path, table, limit_rows.unwrap_or(100)).await
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .preview_sqlite_file(
+                &context.base_url,
+                RemotePreviewSqliteReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    path,
+                    table,
+                    limit_rows,
+                },
+            )
+            .await;
+    }
+    local_preview_workbench_sqlite(&state, project_id, worktree_id, path, table, limit_rows).await
 }
 
 /// 读取 HTML/Markdown 预览所需的项目内相对资源。
@@ -2687,6 +2723,27 @@ pub async fn preview_workbench_sqlite(
 ///
 /// Code Logic（这个函数做什么）:
 ///     解析 project/worktree 根、当前文档路径和资源相对路径，在 blocking pool 中只读读取根内文件并返回 data URL。
+pub(crate) async fn local_preview_workbench_html_asset(
+    state: &AppState,
+    project_id: String,
+    worktree_id: Option<String>,
+    document_path: String,
+    asset_path: String,
+) -> Result<WorkbenchHtmlAssetDto, AppError> {
+    let project = get_project(state, &project_id).await?;
+    let worktree = resolve_worktree(state, &project, worktree_id.as_deref()).await?;
+    let root = PathBuf::from(worktree.path);
+    run_blocking_fs(move || html_assets::preview_html_asset(&root, &document_path, &asset_path))
+        .await
+}
+
+/// 读取 HTML/Markdown 预览所需的项目内相对资源。
+///
+/// Business Logic（为什么需要这个函数）:
+///     HTML sandbox iframe 和 Markdown WYSIWYG 预览不能直接访问 worktree 文件，本机/远端项目都要从项目所在设备读取资源。
+///
+/// Code Logic（这个函数做什么）:
+///     remote 项目把资源请求转发到远端设备；local 项目复用本机 HTML asset helper。
 #[tauri::command]
 pub async fn preview_workbench_html_asset(
     state: State<'_, AppState>,
@@ -2696,9 +2753,22 @@ pub async fn preview_workbench_html_asset(
     asset_path: String,
 ) -> Result<WorkbenchHtmlAssetDto, AppError> {
     let project = get_project(&state, &project_id).await?;
-    let worktree = resolve_worktree(&state, &project, worktree_id.as_deref()).await?;
-    let root = PathBuf::from(worktree.path);
-    run_blocking_fs(move || html_assets::preview_html_asset(&root, &document_path, &asset_path))
+    if project.kind == "remote" {
+        let context = ensure_remote_project_context(&state, &project).await?;
+        let inner_worktree_id = remote_inner_worktree_id(&context.device_id, worktree_id)?;
+        return RemoteWorkbenchClient::new()
+            .preview_html_asset(
+                &context.base_url,
+                RemotePreviewHtmlAssetReq {
+                    project_id: context.inner_project_id,
+                    worktree_id: inner_worktree_id,
+                    document_path,
+                    asset_path,
+                },
+            )
+            .await;
+    }
+    local_preview_workbench_html_asset(&state, project_id, worktree_id, document_path, asset_path)
         .await
 }
 

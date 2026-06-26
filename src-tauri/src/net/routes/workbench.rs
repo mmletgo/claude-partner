@@ -14,27 +14,28 @@ use crate::commands::workbench::{
     local_delete_workbench_path, local_focus_workbench_session, local_get_workbench_path_info,
     local_get_workbench_worktree, local_list_workbench_dir, local_list_workbench_git_commits,
     local_list_workbench_sessions, local_list_workbench_worktrees, local_merge_workbench_worktree,
-    local_open_workbench_file, local_push_workbench_worktree, local_remove_workbench_worktree,
-    local_rename_workbench_path, local_rename_workbench_session, local_resize_workbench_session,
-    local_save_workbench_text_file, local_split_workbench_pane,
-    local_write_workbench_session_input, WorkbenchMergeResultDto,
+    local_open_workbench_file, local_preview_workbench_html_asset, local_preview_workbench_sqlite,
+    local_push_workbench_worktree, local_remove_workbench_worktree, local_rename_workbench_path,
+    local_rename_workbench_session, local_resize_workbench_session, local_save_workbench_text_file,
+    local_split_workbench_pane, local_write_workbench_session_input, WorkbenchMergeResultDto,
 };
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::workbench::models::{
-    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchOpenFileDto, WorkbenchPathInfo,
-    WorkbenchProjectDto, WorkbenchProjectRow, WorkbenchRemoteDirectoryEntryDto,
+    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchHtmlAssetDto, WorkbenchOpenFileDto,
+    WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchProjectRow, WorkbenchRemoteDirectoryEntryDto,
     WorkbenchRemotePathInfoDto, WorkbenchRemoteRootDto, WorkbenchSaveTextResultDto,
-    WorkbenchSessionDto, WorkbenchWorktreeDto,
+    WorkbenchSessionDto, WorkbenchSqlitePreview, WorkbenchWorktreeDto,
 };
 use crate::workbench::remote_directory;
 use crate::workbench::remote_protocol::{
     RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq,
     RemoteDeletePathReq, RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq,
     RemoteListDirReq, RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq,
-    RemoteProjectReq, RemotePromptOptimizerReq, RemoteRemoveWorktreeReq, RemoteRenamePathReq,
-    RemoteRenameSessionReq, RemoteResizeSessionReq, RemoteSaveTextReq, RemoteSessionReq,
-    RemoteSplitPaneReq, RemoteWorktreeReq, RemoteWriteSessionInputReq,
+    RemotePreviewHtmlAssetReq, RemotePreviewSqliteReq, RemoteProjectReq, RemotePromptOptimizerReq,
+    RemoteRemoveWorktreeReq, RemoteRenamePathReq, RemoteRenameSessionReq, RemoteResizeSessionReq,
+    RemoteSaveTextReq, RemoteSessionReq, RemoteSplitPaneReq, RemoteWorktreeReq,
+    RemoteWriteSessionInputReq,
 };
 use axum::body::Body;
 use axum::extract::State;
@@ -402,6 +403,55 @@ pub async fn save_workbench_text_file(
             req.path,
             req.content,
             req.base_hash,
+        )
+        .await?,
+    ))
+}
+
+/// 预览远端设备本机项目内 SQLite 文件。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 SQLite 换表预览必须在项目所在设备执行，不能回退到本机路径解析。
+///
+/// Code Logic（这个函数做什么）:
+///     接收 projectId/worktreeId/path/table/limitRows，委托本地 SQLite 预览 helper。
+pub async fn preview_workbench_sqlite(
+    State(state): State<AppState>,
+    Json(req): Json<RemotePreviewSqliteReq>,
+) -> Result<Json<WorkbenchSqlitePreview>, AppError> {
+    ensure_remote_gateway_local_project_id(&state, &req.project_id).await?;
+    Ok(Json(
+        local_preview_workbench_sqlite(
+            &state,
+            req.project_id,
+            req.worktree_id,
+            req.path,
+            req.table,
+            req.limit_rows,
+        )
+        .await?,
+    ))
+}
+
+/// 读取远端设备本机项目内 HTML/Markdown 预览资源。
+///
+/// Business Logic（为什么需要这个函数）:
+///     remote shortcut 的 HTML/Markdown 相对资源必须从项目所在设备读取。
+///
+/// Code Logic（这个函数做什么）:
+///     接收 projectId/worktreeId/documentPath/assetPath，委托本地 HTML asset helper。
+pub async fn preview_workbench_html_asset(
+    State(state): State<AppState>,
+    Json(req): Json<RemotePreviewHtmlAssetReq>,
+) -> Result<Json<WorkbenchHtmlAssetDto>, AppError> {
+    ensure_remote_gateway_local_project_id(&state, &req.project_id).await?;
+    Ok(Json(
+        local_preview_workbench_html_asset(
+            &state,
+            req.project_id,
+            req.worktree_id,
+            req.document_path,
+            req.asset_path,
         )
         .await?,
     ))
@@ -807,6 +857,49 @@ mod tests {
         assert_eq!(req.project_id, "project-1");
         assert_eq!(req.worktree_id.as_deref(), Some("worktree-1"));
         assert_eq!(req.base_hash, "old-hash");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 SQLite 预览路由需要接收前端命名的 table/limitRows 字段，才能完整代理换表操作。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     用 camelCase JSON 反序列化 preview-sqlite 请求体，断言字段进入共享请求 DTO。
+    #[test]
+    fn remote_preview_sqlite_req_accepts_camel_case_body() {
+        let req: RemotePreviewSqliteReq = serde_json::from_value(serde_json::json!({
+            "projectId": "project-1",
+            "worktreeId": "worktree-1",
+            "path": "data/app.sqlite",
+            "table": "notes",
+            "limitRows": 100
+        }))
+        .unwrap();
+
+        assert_eq!(req.project_id, "project-1");
+        assert_eq!(req.worktree_id.as_deref(), Some("worktree-1"));
+        assert_eq!(req.table.as_deref(), Some("notes"));
+        assert_eq!(req.limit_rows, Some(100));
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     HTML/Markdown 远端资源预览必须把当前文档路径和资源引用都传给远端设备解析。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     用 camelCase JSON 反序列化 preview-html-asset 请求体，断言字段名与前端 invoke 参数一致。
+    #[test]
+    fn remote_preview_html_asset_req_accepts_camel_case_body() {
+        let req: RemotePreviewHtmlAssetReq = serde_json::from_value(serde_json::json!({
+            "projectId": "project-1",
+            "worktreeId": "worktree-1",
+            "documentPath": "docs/index.html",
+            "assetPath": "./style.css"
+        }))
+        .unwrap();
+
+        assert_eq!(req.project_id, "project-1");
+        assert_eq!(req.worktree_id.as_deref(), Some("worktree-1"));
+        assert_eq!(req.document_path, "docs/index.html");
+        assert_eq!(req.asset_path, "./style.css");
     }
 
     /// Business Logic（为什么需要这个测试）:

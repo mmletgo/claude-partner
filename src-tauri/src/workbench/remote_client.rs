@@ -10,17 +10,19 @@
 
 use crate::error::AppError;
 use crate::workbench::models::{
-    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchOpenFileDto, WorkbenchPathInfo,
-    WorkbenchProjectDto, WorkbenchRemoteDirectoryEntryDto, WorkbenchRemotePathInfoDto,
-    WorkbenchRemoteRootDto, WorkbenchSaveTextResultDto, WorkbenchSessionDto, WorkbenchWorktreeDto,
+    WorkbenchFileNode, WorkbenchGitCommitDto, WorkbenchHtmlAssetDto, WorkbenchOpenFileDto,
+    WorkbenchPathInfo, WorkbenchProjectDto, WorkbenchRemoteDirectoryEntryDto,
+    WorkbenchRemotePathInfoDto, WorkbenchRemoteRootDto, WorkbenchSaveTextResultDto,
+    WorkbenchSessionDto, WorkbenchSqlitePreview, WorkbenchWorktreeDto,
 };
 use crate::workbench::remote_protocol::{
     RemoteCommitWorktreeReq, RemoteCreatePathReq, RemoteCreateSessionReq, RemoteCreateWorktreeReq,
     RemoteDeletePathReq, RemoteFocusedSessionReq, RemoteFocusedSessionResp, RemoteGitCommitsReq,
     RemoteListDirReq, RemoteListSessionsReq, RemoteOpenFileReq, RemotePathInfoReq,
-    RemoteProjectReq, RemotePromptOptimizerReq, RemoteRemoveWorktreeReq, RemoteRenamePathReq,
-    RemoteRenameSessionReq, RemoteResizeSessionReq, RemoteSaveTextReq, RemoteSessionReq,
-    RemoteSplitPaneReq, RemoteWorktreeReq, RemoteWriteSessionInputReq,
+    RemotePreviewHtmlAssetReq, RemotePreviewSqliteReq, RemoteProjectReq, RemotePromptOptimizerReq,
+    RemoteRemoveWorktreeReq, RemoteRenamePathReq, RemoteRenameSessionReq, RemoteResizeSessionReq,
+    RemoteSaveTextReq, RemoteSessionReq, RemoteSplitPaneReq, RemoteWorktreeReq,
+    RemoteWriteSessionInputReq,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::Value;
@@ -417,6 +419,46 @@ impl RemoteWorkbenchClient {
     ) -> Result<WorkbenchSaveTextResultDto, AppError> {
         self.post_json(
             endpoint_url(base_url, "/api/workbench/files/save-text"),
+            &req,
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 预览远端项目内 SQLite 文件。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     远端 SQLite 换表预览必须在远端设备读取数据库，避免误读本机同路径文件。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/files/preview-sqlite`，解析只读 SQLite 预览 DTO。
+    pub async fn preview_sqlite_file(
+        &self,
+        base_url: &str,
+        req: RemotePreviewSqliteReq,
+    ) -> Result<WorkbenchSqlitePreview, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/files/preview-sqlite"),
+            &req,
+            RemoteRequestTimeoutKind::Long,
+        )
+        .await
+    }
+
+    /// 读取远端项目内 HTML/Markdown 预览资源。
+    ///
+    /// Business Logic（为什么需要这个函数）:
+    ///     远端 HTML/Markdown 预览中的相对 CSS/图片必须从远端 worktree 根内安全读取。
+    ///
+    /// Code Logic（这个函数做什么）:
+    ///     POST `{base_url}/api/workbench/files/preview-html-asset`，解析可内联的 data URL 资源 DTO。
+    pub async fn preview_html_asset(
+        &self,
+        base_url: &str,
+        req: RemotePreviewHtmlAssetReq,
+    ) -> Result<WorkbenchHtmlAssetDto, AppError> {
+        self.post_json(
+            endpoint_url(base_url, "/api/workbench/files/preview-html-asset"),
             &req,
             RemoteRequestTimeoutKind::Long,
         )
@@ -956,10 +998,14 @@ fn truncate_error_body(body: &str) -> String {
 mod tests {
     use super::*;
     use crate::workbench::models::{
-        WorkbenchPathInfo, WorkbenchRemoteDirectoryEntryDto, WorkbenchSaveTextResultDto,
-        WorkbenchSessionDto, WorkbenchWorktreeDto,
+        WorkbenchHtmlAssetDto, WorkbenchPathInfo, WorkbenchRemoteDirectoryEntryDto,
+        WorkbenchSaveTextResultDto, WorkbenchSessionDto, WorkbenchSqlitePreview,
+        WorkbenchWorktreeDto,
     };
-    use crate::workbench::remote_protocol::{RemoteCreateSessionReq, RemotePromptOptimizerReq};
+    use crate::workbench::remote_protocol::{
+        RemoteCreateSessionReq, RemotePreviewHtmlAssetReq, RemotePreviewSqliteReq,
+        RemotePromptOptimizerReq,
+    };
     use axum::extract::State;
     use axum::routing::post;
     use axum::{http::StatusCode, Json, Router};
@@ -1204,6 +1250,120 @@ mod tests {
         assert_eq!(body["projectId"], "project-1");
         assert_eq!(body["worktreeId"], "worktree-1");
         assert_eq!(body["baseHash"], "old-hash");
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 SQLite 换表预览必须调用远端设备，不能退回本机路径读取。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     启动临时 HTTP 服务接收 preview-sqlite 请求，断言 camelCase body 并解析预览 DTO。
+    #[tokio::test]
+    async fn preview_sqlite_file_posts_camel_case_body_and_parses_result() {
+        let seen_body = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route(
+                "/api/workbench/files/preview-sqlite",
+                post(
+                    |State(seen_body): State<Arc<Mutex<Option<Value>>>>,
+                     Json(body): Json<Value>| async move {
+                        *seen_body.lock().unwrap() = Some(body);
+                        Json(WorkbenchSqlitePreview {
+                            tables: vec!["notes".to_string()],
+                            selected_table: Some("notes".to_string()),
+                            columns: vec!["title".to_string()],
+                            rows: vec![vec!["hello".to_string()]],
+                            truncated: false,
+                        })
+                    },
+                ),
+            )
+            .with_state(seen_body.clone());
+        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = RemoteWorkbenchClient::new();
+
+        let result = client
+            .preview_sqlite_file(
+                &format!("http://{addr}"),
+                RemotePreviewSqliteReq {
+                    project_id: "project-1".to_string(),
+                    worktree_id: Some("worktree-1".to_string()),
+                    path: "data/app.sqlite".to_string(),
+                    table: Some("notes".to_string()),
+                    limit_rows: Some(50),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.selected_table.as_deref(), Some("notes"));
+        let body = seen_body.lock().unwrap().clone().unwrap();
+        assert_eq!(body["projectId"], "project-1");
+        assert_eq!(body["worktreeId"], "worktree-1");
+        assert_eq!(body["path"], "data/app.sqlite");
+        assert_eq!(body["table"], "notes");
+        assert_eq!(body["limitRows"], 50);
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 HTML/Markdown 预览资源必须从远端项目根内读取，避免本机同路径资源污染预览。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     启动临时 HTTP 服务接收 preview-html-asset 请求，断言 documentPath/assetPath 和响应解析。
+    #[tokio::test]
+    async fn preview_html_asset_posts_camel_case_body_and_parses_result() {
+        let seen_body = Arc::new(Mutex::new(None));
+        let app = Router::new()
+            .route(
+                "/api/workbench/files/preview-html-asset",
+                post(
+                    |State(seen_body): State<Arc<Mutex<Option<Value>>>>,
+                     Json(body): Json<Value>| async move {
+                        *seen_body.lock().unwrap() = Some(body);
+                        Json(WorkbenchHtmlAssetDto {
+                            path: "docs/style.css".to_string(),
+                            mime: "text/css".to_string(),
+                            size: 12,
+                            data_url: "data:text/css;base64,LmEge30=".to_string(),
+                            text: Some(".a {}".to_string()),
+                        })
+                    },
+                ),
+            )
+            .with_state(seen_body.clone());
+        let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let client = RemoteWorkbenchClient::new();
+
+        let result = client
+            .preview_html_asset(
+                &format!("http://{addr}"),
+                RemotePreviewHtmlAssetReq {
+                    project_id: "project-1".to_string(),
+                    worktree_id: Some("worktree-1".to_string()),
+                    document_path: "docs/index.html".to_string(),
+                    asset_path: "./style.css".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(result.mime, "text/css");
+        let body = seen_body.lock().unwrap().clone().unwrap();
+        assert_eq!(body["projectId"], "project-1");
+        assert_eq!(body["worktreeId"], "worktree-1");
+        assert_eq!(body["documentPath"], "docs/index.html");
+        assert_eq!(body["assetPath"], "./style.css");
     }
 
     /// Business Logic（为什么需要这个测试）:

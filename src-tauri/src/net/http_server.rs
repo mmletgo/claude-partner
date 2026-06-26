@@ -9,7 +9,7 @@
 //!     - `start_http_server`：构造 axum Router（with_state(AppState)，挂 /api/health），
 //!       TcpListener::bind(("0.0.0.0", 0)) 绑定动态端口，取 local_addr 实际端口回填
 //!       AppState.actual_http_port（AtomicU16），tokio::spawn(axum::serve)。
-//!     - body limit 暂设 2MB（M5 chunk 会调整）。
+//!     - body limit 覆盖文件传输 chunk 和 Workbench 远端文本保存。
 
 use crate::net::routes::{
     cc_history, claude_code_assets, claude_md_sync, health, scratchpad_sync, ssh_target_sync, sync,
@@ -22,9 +22,8 @@ use axum::Router;
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 
-/// axum body 大小上限（字节）。2MB，容纳 M5 chunk（960KB）+开销，
-/// 与 Python `client_max_size=2MB` 一致，确保 Rust↔Python 互通。
-const BODY_LIMIT_BYTES: usize = 2 * 1024 * 1024;
+/// axum body 大小上限（字节）。32MB，容纳 M5 chunk（960KB）+ Workbench 远端文本保存（5MB 高转义 JSON）+ 开销。
+const BODY_LIMIT_BYTES: usize = 32 * 1024 * 1024;
 
 /// 启动 axum HTTP server，返回实际监听端口。
 ///
@@ -144,6 +143,14 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
             post(workbench::save_workbench_text_file),
         )
         .route(
+            "/api/workbench/files/preview-sqlite",
+            post(workbench::preview_workbench_sqlite),
+        )
+        .route(
+            "/api/workbench/files/preview-html-asset",
+            post(workbench::preview_workbench_html_asset),
+        )
+        .route(
             "/api/workbench/files/create-file",
             post(workbench::create_workbench_file),
         )
@@ -224,4 +231,31 @@ pub async fn start_http_server(state: AppState) -> Result<u16, std::io::Error> {
 
     tracing::info!("axum HTTP server 已启动，监听端口: {actual_port}");
     Ok(actual_port)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::workbench::file_content::MAX_EDITABLE_TEXT_BYTES;
+    use crate::workbench::remote_protocol::RemoteSaveTextReq;
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     远端 Workbench 文本保存走 P2P HTTP JSON body，服务端 body limit 必须覆盖 5MB 高转义文本。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     构造 5MB NUL 文本让 serde_json 产生接近最坏情况的 `\u0000` 转义，断言序列化 body 仍低于 HTTP limit。
+    #[test]
+    fn body_limit_allows_workbench_remote_text_save_payloads() {
+        let escaped_content = "\u{0000}".repeat(MAX_EDITABLE_TEXT_BYTES as usize);
+        let body = serde_json::to_vec(&RemoteSaveTextReq {
+            project_id: "project-1".to_string(),
+            worktree_id: Some("worktree-1".to_string()),
+            path: "docs/note.md".to_string(),
+            content: escaped_content,
+            base_hash: "old-hash".to_string(),
+        })
+        .expect("remote save-text request should serialize");
+
+        assert!(body.len() < BODY_LIMIT_BYTES);
+    }
 }

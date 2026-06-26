@@ -154,6 +154,39 @@ pub struct RemoteSaveTextReq {
     pub base_hash: String,
 }
 
+/// 远端 SQLite 预览请求体。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     用户切换远端 SQLite 表时，必须由远端设备读取数据库，不能退回本机路径解析。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存远端 local projectId、可选 worktreeId、相对 path、可选 table 和 limitRows。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePreviewSqliteReq {
+    pub project_id: String,
+    pub worktree_id: Option<String>,
+    pub path: String,
+    pub table: Option<String>,
+    pub limit_rows: Option<i64>,
+}
+
+/// 远端 HTML/Markdown 资源预览请求体。
+///
+/// Business Logic（为什么需要这个结构体）:
+///     远端 HTML iframe 与 Markdown 预览引用的相对资源必须在项目所在设备读取。
+///
+/// Code Logic（这个结构体做什么）:
+///     保存远端 local projectId、可选 worktreeId、当前文档相对路径和资源引用路径。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemotePreviewHtmlAssetReq {
+    pub project_id: String,
+    pub worktree_id: Option<String>,
+    pub document_path: String,
+    pub asset_path: String,
+}
+
 /// 远端创建文件或目录请求体。
 ///
 /// Business Logic（为什么需要这个结构体）:
