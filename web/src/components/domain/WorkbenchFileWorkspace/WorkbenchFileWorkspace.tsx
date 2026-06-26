@@ -15,7 +15,7 @@ import type { MouseEvent, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/primitives';
 import { CheckIcon, RefreshIcon, TerminalIcon, XIcon } from '@/lib/icons';
-import type { WorkbenchOpenFile } from '@/lib/types';
+import type { WorkbenchFileMode, WorkbenchOpenFile } from '@/lib/types';
 import { WorkbenchCodeEditor } from '../WorkbenchCodeEditor';
 import { WorkbenchCsvPreview } from '../WorkbenchCsvPreview';
 import { WorkbenchImagePreview } from '../WorkbenchImagePreview';
@@ -31,7 +31,7 @@ export interface WorkbenchOpenFileTab {
   opened: WorkbenchOpenFile;
   content: string;
   dirty: boolean;
-  mode: 'viewer' | 'editor' | 'wysiwyg' | 'source' | 'split';
+  mode: WorkbenchFileMode;
 }
 
 export interface WorkbenchFileWorkspaceProps {
@@ -58,6 +58,37 @@ const FILENAME_LANGUAGE_HINTS: Record<string, string> = {
   npmrc: 'text',
   zshrc: 'shell',
 };
+
+/**
+ * 生成 tab 与 panel 的稳定 ARIA id
+ *
+ * Business Logic（为什么需要这个函数）:
+ *   文件 tab 的业务 id 可能来自路径、数据库或其他外部来源，包含空格、斜杠等特殊字符时仍需要生成可安全引用的
+ *   DOM id，确保 tab 与 tabpanel 的可访问性关系稳定。
+ *
+ * Code Logic（这个函数做什么）:
+ *   将 tabId 清洗为小写字母/数字/连字符/下划线片段，并追加同源字符串计算出的短 hash 降低清洗后碰撞风险；
+ *   返回 tab button id 和 panel id，供 aria-controls / aria-labelledby 成对使用。
+ */
+function createTabAriaIds(tabId: string): { tabButtonId: string; tabPanelId: string } {
+  let hash = 0;
+
+  for (let index = 0; index < tabId.length; index += 1) {
+    hash = (hash * 31 + tabId.charCodeAt(index)) >>> 0;
+  }
+
+  const sanitized = tabId
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  const safePart = `${sanitized || 'tab'}-${hash.toString(36)}`;
+
+  return {
+    tabButtonId: `workbench-file-tab-${safePart}`,
+    tabPanelId: `workbench-file-panel-${safePart}`,
+  };
+}
 
 /**
  * 约束 Markdown 编辑模式
@@ -141,6 +172,10 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
     return tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   }, [activeTabId, tabs]);
   const activeTabStableId = activeTab?.id ?? null;
+  const activeAriaIds = useMemo(
+    () => (activeTab ? createTabAriaIds(activeTab.id) : null),
+    [activeTab],
+  );
 
   const handleTabActivate = useCallback(
     (event: MouseEvent<HTMLButtonElement>) => {
@@ -215,6 +250,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
           <WorkbenchMarkdownEditor
             value={activeTab.content}
             mode={coerceMarkdownMode(activeTab.mode)}
+            readOnly={saving}
             onModeChange={handleMarkdownModeChange}
             onChange={handleContentChange}
           />
@@ -249,7 +285,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
           <WorkbenchCodeEditor
             value={activeTab.content}
             language={deriveEditorLanguage(opened)}
-            readOnly={!opened.capabilities.canEdit}
+            readOnly={!opened.capabilities.canEdit || saving}
             onChange={handleContentChange}
           />
         );
@@ -262,15 +298,19 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
       <div className={styles.fileTabs} role="tablist" aria-label={t('workbench:fileWorkspace.tabs')}>
         {tabs.map((tab) => {
           const active = tab.id === activeTab?.id;
+          const tabAriaIds = createTabAriaIds(tab.id);
 
           return (
             <div key={tab.id} className={styles.fileTab} data-active={active}>
               <button
+                id={tabAriaIds.tabButtonId}
                 type="button"
                 role="tab"
                 className={styles.tabButton}
                 data-tab-id={tab.id}
+                aria-controls={tabAriaIds.tabPanelId}
                 aria-selected={active}
+                tabIndex={active ? 0 : -1}
                 title={tab.path}
                 onClick={handleTabActivate}
               >
@@ -299,7 +339,12 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
       </div>
 
       {activeTab ? (
-        <div className={styles.fileBody}>
+        <div
+          id={activeAriaIds?.tabPanelId}
+          className={styles.fileBody}
+          role="tabpanel"
+          aria-labelledby={activeAriaIds?.tabButtonId}
+        >
           <div className={styles.fileToolbar}>
             <div className={styles.fileTitleBlock}>
               <strong className={styles.fileName}>{activeTab.name}</strong>
@@ -321,6 +366,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
                   variant="secondary"
                   size="sm"
                   icon={<RefreshIcon aria-hidden="true" />}
+                  disabled={saving}
                   onClick={handleFormat}
                 >
                   {t('workbench:fileWorkspace.format')}
@@ -332,7 +378,7 @@ export function WorkbenchFileWorkspace(props: WorkbenchFileWorkspaceProps): Reac
                   size="sm"
                   icon={<CheckIcon aria-hidden="true" />}
                   loading={saving}
-                  disabled={!activeTab.dirty}
+                  disabled={!activeTab.dirty || saving}
                   onClick={handleSave}
                 >
                   {t('workbench:fileWorkspace.save')}

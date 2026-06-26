@@ -3,11 +3,12 @@
  *
  * Business Logic（为什么需要这个组件）:
  *   工作台文件查看器需要对 Markdown 文件提供接近 Typora 的可视化编辑体验，同时保留源码编辑和分屏校对能力，
- *   让用户在同一个文件内容上按当前任务切换阅读、排版和精确 Markdown 源码修改。
+ *   让用户在同一个文件内容上按当前任务切换阅读、排版和精确 Markdown 源码修改；保存中需要临时只读以避免并发修改。
  *
  * Code Logic（这个组件做什么）:
  *   - 使用 Tiptap StarterKit + Markdown extension 渲染 WYSIWYG 编辑区，并用 WorkbenchCodeEditor 复用源码编辑能力
  *   - 维护一份本地 Markdown 字符串，只有 Tiptap 成功接受 Markdown 后才从源码侧提交内容
+ *   - readOnly 为 true 时同步禁用 Tiptap 编辑能力和源码编辑器写入
  *   - 捕获 Markdown 序列化或解析失败，保留当前模式内容并展示本地化同步错误提示
  */
 
@@ -26,6 +27,8 @@ export type WorkbenchMarkdownMode = 'wysiwyg' | 'source' | 'split';
 export interface WorkbenchMarkdownEditorProps {
   value: string;
   mode: WorkbenchMarkdownMode;
+  /** 只读态：保留浏览和模式切换，但禁止修改 Markdown 内容 */
+  readOnly?: boolean;
   onModeChange: (mode: WorkbenchMarkdownMode) => void;
   onChange: (value: string) => void;
 }
@@ -59,16 +62,17 @@ function trySetEditorMarkdown(editor: Editor, markdown: string): boolean {
  *
  * Business Logic（为什么需要这个组件）:
  *   Markdown 文件既需要即时排版编辑，也需要用户能回到源文本修正语法；工作台文件编辑器通过该组件统一承载
- *   三种编辑模式，避免页面层重复维护 WYSIWYG 与源码之间的同步逻辑。
+ *   三种编辑模式，并支持保存期间临时只读，避免页面层重复维护 WYSIWYG 与源码之间的同步逻辑。
  *
  * Code Logic（这个组件做什么）:
  *   初始化 Tiptap Markdown 编辑器和本地 sourceValue 状态；WYSIWYG 更新时用 editor.getMarkdown() 序列化，
  *   源码更新和外部 value 更新时先通过 trySetEditorMarkdown 确认 Tiptap 接受内容，成功后才更新 sourceValue/父级，
- *   并通过 syncError 状态展示同步失败提示。
+ *   readOnly 变化时同步 Tiptap editable 与源码编辑器 readOnly，并通过 syncError 状态展示同步失败提示。
  */
 export function WorkbenchMarkdownEditor({
   value,
   mode,
+  readOnly = false,
   onModeChange,
   onChange,
 }: WorkbenchMarkdownEditorProps): ReactElement {
@@ -92,6 +96,7 @@ export function WorkbenchMarkdownEditor({
     extensions: MARKDOWN_EDITOR_EXTENSIONS,
     content: value,
     contentType: 'markdown',
+    editable: !readOnly,
     immediatelyRender: false,
     onUpdate: handleEditorUpdate,
   });
@@ -99,6 +104,10 @@ export function WorkbenchMarkdownEditor({
   useEffect(() => {
     onChangeRef.current = onChange;
   }, [onChange]);
+
+  useEffect(() => {
+    editor?.setEditable(!readOnly);
+  }, [editor, readOnly]);
 
   useEffect(() => {
     if (!editor) {
@@ -210,6 +219,7 @@ export function WorkbenchMarkdownEditor({
               <WorkbenchCodeEditor
                 value={sourceValue}
                 language="markdown"
+                readOnly={readOnly}
                 onChange={handleSourceChange}
               />
             </div>
