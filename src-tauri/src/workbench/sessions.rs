@@ -482,6 +482,102 @@ pub(crate) fn tmux_attach_window_args(session_name: &str, window_target: &str) -
 }
 
 /// Business Logic（为什么需要这个函数）:
+///     Workbench 的终端主题由前端 xterm 控制，tmux status bar 不能继承用户全局 `.tmux.conf` 中的固定深色背景。
+///
+/// Code Logic（这个函数做什么）:
+///     生成一组仅使用 terminal default 前景/背景色的 tmux option 命令，并清除 status format 内可能嵌入的颜色标记。
+fn tmux_status_theme_commands(session_name: &str) -> Vec<Vec<String>> {
+    vec![
+        vec![
+            "set-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "status-style".to_string(),
+            "fg=default,bg=default".to_string(),
+        ],
+        vec![
+            "set-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "status-left-style".to_string(),
+            "fg=default,bg=default".to_string(),
+        ],
+        vec![
+            "set-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "status-right-style".to_string(),
+            "fg=default,bg=default".to_string(),
+        ],
+        vec![
+            "set-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "status-left".to_string(),
+            "#S ".to_string(),
+        ],
+        vec![
+            "set-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "status-right".to_string(),
+            String::new(),
+        ],
+        vec![
+            "set-window-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "window-status-style".to_string(),
+            "fg=default,bg=default".to_string(),
+        ],
+        vec![
+            "set-window-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "window-status-current-style".to_string(),
+            "fg=default,bg=default,bold,underscore".to_string(),
+        ],
+        vec![
+            "set-window-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "window-status-format".to_string(),
+            " #I:#W#F ".to_string(),
+        ],
+        vec![
+            "set-window-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "window-status-current-format".to_string(),
+            " #I:#W#F ".to_string(),
+        ],
+        vec![
+            "set-window-option".to_string(),
+            "-t".to_string(),
+            session_name.to_string(),
+            "window-status-separator".to_string(),
+            " ".to_string(),
+        ],
+    ]
+}
+
+/// Business Logic（为什么需要这个函数）:
+///     用户切换应用浅色/深色主题后，tmux status bar 应随 xterm 默认色变化，而不是停留在用户 tmux 主题色。
+///
+/// Code Logic（这个函数做什么）:
+///     对指定 worktree tmux session 逐条执行 Workbench status 样式命令；失败向上返回供调用方记录但不影响 PTY fallback。
+fn apply_workbench_tmux_status_theme(
+    tmux: &TmuxCommand,
+    session_name: &str,
+) -> Result<(), AppError> {
+    for args in tmux_status_theme_commands(session_name) {
+        let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
+        run_tmux_command(tmux, &arg_refs)?;
+    }
+    Ok(())
+}
+
+/// Business Logic（为什么需要这个函数）:
 ///     app 顶部 tab 切换时，用户看到的 tmux 当前 window 必须同步切到该 tab 绑定的真实 window。
 ///
 /// Code Logic（这个函数做什么）:
@@ -660,6 +756,9 @@ fn create_tmux_window(
         if window_id.is_empty() {
             Err(AppError::generic("创建 tmux window 失败: 未返回 window_id"))
         } else {
+            if let Err(error) = apply_workbench_tmux_status_theme(tmux, session_name) {
+                tracing::debug!("应用工作台 tmux status 样式失败: {error}");
+            }
             Ok(window_id)
         }
     } else {
@@ -1154,6 +1253,9 @@ impl WorkbenchSessionRegistry {
                         }
                     }
                 } else if row.backend == TMUX_BACKEND {
+                    if let Err(error) = apply_workbench_tmux_status_theme(&tmux, &session_name) {
+                        tracing::debug!("恢复工作台终端时应用 tmux status 样式失败: {error}");
+                    }
                     let target = row
                         .backend_window_id
                         .as_deref()
@@ -2019,6 +2121,92 @@ mod tests {
                 "switch-client",
                 "-t",
                 "cc-partner-project-project1234abcd:@7",
+            ]
+        );
+    }
+
+    /// Business Logic（为什么需要这个测试）:
+    ///     工作台浅色/深色主题切换时，tmux 底部 status bar 不应继承用户 tmux 配置里的深色背景。
+    ///
+    /// Code Logic（这个测试做什么）:
+    ///     断言 Workbench 会对 worktree tmux session 写入默认前景/背景样式，使 xterm theme 能接管显示颜色。
+    #[test]
+    fn tmux_status_theme_commands_use_terminal_default_colors() {
+        let commands = tmux_status_theme_commands("cc-partner-project-project1234abcd");
+
+        assert_eq!(
+            commands,
+            vec![
+                vec![
+                    "set-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "status-style",
+                    "fg=default,bg=default",
+                ],
+                vec![
+                    "set-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "status-left-style",
+                    "fg=default,bg=default",
+                ],
+                vec![
+                    "set-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "status-right-style",
+                    "fg=default,bg=default",
+                ],
+                vec![
+                    "set-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "status-left",
+                    "#S ",
+                ],
+                vec![
+                    "set-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "status-right",
+                    "",
+                ],
+                vec![
+                    "set-window-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "window-status-style",
+                    "fg=default,bg=default",
+                ],
+                vec![
+                    "set-window-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "window-status-current-style",
+                    "fg=default,bg=default,bold,underscore",
+                ],
+                vec![
+                    "set-window-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "window-status-format",
+                    " #I:#W#F ",
+                ],
+                vec![
+                    "set-window-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "window-status-current-format",
+                    " #I:#W#F ",
+                ],
+                vec![
+                    "set-window-option",
+                    "-t",
+                    "cc-partner-project-project1234abcd",
+                    "window-status-separator",
+                    " ",
+                ],
             ]
         );
     }
